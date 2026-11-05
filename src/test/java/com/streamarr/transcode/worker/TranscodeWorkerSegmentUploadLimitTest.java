@@ -16,6 +16,7 @@ import static org.awaitility.Awaitility.await;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
+import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -257,6 +258,267 @@ class TranscodeWorkerSegmentUploadLimitTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should open the refused segment's upload again until the server accepts it, and fail no"
+          + " attempt, when the server refuses it at the worker's segment upload limit")
+  void shouldOpenTheRefusedSegmentsUploadAgainUntilAcceptedWhenServerRefusesItAtTheWorkersLimit()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var job = variantJobBuilder().build();
+
+    try (var worker =
+        worker(WorkerSetup.builder().runtime(runtime).launcher(writingTheRecording()).build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseUploadsAtTheWorkersLimit();
+
+      startVariant(connection, job);
+
+      promptly()
+          .until(() -> refusedUploadCount(connection) >= 2 && worker.queuedSegmentUploads() == 1);
+      assertThat(acceptedSegmentNamesOf(connection, job)).isEmpty();
+
+      connection.acceptUploads();
+      promptly().until(() -> terminalEventOf(connection, job).isPresent());
+      assertThat(terminalEventOf(connection, job)).contains(EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(acceptedSegmentNamesOf(connection, job))
+          .containsExactlyElementsOf(uploadNames(recording(ENCODED_RECORDING)));
+      assertThat(worker.queuedSegmentUploads()).isZero();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the refused segment ahead of a segment that was already waiting when the server"
+          + " refuses it at the worker's segment upload limit")
+  void shouldKeepTheRefusedSegmentAheadOfAWaitingSegmentWhenServerRefusesItAtTheWorkersLimit()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var holding = variantJobBuilder().build();
+    var refused = variantJobBuilder().build();
+    var waiting = variantJobBuilder().build();
+
+    try (var worker =
+        worker(WorkerSetup.builder().runtime(runtime).launcher(writingTheRecording()).build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, holding);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 1);
+      startVariant(connection, refused);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 2);
+      startVariant(connection, waiting);
+      promptly().until(() -> worker.queuedSegmentUploads() == 1);
+      connection.refuseUploadsAtTheWorkersLimit();
+
+      firstUploadOf(connection, refused).refuseAtTheWorkersLimit();
+
+      // The worker counts one open upload of its two, so only the refused segment's place at the
+      // front of the queue holds the waiting segment back.
+      promptly().until(() -> refusedUploadCount(connection) >= 3);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getJobAttemptId())
+          .doesNotContain(waiting.getJobAttemptId());
+
+      connection.acceptUploads();
+      connection.releaseAcknowledgements();
+      var jobs = List.of(holding, refused, waiting);
+      promptly()
+          .until(() -> jobs.stream().allMatch(job -> terminalEventOf(connection, job).isPresent()));
+      assertThat(jobs)
+          .allSatisfy(
+              job -> {
+                assertThat(terminalEventOf(connection, job))
+                    .contains(EventCase.JOB_ATTEMPT_COMPLETED);
+                assertThat(acceptedSegmentNamesOf(connection, job))
+                    .containsExactlyElementsOf(uploadNames(recording(ENCODED_RECORDING)));
+              });
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload a refused segment once the server accepts it when the other refused upload is"
+          + " stopped")
+  void shouldUploadARefusedSegmentOnceTheServerAcceptsItWhenTheOtherRefusedUploadIsStopped()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var first = variantJobBuilder().build();
+    var stopped = variantJobBuilder().build();
+
+    try (var worker =
+        worker(WorkerSetup.builder().runtime(runtime).launcher(writingTheRecording()).build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, first);
+      startVariant(connection, stopped);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 2);
+      connection.refuseUploadsAtTheWorkersLimit();
+      firstUploadOf(connection, first).refuseAtTheWorkersLimit();
+      firstUploadOf(connection, stopped).refuseAtTheWorkersLimit();
+
+      // No upload of the worker stays open, so none ends to free a place for the other.
+      stopVariant(connection, stopped);
+
+      promptly().until(() -> terminalEventOf(connection, stopped).isPresent());
+      connection.acceptUploads();
+      connection.releaseAcknowledgements();
+      promptly().until(() -> terminalEventOf(connection, first).isPresent());
+      assertThat(terminalEventOf(connection, first)).contains(EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(acceptedSegmentNamesOf(connection, first))
+          .containsExactlyElementsOf(uploadNames(recording(ENCODED_RECORDING)));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure, having paced its uploads, when the server"
+          + " refuses the segment at the worker's segment upload limit for the acknowledgement"
+          + " timeout")
+  void shouldFailTheAttemptHavingPacedItsUploadsWhenServerRefusesItAtTheWorkersLimitThroughout()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var job = variantJobBuilder().build();
+    // Longer than the longest delay between the segment's uploads, so only a timeout counted from
+    // its first refusal can end its wait.
+    var configuration =
+        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofSeconds(2)).build();
+
+    try (var worker =
+        worker(
+            WorkerSetup.builder()
+                .runtime(runtime)
+                .launcher(writingTheRecording())
+                .configuration(configuration)
+                .build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseUploadsAtTheWorkersLimit();
+
+      startVariant(connection, job);
+
+      promptly().until(() -> terminalEventOf(connection, job).isPresent());
+      assertThat(terminalEventOf(connection, job)).contains(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(failureOf(connection, job))
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      // Opening the call again at once would open thousands within the timeout.
+      assertThat(connection.uploads()).hasSizeLessThanOrEqualTo(10);
+      assertThat(worker.queuedSegmentUploads()).isZero();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure when the server refuses its upload at a"
+          + " fleet-wide limit")
+  void shouldFailTheAttemptAsATranscodeFailureWhenTheServerRefusesItsUploadAtAFleetWideLimit()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var job = variantJobBuilder().build();
+
+    try (var worker =
+        worker(WorkerSetup.builder().runtime(runtime).launcher(writingTheRecording()).build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseNextUploadAtAFleetWideLimit();
+
+      startVariant(connection, job);
+
+      promptly().until(() -> terminalEventOf(connection, job).isPresent());
+      assertThat(terminalEventOf(connection, job)).contains(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(failureOf(connection, job))
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasRefused()).isTrue());
+      assertThat(worker.queuedSegmentUploads()).isZero();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure when the server marks a refusal at the"
+          + " worker's segment upload limit although it stated no limit")
+  void shouldFailTheAttemptWhenTheServerMarksARefusalAtTheWorkersLimitAlthoughItStatedNoLimit()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(0);
+    var job = variantJobBuilder().build();
+
+    try (var worker =
+        worker(WorkerSetup.builder().runtime(runtime).launcher(writingTheRecording()).build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseNextUploadAtTheWorkersLimit();
+
+      startVariant(connection, job);
+
+      promptly().until(() -> terminalEventOf(connection, job).isPresent());
+      assertThat(terminalEventOf(connection, job)).contains(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(failureOf(connection, job))
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploads()).singleElement();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should stop the attempt without opening another upload when it stops while its refused"
+          + " segment waits at the front of the queue")
+  void shouldStopTheAttemptWithoutOpeningAnotherUploadWhenItStopsWhileItsRefusedSegmentWaits()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var job = variantJobBuilder().build();
+
+    try (var worker =
+        worker(WorkerSetup.builder().runtime(runtime).launcher(writingTheRecording()).build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseUploadsAtTheWorkersLimit();
+      startVariant(connection, job);
+      promptly()
+          .until(() -> refusedUploadCount(connection) >= 2 && worker.queuedSegmentUploads() == 1);
+
+      stopVariant(connection, job);
+
+      // The default acknowledgement timeout of 60 s outlasts this wait, so only the stop ends it.
+      promptly().until(() -> terminalEventOf(connection, job).isPresent());
+      assertThat(terminalEventOf(connection, job)).contains(EventCase.JOB_ATTEMPT_STOPPED);
+      assertThat(worker.queuedSegmentUploads()).isZero();
+      assertThat(connection.uploads())
+          .allSatisfy(upload -> assertThat(upload.wasRefused()).isTrue());
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should end the wait of a refused segment without opening another upload when the worker"
+          + " session ends")
+  void shouldEndTheWaitOfARefusedSegmentWithoutOpeningAnotherUploadWhenTheWorkerSessionEnds()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var job = variantJobBuilder().build();
+
+    try (var worker =
+        worker(WorkerSetup.builder().runtime(runtime).launcher(writingTheRecording()).build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseUploadsAtTheWorkersLimit();
+      startVariant(connection, job);
+      promptly()
+          .until(() -> refusedUploadCount(connection) >= 2 && worker.queuedSegmentUploads() == 1);
+
+      connection.fail("the server went away");
+
+      // The default acknowledgement timeout of 60 s outlasts this wait, so only the session's end
+      // ends it.
+      promptly().until(() -> worker.queuedSegmentUploads() == 0);
+      assertThat(connection.uploads())
+          .allSatisfy(upload -> assertThat(upload.wasRefused()).isTrue());
+    }
+  }
+
   @Builder
   private record WorkerSetup(
       ScriptedWorkerRuntime runtime,
@@ -309,6 +571,31 @@ class TranscodeWorkerSegmentUploadLimitTest {
       case JOB_ATTEMPT_STOPPED -> Optional.of(event.getJobAttemptStopped().getJobAttemptId());
       default -> Optional.empty();
     };
+  }
+
+  private static long refusedUploadCount(ScriptedWorkerRuntime.Connection connection) {
+    return connection.uploads().stream()
+        .filter(ScriptedWorkerRuntime.UploadCall::wasRefused)
+        .count();
+  }
+
+  private static ScriptedWorkerRuntime.UploadCall firstUploadOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return connection.uploads().stream()
+        .filter(upload -> upload.metadata().getJobAttemptId().equals(job.getJobAttemptId()))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  // The names of the job's segments that the server accepted, in the order the worker opened them.
+  private static List<String> acceptedSegmentNamesOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return connection.uploads().stream()
+        .filter(upload -> !upload.wasRefused())
+        .map(ScriptedWorkerRuntime.UploadCall::metadata)
+        .filter(metadata -> metadata.getJobAttemptId().equals(job.getJobAttemptId()))
+        .map(SegmentUploadMetadata::getSegmentName)
+        .toList();
   }
 
   private static JobAttemptFailure failureOf(

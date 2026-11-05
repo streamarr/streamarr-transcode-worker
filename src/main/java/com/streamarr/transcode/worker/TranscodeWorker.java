@@ -744,19 +744,52 @@ public final class TranscodeWorker implements AutoCloseable {
   private void uploadSegment(
       VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation)
       throws InterruptedException, ExecutionException, TimeoutException {
-    var upload =
-        new SegmentUpload(
-            configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
+    var upload = new AtomicReference<>(newSegmentUpload());
     var turn = uploadLimit.turn();
     cancellation.onCancel(
         () -> {
           turn.cancel();
-          upload.cancel(new CancellationException("The job attempt stopped"));
+          upload.get().cancel(new CancellationException("The job attempt stopped"));
         });
     // A segment that waits for its turn stays the producer's delivery in flight, so its bytes stay
     // charged to the memory budgets.
     try (var _ = turn.await(configuration.uploadAcknowledgementTimeout())) {
+      var refusal = sendSegmentUnlessRefusedAtTheLimit(job, upload.get(), segment);
+      while (refusal.isPresent()) {
+        // The next call is in place before the wait, so a stop during the wait also cancels it.
+        upload.set(newSegmentUpload());
+        awaitAgainInItsPlace(turn, refusal.get());
+        refusal = sendSegmentUnlessRefusedAtTheLimit(job, upload.get(), segment);
+      }
+    }
+  }
+
+  private SegmentUpload newSegmentUpload() {
+    return new SegmentUpload(
+        configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
+  }
+
+  // Returns the server's refusal when it refused the call because the worker holds its limit.
+  private Optional<ExecutionException> sendSegmentUnlessRefusedAtTheLimit(
+      VariantJob job, SegmentUpload upload, ProducedSegment segment)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    try {
       sendSegment(openUpload(job, upload), upload, segment);
+      return Optional.empty();
+    } catch (ExecutionException e) {
+      if (!SegmentUploadLimit.isRefusalAtTheLimit(e.getCause())) {
+        throw e;
+      }
+
+      return Optional.of(e);
+    }
+  }
+
+  private void awaitAgainInItsPlace(SegmentUploadLimit.Turn turn, ExecutionException refusal)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    // A server that states no limit has none to refuse a call at.
+    if (!turn.tryAwaitAgainInItsPlace(configuration.uploadAcknowledgementTimeout())) {
+      throw refusal;
     }
   }
 
