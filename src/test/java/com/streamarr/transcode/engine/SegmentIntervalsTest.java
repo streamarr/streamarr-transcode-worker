@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import java.time.Duration;
@@ -20,6 +21,11 @@ class SegmentIntervalsTest {
   // Keyframes 10 s apart on 3 s slots: the slots without one merge into the segment before them.
   private static final List<Long> TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS =
       List.of(0L, 3L, 6L, 10L);
+  private static final long AUDIO_TIMESCALE = 48_000;
+  private static final long NANOSECONDS = 1_000_000_000;
+  // Keyframes at 3.5 s, 6.5 s and 9.5 s in an MPEG-TS source's 1/90000 time base.
+  private static final ExactSegmentStarts MPEG_TS_KEYFRAMES_AT_HALF_SECONDS =
+      new ExactSegmentStarts(List.of(0L, 315_000L, 585_000L, 855_000L), 1, 90_000);
 
   @ParameterizedTest(name = "{0} ms is in segment {1}")
   @CsvSource({"0, 0", "5999, 0", "6000, 1", "-1, -1", "-6000, -1", "-6001, -2"})
@@ -142,6 +148,73 @@ class SegmentIntervalsTest {
     assertThat(intervals.numberAt(30_000, MILLISECONDS)).isEqualTo(10);
     assertThat(intervals.startOf(10, MILLISECONDS)).isEqualTo(30_000);
     assertThat(intervals.endOf(10, MILLISECONDS)).hasValue(33_000);
+  }
+
+  @ParameterizedTest(name = "audio sample at {0} of 48 kHz is in segment {1}")
+  @CsvSource({"0, 0", "167999, 0", "168000, 1", "311999, 1", "312000, 2", "456000, 3", "-1, -1"})
+  @DisplayName(
+      "Should open each segment at the audio sample on its exact start when the starts are MPEG-TS"
+          + " ticks that land on a 48 kHz sample")
+  void shouldOpenEachSegmentAtTheAudioSampleOnItsExactStartWhenTheStartsLandOnASample(
+      long presentationTime, long number) {
+    var intervals = SegmentIntervals.onExactStarts(3, MPEG_TS_KEYFRAMES_AT_HALF_SECONDS);
+
+    assertThat(intervals.numberAt(presentationTime, AUDIO_TIMESCALE)).isEqualTo(number);
+  }
+
+  @Test
+  @DisplayName(
+      "Should place a time in the segment it reaches when the exact start falls between two ticks"
+          + " of the time's timescale")
+  void shouldPlaceATimeInTheSegmentItReachesWhenTheExactStartFallsBetweenTwoTicks() {
+    // 315,001 / 90,000 s is 168,000.53 ticks at 48 kHz and 3,500,011,111.1 ns.
+    var intervals =
+        SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 315_001L), 1, 90_000));
+
+    assertThat(intervals.numberAt(168_000, AUDIO_TIMESCALE)).isZero();
+    assertThat(intervals.numberAt(168_001, AUDIO_TIMESCALE)).isEqualTo(1);
+    assertThat(intervals.endOf(0, AUDIO_TIMESCALE)).as("its first tick").hasValue(168_001);
+    assertThat(intervals.numberAt(3_500_011_111L, NANOSECONDS)).isZero();
+    assertThat(intervals.numberAt(3_500_011_112L, NANOSECONDS)).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should open a segment at the audio sample on its exact start when the start is an AVI tick"
+          + " of a fractional time base")
+  void shouldOpenASegmentAtTheAudioSampleOnItsExactStartWhenTheStartIsAFractionalAviTick() {
+    // 85 ticks of 1001/24000 s are 3.5452916... s, exactly 170,170 ticks at 48 kHz.
+    var intervals =
+        SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 85L), 1001, 24_000));
+
+    assertThat(intervals.numberAt(170_169, AUDIO_TIMESCALE)).isZero();
+    assertThat(intervals.numberAt(170_170, AUDIO_TIMESCALE)).isEqualTo(1);
+    assertThat(intervals.endOf(0, AUDIO_TIMESCALE)).hasValue(170_170);
+  }
+
+  @Test
+  @DisplayName(
+      "Should end the last exact segment's audio at the advertised end when the job carries one")
+  void shouldEndTheLastExactSegmentsAudioAtTheAdvertisedEndWhenTheJobCarriesOne() {
+    var intervals =
+        SegmentIntervals.onExactStarts(3, MPEG_TS_KEYFRAMES_AT_HALF_SECONDS)
+            .withLastListedSegmentEndingAt(Duration.ofMillis(10_250));
+
+    assertThat(intervals.endOf(2, AUDIO_TIMESCALE)).hasValue(456_000);
+    assertThat(intervals.endOf(3, AUDIO_TIMESCALE)).hasValue(492_000);
+    assertThat(intervals.numberOfAudioSampleAt(491_999, AUDIO_TIMESCALE)).isEqualTo(3);
+    assertThat(intervals.numberOfAudioSampleAt(492_000, AUDIO_TIMESCALE)).isEqualTo(4);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail instead of wrapping when comparing an exact start with a time overflows 64 bits")
+  void shouldFailInsteadOfWrappingWhenComparingAnExactStartWithATimeOverflowsSixtyFourBits() {
+    var intervals =
+        SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 1L << 40), 1, 90_000));
+
+    assertThatExceptionOfType(ArithmeticException.class)
+        .isThrownBy(() -> intervals.numberAt(1, 1L << 32));
   }
 
   @ParameterizedTest

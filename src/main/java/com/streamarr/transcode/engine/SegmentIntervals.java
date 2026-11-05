@@ -9,10 +9,11 @@ import lombok.NonNull;
 /**
  * The media segments' intervals on ADR 0037's zero-based timeline of slots, each one period long.
  * On the plain grid segment N's interval is slot N. On a segment list, segment N's interval runs
- * from its listed start slot up to the next segment's, so one segment can span several slots. The
- * last listed segment's audio ends at the job's advertised end, and runs to the end of the media
- * only in a job that carries none; its video runs to the end of the media either way, so a keyframe
- * past the advertised end opens no segment that the playlist does not advertise.
+ * from its listed start up to the next segment's, so one segment can span several slots; a list
+ * gives each start as a slot or as an exact presentation time in ticks of a time base. The last
+ * listed segment's audio ends at the job's advertised end, and runs to the end of the media only in
+ * a job that carries none; its video runs to the end of the media either way, so a keyframe past
+ * the advertised end opens no segment that the playlist does not advertise.
  */
 final class SegmentIntervals {
 
@@ -50,6 +51,19 @@ final class SegmentIntervals {
         periodSeconds,
         startSlots.stream().mapToLong(Long::longValue).toArray(),
         slotsOf(periodSeconds),
+        Optional.empty());
+  }
+
+  /**
+   * The intervals of a list of exact segment starts on slots that last this many seconds, the plain
+   * grid's period, which a replacement attempt's seek still counts in.
+   */
+  static SegmentIntervals onExactStarts(int periodSeconds, @NonNull ExactSegmentStarts starts) {
+    requirePositive(periodSeconds);
+    return new SegmentIntervals(
+        periodSeconds,
+        starts.ticks().stream().mapToLong(Long::longValue).toArray(),
+        starts.timeBase(),
         Optional.empty());
   }
 
@@ -112,14 +126,17 @@ final class SegmentIntervals {
 
   /** Where segment {@code number}'s interval starts, at its first tick of this timescale. */
   long startOf(long number, long timescale) {
-    var start = number;
-    var timeBase = slotsOf(periodSeconds);
-    if (!isPlainGrid()) {
-      start = starts[Math.toIntExact(number)];
-      timeBase = startTimeBase;
+    var start = startTimeOf(number);
+    return firstTickAtOrAfter(start.ticks(), start.timeBase(), timescale);
+  }
+
+  /** Where segment {@code number}'s interval starts on the zero-based timeline, exactly. */
+  SegmentStart startTimeOf(long number) {
+    if (isPlainGrid()) {
+      return new SegmentStart(number, slotsOf(periodSeconds));
     }
 
-    return firstTickAtOrAfter(start, timeBase, timescale);
+    return new SegmentStart(starts[Math.toIntExact(number)], startTimeBase);
   }
 
   private static long firstTickAtOrAfter(long start, TimeBase timeBase, long timescale) {

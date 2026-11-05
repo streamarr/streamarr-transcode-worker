@@ -1064,6 +1064,77 @@ class FfmpegCommandBuilderTest {
         .segmentStartSlots(List.of(0L, 3L, 6L, 10L));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("everyEncoder")
+  @DisplayName(
+      "Should force the first output frame at or after each exact start, in the microseconds that"
+          + " select it, when the job carries exact segment starts")
+  void shouldForceTheFirstOutputFrameAtOrAfterEachExactStartWhenTheJobCarriesExactStarts(
+      String encoder) {
+    var cmd = command(exactStartRequest().build(), encoder);
+
+    // 6.666... s holds no frame at 24000/1001 fps; the next frame, 160, is at 6.6733333... s.
+    assertThat(cmd).containsSequence("-force_key_frames:0", "0,3.54,6.673333,10");
+  }
+
+  @Test
+  @DisplayName(
+      "Should force the output frame on an exact start when that frame's time is not a whole"
+          + " number of microseconds")
+  void shouldForceTheOutputFrameOnAnExactStartWhenItsTimeIsNotAWholeNumberOfMicroseconds() {
+    // Frame 100 at 30000/1001 fps is 3.3366666... s, exactly the MPEG-TS tick 300,300; listing
+    // 3.336667 s, the start rounded up, would force frame 101.
+    var request =
+        exactStartRequest()
+            .outputFrameRate(Optional.of(new OutputFrameRate(30_000, 1001)))
+            .mediaSegmentCount(2)
+            .exactSegmentStarts(
+                Optional.of(new ExactSegmentStarts(List.of(0L, 300_300L), 1, 90_000)));
+
+    var cmd = command(request.build(), "libx264");
+
+    assertThat(cmd).containsSequence("-force_key_frames:0", "0,3.336666");
+  }
+
+  @Test
+  @DisplayName(
+      "Should seek one slot before its first segment's exact start when an encoded replacement"
+          + " attempt starts there")
+  void shouldSeekOneSlotBeforeItsFirstSegmentsExactStartWhenAnEncodedReplacementStartsThere() {
+    var cmd = command(exactStartRequest().startSequenceNumber(2).build(), "libx264");
+
+    assertThat(cmd)
+        .as("segment 2 starts at 6.666... s")
+        .containsSubsequence("-ss", "3.666667", "-i")
+        .containsSequence("-force_key_frames:0", "6.673333,10");
+  }
+
+  @Test
+  @DisplayName(
+      "Should seek a stream copy to its first segment's exact start when it carries no keyframe"
+          + " position")
+  void shouldSeekAStreamCopyToItsFirstSegmentsExactStartWhenItCarriesNoKeyframePosition() {
+    var cmd =
+        command(
+            exactStartRequest()
+                .transcodeDecision(decision(TranscodeMode.REMUX).build())
+                .startSequenceNumber(1)
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSubsequence("-ss", "3.54", "-i");
+  }
+
+  // Source keyframes at 3.54 s, 6.666... s and 10 s in an MPEG-TS source's 1/90000 time base.
+  private static TranscodeRequest.TranscodeRequestBuilder exactStartRequest() {
+    return request(TranscodeMode.FULL_TRANSCODE)
+        .targetSegmentDuration(3)
+        .mediaSegmentCount(4)
+        .exactSegmentStarts(
+            Optional.of(
+                new ExactSegmentStarts(List.of(0L, 318_600L, 600_000L, 900_000L), 1, 90_000)));
+  }
+
   @Test
   @DisplayName("Should keep every boundary when the list fills the longest argument Linux accepts")
   void shouldKeepEveryBoundaryWhenTheListFillsTheLongestArgumentLinuxAccepts() {

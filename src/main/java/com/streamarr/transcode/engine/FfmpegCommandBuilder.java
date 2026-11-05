@@ -479,7 +479,7 @@ public class FfmpegCommandBuilder {
   // presentation time, as Matroska and MPEG-TS do not. The producer discards what a copy reads
   // before its first segment as preroll.
   private static Duration inputSeekPosition(TranscodeRequest request) {
-    return request.seekPosition().orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
+    return request.seekPosition().orElseGet(() -> inputSeekStart(request));
   }
 
   // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.
@@ -496,16 +496,18 @@ public class FfmpegCommandBuilder {
   // between pictures covers the whole period, or unless the demuxer lands after the start, as an
   // MPEG-TS demuxer can, and as an MP4 demuxer does for a target inside a gap whose next keyframe
   // carries a decode time inside it. A stream copy without the server's keyframe position seeks to
-  // its first segment's start.
-  private static long inputSeekSeconds(TranscodeRequest request) {
+  // its first segment's start. An exact start rounds down to nanoseconds, which the seek rounds up
+  // to microseconds.
+  private static Duration inputSeekStart(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
-    var firstSegmentStart = request.segmentIntervals().startOf(firstSegment, 1);
+    var firstSegmentStart =
+        request.segmentIntervals().startTimeOf(firstSegment).roundedDownToNanoseconds();
     var mode = request.transcodeDecision().transcodeMode();
     if (!mode.encodesVideo() || firstSegment == 0) {
       return firstSegmentStart;
     }
 
-    return firstSegmentStart - request.targetSegmentDuration();
+    return firstSegmentStart.minusSeconds(request.targetSegmentDuration());
   }
 
   // Where an attempt that encodes video from a later segment starts encoding video: its first
@@ -531,7 +533,10 @@ public class FfmpegCommandBuilder {
     }
 
     return Optional.of(
-        Duration.ofSeconds(request.segmentIntervals().startOf(request.startSequenceNumber(), 1)));
+        request
+            .segmentIntervals()
+            .startTimeOf(request.startSequenceNumber())
+            .roundedDownToNanoseconds());
   }
 
   private static boolean encodesVideo(TranscodeRequest request) {
@@ -1150,9 +1155,12 @@ public class FfmpegCommandBuilder {
   // merged segment's later slots get no forced keyframe; the GOP's keyframes there stay inside it.
   private static ForcedKeyframes forcedKeyframes(TranscodeRequest request, long firstSegment) {
     var intervals = request.segmentIntervals();
-    var times = new StringBuilder().append(intervals.startOf(firstSegment, 1));
+    var frameRate = request.outputFrameRate().orElseThrow();
+    var times =
+        new StringBuilder()
+            .append(forcedKeyframeTime(intervals.startTimeOf(firstSegment), frameRate));
     for (var segment = firstSegment + 1; segment < request.mediaSegmentCount(); segment++) {
-      var next = "," + intervals.startOf(segment, 1);
+      var next = "," + forcedKeyframeTime(intervals.startTimeOf(segment), frameRate);
       if (times.length() + next.length() > LONGEST_ARGUMENT_BYTES) {
         return new ForcedKeyframes(times.toString(), false);
       }
@@ -1161,6 +1169,20 @@ public class FfmpegCommandBuilder {
     }
 
     return new ForcedKeyframes(times.toString(), true);
+  }
+
+  // FFmpeg reads each time in whole microseconds and forces the first frame that presents at or
+  // after it, so a start in whole microseconds names itself. Any other start names the first output
+  // frame at or after it, rounded down to a microsecond: rounding the start up could pass that
+  // frame
+  // when it lies on the start or less than a microsecond after it, and no earlier frame lies within
+  // a microsecond of it.
+  private static String forcedKeyframeTime(SegmentStart start, OutputFrameRate frameRate) {
+    var microseconds =
+        start
+            .wholeMicroseconds()
+            .orElseGet(() -> frameRate.firstFrameAtOrAfterInMicroseconds(start));
+    return BigDecimal.valueOf(microseconds, 6).stripTrailingZeros().toPlainString();
   }
 
   static boolean isKeyframeVerified(String encoder) {

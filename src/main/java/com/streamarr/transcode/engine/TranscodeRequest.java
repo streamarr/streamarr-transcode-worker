@@ -24,6 +24,7 @@ public record TranscodeRequest(
     int startSequenceNumber,
     int mediaSegmentCount,
     @NonNull List<Long> segmentStartSlots,
+    @NonNull Optional<ExactSegmentStarts> exactSegmentStarts,
     @NonNull Optional<Duration> seekPosition,
     @NonNull Optional<SourceAudio> sourceAudio,
     @NonNull Optional<Duration> advertisedEnd) {
@@ -57,6 +58,7 @@ public record TranscodeRequest(
   public static TranscodeRequestBuilder builder() {
     return new TranscodeRequestBuilder()
         .segmentStartSlots(List.of())
+        .exactSegmentStarts(Optional.empty())
         .seekPosition(Optional.empty())
         .outputFrameRate(Optional.empty())
         .sourceAudio(Optional.empty())
@@ -64,11 +66,16 @@ public record TranscodeRequest(
   }
 
   /**
-   * The media segments' intervals: the job's segment list, whose last segment ends at the
-   * advertised end when the job carries one, or the plain grid when it has no list.
+   * The media segments' intervals: the job's exact segment starts, or else its segment list in
+   * slots, whose last segment ends at the advertised end when the job carries one, or the plain
+   * grid when it has neither.
    */
   SegmentIntervals segmentIntervals() {
-    var intervals = SegmentIntervals.onSegmentList(targetSegmentDuration, segmentStartSlots);
+    var intervals =
+        exactSegmentStarts
+            .map(starts -> SegmentIntervals.onExactStarts(targetSegmentDuration, starts))
+            .orElseGet(
+                () -> SegmentIntervals.onSegmentList(targetSegmentDuration, segmentStartSlots));
     return advertisedEnd.map(intervals::withLastListedSegmentEndingAt).orElse(intervals);
   }
 
