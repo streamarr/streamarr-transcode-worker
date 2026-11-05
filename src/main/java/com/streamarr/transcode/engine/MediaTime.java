@@ -82,13 +82,11 @@ record MediaTime(long ticks, TimeBase timeBase) implements Comparable<MediaTime>
     return other instanceof MediaTime time && compareTo(time) == 0;
   }
 
+  // Hashes the time's lowest terms, which every time base that names the same instant shares; the
+  // denominator is positive, so the divisor is never zero.
   @Override
   public int hashCode() {
     var divisor = seconds().gcd(denominator());
-    if (divisor.signum() == 0) {
-      return 0;
-    }
-
     return Objects.hash(seconds().divide(divisor), denominator().divide(divisor));
   }
 
