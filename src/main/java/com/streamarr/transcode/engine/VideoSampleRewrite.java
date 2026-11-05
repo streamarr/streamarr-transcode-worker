@@ -21,9 +21,6 @@ import java.util.stream.Collectors;
  */
 final class VideoSampleRewrite {
 
-  // The av1C fields before its configOBUs (AV1 ISOBMFF binding 2.3.3).
-  private static final int AV1C_FIELDS = 4;
-
   private final SampleRewrite sampleRewrite;
 
   private VideoSampleRewrite(SampleRewrite sampleRewrite) {
@@ -35,9 +32,8 @@ final class VideoSampleRewrite {
    * samples.
    *
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the copy lists a
-   *     rewrite for video that is neither HEVC nor AV1, or when the av1C record holds a metadata
-   *     OBU that the copy strips; with {@link Reason#MALFORMED_BOX} when the HEVC record declares
-   *     no usable NAL unit length, or the av1C record's OBUs cannot be read
+   *     rewrite for video that is neither HEVC nor AV1, other than an HDR10+ strip of H.264; with
+   *     {@link Reason#MALFORMED_BOX} when the HEVC or AVC record declares no usable NAL unit length
    */
   static Optional<VideoSampleRewrite> of(VideoDecision decision, InitializationSegment segment) {
     if (!(decision instanceof VideoDecision.Copy copy)) {
@@ -57,34 +53,38 @@ final class VideoSampleRewrite {
     SampleRewrite rewrite =
         switch (sampleEntry.type()) {
           case "hvc1", "hev1", "dvh1" ->
-              new HevcSampleRewrite(
-                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry), sampleRewrites);
-          case "av01" -> av1Rewrite(sampleEntry, sampleRewrites);
-          default ->
-              throw mismatch(
-                  "the copy lists "
-                      + sampleRewrites
-                      + " for a "
-                      + sampleEntry.type()
-                      + " sample entry, which carries no such content");
+              new NalUnitSampleRewrite(
+                  NalSyntax.HEVC,
+                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry),
+                  sampleRewrites);
+          case "av01" -> new Av1SampleRewrite(sampleRewrites);
+          case "avc1", "avc3" -> avcRewrite(sampleEntry, sampleRewrites);
+          default -> throw noSuchContent(sampleEntry, sampleRewrites);
         };
     return Optional.of(new VideoSampleRewrite(rewrite));
   }
 
-  // FFmpeg copies the source's metadata OBUs into av1C's configOBUs. The worker rewrites only
-  // samples, so a record that holds a stripped OBU fails the attempt instead of reaching a client.
-  private static SampleRewrite av1Rewrite(BoxView sampleEntry, Set<BitstreamRewrite> rewrites) {
-    var rewrite = new Av1SampleRewrite(rewrites);
-    var av1C =
-        sampleEntry.after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES).requiredChild("av1C");
-    var configuration = av1C.body();
-    var configurationObus =
-        configuration.slice(AV1C_FIELDS, configuration.remaining() - AV1C_FIELDS);
-    if (rewrite.rewrite(configurationObus) != configurationObus) {
-      throw mismatch("the av1C record holds a metadata OBU that the copy strips from its samples");
+  // H.264 carries HDR10+ in SEI messages; its Dolby Vision is profile 9, which no copy strips.
+  private static SampleRewrite avcRewrite(
+      BoxView sampleEntry, Set<BitstreamRewrite> sampleRewrites) {
+    if (!sampleRewrites.equals(Set.of(BitstreamRewrite.STRIP_HDR10_PLUS))) {
+      throw noSuchContent(sampleEntry, sampleRewrites);
     }
 
-    return rewrite;
+    return new NalUnitSampleRewrite(
+        NalSyntax.AVC,
+        CodecConfigurationReader.avcNalUnitLengthSizeOf(sampleEntry),
+        sampleRewrites);
+  }
+
+  private static FragmentedMp4Exception noSuchContent(
+      BoxView sampleEntry, Set<BitstreamRewrite> sampleRewrites) {
+    return mismatch(
+        "the copy lists "
+            + sampleRewrites
+            + " for a "
+            + sampleEntry.type()
+            + " sample entry, which carries no such content");
   }
 
   /**

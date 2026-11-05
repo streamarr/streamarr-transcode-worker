@@ -9,6 +9,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -34,6 +35,7 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
+import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -43,6 +45,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
@@ -92,6 +95,7 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -198,6 +202,18 @@ class WorkerMediaSmokeTest {
 
   // The sample-entry sources span segments 0 and 1 at a 1 s period, with a keyframe every second.
   private static final int SAMPLE_ENTRY_SOURCE_SECONDS = 2;
+
+  // ffprobe prints each time rounded to the microsecond, so the difference of two printed times
+  // can be one microsecond off. A picture that took another's time moves a whole frame.
+  private static final Comparator<BigDecimal> WITHIN_PRINTED_ROUNDING =
+      (left, right) -> {
+        if (left.subtract(right).abs().compareTo(new BigDecimal("0.000001")) <= 0) {
+          return 0;
+        }
+
+        return left.compareTo(right);
+      };
+
   private static final String DOLBY_VISION_FIXTURE = "dolby-vision-8.2-dvh1.mp4";
   // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
   private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
@@ -1176,6 +1192,165 @@ class WorkerMediaSmokeTest {
               assertThat(video.getWidth()).isEqualTo(320);
               assertThat(video.getHeight()).isEqualTo(180);
             });
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_UNSPECIFIED", "UNRECOGNIZED"},
+      mode = EnumSource.Mode.EXCLUDE)
+  @DisplayName("Should upload the second audio track when the job names it")
+  void shouldUploadTheSecondAudioTrackWhenTheJobNamesIt(TranscodeMode mode) throws Exception {
+    var source = sourceWithTwoAudioTracks();
+    var probe = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    assertThat(probe.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodec, ProbeStreamInfo::getSampleRateHz)
+        .containsExactly(tuple("h264", 0), tuple("aac", 48_000), tuple("ac3", 44_100));
+    var audioCodec = audioModeOf(mode) == AudioMode.AUDIO_MODE_COPY ? "ac3" : "aac";
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioModeOf(mode))
+        .setCodec(audioCodec)
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(2);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(FIXTURE_SEGMENT_COUNT));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    // Only the second track holds 44.1 kHz audio, and the AAC encoder keeps the source's rate.
+    assertThat(streams(media))
+        .filteredOn(stream -> "audio".equals(stream.getCodecType()))
+        .singleElement()
+        .satisfies(
+            audio -> {
+              assertThat(audio.getCodec()).isEqualTo(audioCodec);
+              assertThat(audio.getSampleRateHz()).isEqualTo(44_100);
+            });
+  }
+
+  @ParameterizedTest(name = "{0} naming stream {1} with subtitles {2}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, 0, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 3, SUBTITLE_MODE_HLS",
+    "TRANSCODE_MODE_REMUX, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 5, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 9, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 3, SUBTITLE_MODE_HLS",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 5, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 9, SUBTITLE_MODE_EXCLUDE"
+  })
+  @DisplayName(
+      "Should report an invalid specification and upload nothing when the stream that the job names"
+          + " as its audio is a video, subtitle, attachment or cover art stream, or no stream, of a"
+          + " real source")
+  void
+      shouldReportAnInvalidSpecificationAndUploadNothingWhenTheStreamThatTheJobNamesAsItsAudioIsNotAnAudioStreamOfARealSource(
+          TranscodeMode mode, int streamIndex, SubtitleMode subtitleMode) throws Exception {
+    var source = sourceWithSubtitleAndAttachment();
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioModeOf(mode))
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(streamIndex);
+    job.getDecisionBuilder().getSubtitleBuilder().setMode(subtitleMode);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+
+    var failure = executeExpectingFailure(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(failure.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+    assertThat(failure.uploads().names()).isEmpty();
+  }
+
+  // The fixture's video and AAC track, then a SubRip subtitle, a font attachment and cover art,
+  // which FFmpeg reads from Matroska as a video stream with the attached picture disposition.
+  private Path sourceWithSubtitleAndAttachment() throws Exception {
+    copyMedia();
+    var subtitles = root.resolve("subtitles.srt");
+    Files.writeString(subtitles, "1\n00:00:00,000 --> 00:00:02,000\nHello\n");
+    var font = root.resolve("font.ttf");
+    Files.write(font, new byte[] {0, 1, 0, 0});
+    var cover = root.resolve("cover.png");
+    runFfmpeg(List.of("-f", "lavfi", "-i", "color=red:s=64x64", "-frames:v", "1"), cover);
+    var source = root.resolve("subtitle-and-attachment.mkv");
+    runFfmpeg(
+        List.of(
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-i",
+            subtitles.toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "1:s:0",
+            "-c",
+            "copy",
+            "-c:s",
+            "srt",
+            "-attach",
+            font.toString(),
+            "-metadata:s:t:0",
+            "mimetype=application/x-truetype-font",
+            "-attach",
+            cover.toString(),
+            "-metadata:s:t:1",
+            "mimetype=image/png"),
+        source);
+    var streams = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    assertThat(streams.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodecType)
+        .containsExactly("video", "audio", "audio", "subtitle", "attachment", "video");
+    return source;
+  }
+
+  // The fixture's video and 48 kHz AAC track, then its audio again as a 44.1 kHz AC-3 track.
+  private Path sourceWithTwoAudioTracks() throws Exception {
+    copyMedia();
+    var source = root.resolve("two-audio-tracks.mkv");
+    runFfmpeg(
+        List.of(
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-c:v",
+            "copy",
+            "-c:a:0",
+            "copy",
+            "-c:a:1",
+            "ac3",
+            "-ar:a:1",
+            "44100",
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:1",
+            "language=jpn"),
+        source);
+    return source;
   }
 
   private Path sourceWithCoverArtBeforeVideo() throws Exception {
@@ -2459,6 +2634,84 @@ class WorkerMediaSmokeTest {
         .containsEntry("codec_tag_string", "hvc1");
   }
 
+  // When FFmpeg's DASH muxer flushes each fragment, the mp4 muxer gives a fragment's first sample
+  // the previous fragment's end time. After an open-GOP keyframe, that is the time of a leading
+  // picture, decoded after the keyframe but shown before it, so two pictures share one
+  // presentation time and none shows at the keyframe's. Chromium can then drop the fragment.
+  @ParameterizedTest(name = "{0} source")
+  @ValueSource(strings = {"mp4", "mkv", "ts"})
+  @DisplayName(
+      "Should keep every presentation time of the source when a worker copies open-GOP HEVC whose"
+          + " keyframes have leading pictures")
+  void shouldKeepEveryPresentationTimeOfTheSourceWhenAWorkerCopiesOpenGopHevc(String container)
+      throws Exception {
+    var source = openGopHevcSource(container);
+    var sourcePackets = fromTheFirstKeyframe(videoPackets(source));
+    assertThat(keyframesFollowedByLeadingPictures(sourcePackets))
+        .as("keyframes after the first whose next picture in decode order shows before them")
+        .isPositive();
+
+    var copiedPackets = fromTheFirstKeyframe(videoPackets(copiedMedia(source, "hvc1.1.6.L30.90")));
+
+    assertThat(copiedPackets)
+        .extracting(VideoPacket::presentationTime)
+        .doesNotHaveDuplicates()
+        .usingElementComparator(WITHIN_PRINTED_ROUNDING)
+        .containsExactlyElementsOf(presentationTimes(sourcePackets));
+    assertThat(presentationTimes(keyframesOf(copiedPackets)))
+        .usingElementComparator(WITHIN_PRINTED_ROUNDING)
+        .containsExactlyElementsOf(presentationTimes(keyframesOf(sourcePackets)));
+  }
+
+  // libx265 at 29.97 fps, whose open GOPs make each keyframe after the first a CRA picture with
+  // B-frames as leading pictures.
+  private Path openGopHevcSource(String container) throws Exception {
+    var source = root.resolve("open-gop-hevc." + container);
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=30000/1001:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-x265-params",
+            "keyint=10:min-keyint=10:scenecut=0:bframes=4:open-gop=1:log-level=error"),
+        source);
+    return source;
+  }
+
+  // The packets in decode order, timed from the first keyframe: the copy moves its whole timeline
+  // by the source's frame reordering, which shifts every picture alike.
+  private static List<VideoPacket> fromTheFirstKeyframe(List<VideoPacket> packets) {
+    var firstKeyframe = packets.getFirst();
+    assertThat(firstKeyframe.keyframe())
+        .as("the first packet in decode order is a keyframe")
+        .isTrue();
+    return packets.stream()
+        .map(packet -> packet.onTimelineStartingAt(firstKeyframe.presentationTime()))
+        .toList();
+  }
+
+  private static long keyframesFollowedByLeadingPictures(List<VideoPacket> packets) {
+    return IntStream.range(1, packets.size() - 1)
+        .filter(index -> packets.get(index).keyframe())
+        .filter(index -> packets.get(index + 1).showsBefore(packets.get(index)))
+        .count();
+  }
+
+  private static List<VideoPacket> keyframesOf(List<VideoPacket> packets) {
+    return packets.stream().filter(VideoPacket::keyframe).toList();
+  }
+
+  private static List<BigDecimal> presentationTimes(List<VideoPacket> packets) {
+    return packets.stream().map(VideoPacket::presentationTime).toList();
+  }
+
   // Sources whose parameter sets travel only in the samples, under the sample entry that the
   // source names: hev1 and avc3 as GPAC wrote them, and dvhe and dvav renamed from them.
   @ParameterizedTest(name = "{1} source")
@@ -2578,10 +2831,82 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  // libx265 writes the HDR10 SEI messages into the record and in front of every keyframe. The
-  // filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from the
-  // samples, and keeps the record.
+  // The job carries the probed static values, as the server sends them for a copy with a PQ output
+  // (ADR 0036). The locked FFmpeg writes neither message into the copy's record, so every message
+  // there comes from the job.
+  @Test
+  @DisplayName(
+      "Should deliver the job's static HDR metadata as SEI messages in the hvc1 record, keep it in"
+          + " front of every keyframe and declare PQ when a worker copies HDR10 with a planned PQ"
+          + " output")
+  void
+      shouldDeliverTheJobsStaticHdrMetadataInTheHvc1RecordAndKeepItInTheSamplesWhenAWorkerCopiesHdr10WithAPlannedPqOutput()
+          throws Exception {
+    var source = hdr10Source();
+    var job = sampleEntryCopyJob(source, HDR10_CODEC_STRING);
+    var video = job.getDecisionBuilder().getVideoBuilder();
+    video.setOutputDynamicRange(
+        VideoDynamicRange.newBuilder()
+            .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_PQ)
+            .setHdr10Plus(Presence.PRESENCE_ABSENT)
+            .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance()));
+    HDR10_MASTERING_DISPLAY.writeTo(video.getMasteringDisplayBuilder());
+    video
+        .getContentLightLevelBuilder()
+        .setMaxContentLightLevel(HDR10_CONTENT_LIGHT_LEVEL.maxContentLightLevel())
+        .setMaxFrameAverageLightLevel(HDR10_CONTENT_LIGHT_LEVEL.maxPictureAverageLightLevel());
+
+    var uploads = execute(engine(realCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(SAMPLE_ENTRY_SOURCE_SECONDS));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(videoStreamFields(media, "codec_tag_string,color_transfer"))
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of("codec_tag_string", "hvc1", "color_transfer", "smpte2084"));
+    var recordNalUnits = hevcRecordNalUnits(uploads.segments().get("init.mp4"));
+    assertThat(recordNalUnits)
+        .as("the NAL unit types of the delivered record")
+        .extracting(WorkerMediaSmokeTest::hevcNalUnitType)
+        .containsExactly(HEVC_VPS, HEVC_SPS, HEVC_PPS, HEVC_PREFIX_SEI, HEVC_PREFIX_SEI);
+    var masteringDisplay = seiMessages(List.of(recordNalUnits.get(3)));
+    var contentLightLevel = seiMessages(List.of(recordNalUnits.get(4)));
+    assertThat(masteringDisplay).containsOnlyKeys(HEVC_MASTERING_DISPLAY_SEI);
+    assertThat(MasteringDisplayColourVolume.of(masteringDisplay.get(HEVC_MASTERING_DISPLAY_SEI)))
+        .isEqualTo(HDR10_MASTERING_DISPLAY);
+    assertThat(contentLightLevel).containsOnlyKeys(HEVC_CONTENT_LIGHT_LEVEL_SEI);
+    assertThat(ContentLightLevel.of(contentLightLevel.get(HEVC_CONTENT_LIGHT_LEVEL_SEI)))
+        .isEqualTo(HDR10_CONTENT_LIGHT_LEVEL);
+    for (var segment : uploads.names().subList(1, uploads.names().size())) {
+      var bytes = uploads.segments().get(segment);
+      assertThat(seiMessages(nalUnitsOfFirstPicture(bytes, firstSampleOffset(bytes))))
+          .as("the SEI messages in front of the keyframe of %s", segment)
+          .containsKeys(HEVC_MASTERING_DISPLAY_SEI, HEVC_CONTENT_LIGHT_LEVEL_SEI);
+    }
+  }
+
+  // The filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from
+  // the samples of libx265's HDR10 stream, and keeps the record.
   private Path hdr10SourceWithStaticMetadataOnlyInItsRecord() throws Exception {
+    var encoded = hdr10Source();
+    var source = root.resolve("hdr10.mp4");
+    runFfmpeg(
+        List.of(
+            "-i",
+            encoded.toString(),
+            "-c",
+            "copy",
+            "-bsf:v",
+            "filter_units=remove_types=32|33|34|39",
+            "-tag:v",
+            "hvc1"),
+        source);
+    return source;
+  }
+
+  // libx265's PQ stream with HDR10 static metadata, which it writes into the record and in front of
+  // every keyframe.
+  private Path hdr10Source() throws Exception {
     var encoded = root.resolve("hdr10-encoded.mp4");
     runFfmpeg(
         List.of(
@@ -2602,19 +2927,7 @@ class WorkerMediaSmokeTest {
                 + ":max-cll="
                 + HDR10_CONTENT_LIGHT_LEVEL.x265Parameter()),
         encoded);
-    var source = root.resolve("hdr10.mp4");
-    runFfmpeg(
-        List.of(
-            "-i",
-            encoded.toString(),
-            "-c",
-            "copy",
-            "-bsf:v",
-            "filter_units=remove_types=32|33|34|39",
-            "-tag:v",
-            "hvc1"),
-        source);
-    return source;
+    return encoded;
   }
 
   // The NAL units of every array of the first hvcC record (ISO/IEC 14496-15, 8.3.3.1.2).
@@ -2749,6 +3062,15 @@ class WorkerMediaSmokeTest {
           Short.toUnsignedInt(fields.getShort()),
           Integer.toUnsignedLong(fields.getInt()),
           Integer.toUnsignedLong(fields.getInt()));
+    }
+
+    // The contract names each primary; the SEI message lists them as green, blue and red.
+    private void writeTo(MasteringDisplayColorVolume.Builder contract) {
+      contract.getGreenBuilder().setX(primaries.get(0)).setY(primaries.get(1));
+      contract.getBlueBuilder().setX(primaries.get(2)).setY(primaries.get(3));
+      contract.getRedBuilder().setX(primaries.get(4)).setY(primaries.get(5));
+      contract.getWhitePointBuilder().setX(whitePointX).setY(whitePointY);
+      contract.setMaxLuminance((int) maxLuminance).setMinLuminance((int) minLuminance);
     }
 
     private String x265Parameter() {
@@ -4572,6 +4894,10 @@ class WorkerMediaSmokeTest {
     private VideoPacket onTimelineStartingAt(BigDecimal startTime) {
       return new VideoPacket(
           presentationTime.subtract(startTime), decodeTime.subtract(startTime), keyframe);
+    }
+
+    private boolean showsBefore(VideoPacket other) {
+      return presentationTime.compareTo(other.presentationTime) < 0;
     }
   }
 

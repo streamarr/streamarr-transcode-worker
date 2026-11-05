@@ -5,6 +5,8 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
 import static com.streamarr.transcode.fixtures.DeliveredSamples.audioSamplesOfTheDeliveredSegments;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
+import static com.streamarr.transcode.fixtures.RecordingEdits.withBytesAfterTheFirstVideoSample;
+import static com.streamarr.transcode.fixtures.RecordingEdits.withSoundTrackHandledAs;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
@@ -14,12 +16,10 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfig
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
-import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sdrDynamicRange;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
-import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -57,10 +57,8 @@ import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
-import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -249,8 +247,8 @@ class TranscodeWorkerJobAttemptTest {
       // the grown first video sample brings it to the size under test.
       var recordedSegmentBytes = uploadsOf(connection, recorded).get(1).content().length;
       output.set(
-          withLargeFirstVideoSample(
-              bytesOf(ENCODED_RECORDING), segmentBytes - recordedSegmentBytes));
+          withBytesAfterTheFirstVideoSample(
+              bytesOf(ENCODED_RECORDING), new byte[segmentBytes - recordedSegmentBytes]));
       startVariant(connection, job);
 
       awaitEvents(
@@ -1046,12 +1044,6 @@ class TranscodeWorkerJobAttemptTest {
         Arguments.of("tier", unary(video -> video.setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN))),
         Arguments.of("level", unary(video -> video.setLevel(10))),
         Arguments.of(
-            "empty output dynamic range",
-            unary(video -> video.setOutputDynamicRange(VideoDynamicRange.getDefaultInstance()))),
-        Arguments.of(
-            "SDR output dynamic range",
-            unary(video -> video.setOutputDynamicRange(sdrDynamicRange()))),
-        Arguments.of(
             "deinterlace instruction",
             unary(
                 video ->
@@ -1277,6 +1269,83 @@ class TranscodeWorkerJobAttemptTest {
           .containsSequence("-c:v", "libx265")
           .containsSequence("-profile:v", "main")
           .containsSequence("-x265-params", "no-scenecut=1:no-open-gop=1:level-idc=41:high-tier=1");
+    }
+  }
+
+  @ParameterizedTest(name = "{0} with {1}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, AUDIO_MODE_COPY",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, AUDIO_MODE_TRANSCODE",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, AUDIO_MODE_COPY",
+    "TRANSCODE_MODE_FULL_TRANSCODE, AUDIO_MODE_TRANSCODE"
+  })
+  @DisplayName(
+      "Should map the audio stream that the job names when a replacement attempt copies or encodes"
+          + " it")
+  void shouldMapTheAudioStreamThatTheJobNamesWhenAReplacementAttemptCopiesOrEncodesIt(
+      TranscodeMode mode, AudioMode audioMode) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(mode);
+    job.getExecutionBuilder().setStartSequenceNumber(3);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioMode)
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(2);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-map", "0:0", "-map", "0:2?")
+          .doesNotContain("0:a:0");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the job as an invalid specification and upload nothing when the output holds"
+          + " no sound track of the audio stream that the job names")
+  void
+      shouldRefuseTheJobAsAnInvalidSpecificationAndUploadNothingWhenTheOutputHoldsNoSoundTrackOfTheAudioStreamThatTheJobNames()
+          throws Exception {
+    var output = withSoundTrackHandledAs(bytesOf(ENCODED_RECORDING), "sbtl");
+    var launcher =
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(3);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(connection.uploads()).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName("Should map the first audio stream when the job names no audio stream")
+  void shouldMapTheFirstAudioStreamWhenTheJobNamesNoAudioStream() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-map", "0:0", "-map", "0:a:0");
     }
   }
 
@@ -1930,7 +1999,9 @@ class TranscodeWorkerJobAttemptTest {
           + " slowly")
   void shouldCountTheAcknowledgementDeadlineFromTheFirstMessageWhenReadinessComesSlowly()
       throws Exception {
-    var output = withLargeFirstVideoSample(bytesOf(ENCODED_RECORDING), 3 * UPLOAD_MESSAGE_BYTES);
+    var output =
+        withBytesAfterTheFirstVideoSample(
+            bytesOf(ENCODED_RECORDING), new byte[3 * UPLOAD_MESSAGE_BYTES]);
     var launcher =
         new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
     var job = variantJobBuilder().build();
@@ -2360,66 +2431,5 @@ class TranscodeWorkerJobAttemptTest {
     return connection.uploads().stream()
         .filter(upload -> upload.metadata().getJobAttemptId().equals(job.getJobAttemptId()))
         .toList();
-  }
-
-  // The recording with its first video sample grown by this many bytes, which the producer copies
-  // into the first media segment without looking inside it.
-  private static byte[] withLargeFirstVideoSample(byte[] recording, int growth) {
-    var boxes = TopLevelBoxes.of(recording);
-    var moof = boxes.stream().filter(box -> box.type().equals("moof")).findFirst().orElseThrow();
-    var mdat = boxes.get(boxes.indexOf(moof) + 1);
-    var fields = ByteBuffer.wrap(recording.clone());
-    var runs = runsOf(fields, moof);
-    var videoRun = runs.getFirst();
-    var firstSampleEnd =
-        moof.start() + fields.getInt(videoRun + 16) + firstSampleSize(fields, videoRun);
-    fields.putInt(
-        sizeFieldOfFirstSample(fields, videoRun), firstSampleSize(fields, videoRun) + growth);
-    runs.subList(1, runs.size())
-        .forEach(run -> fields.putInt(run + 16, fields.getInt(run + 16) + growth));
-    fields.putInt(mdat.start(), mdat.size() + growth);
-    var grown = new ByteArrayOutputStream();
-    grown.write(fields.array(), 0, firstSampleEnd);
-    grown.writeBytes(new byte[growth]);
-    grown.write(fields.array(), firstSampleEnd, recording.length - firstSampleEnd);
-    return grown.toByteArray();
-  }
-
-  // Where each trun of the moof starts, in traf order: the video traf's first, as FFmpeg writes it.
-  private static List<Integer> runsOf(ByteBuffer fields, Box moof) {
-    return childrenOf(fields, moof.start(), "traf").stream()
-        .flatMap(traf -> childrenOf(fields, traf, "trun").stream())
-        .toList();
-  }
-
-  // Where each child box of this type starts inside the box that starts here.
-  private static List<Integer> childrenOf(ByteBuffer fields, int box, String type) {
-    var children = new ArrayList<Integer>();
-    var fourcc = ByteBuffer.wrap(type.getBytes(US_ASCII)).getInt();
-    for (var child = box + 8; child < box + fields.getInt(box); child += fields.getInt(child)) {
-      if (fields.getInt(child + 4) == fourcc) {
-        children.add(child);
-      }
-    }
-
-    return children;
-  }
-
-  // A trun's first sample entry follows its data offset and first-sample flags; the recordings'
-  // video runs carry each sample's size, after its duration when they carry durations.
-  private static int sizeFieldOfFirstSample(ByteBuffer fields, int run) {
-    var flags = fields.getInt(run + 8) & 0xFF_FFFF;
-    var field = run + 16;
-    for (var presentField : new int[] {0x1, 0x4, 0x100}) {
-      if ((flags & presentField) != 0) {
-        field += 4;
-      }
-    }
-
-    return field;
-  }
-
-  private static int firstSampleSize(ByteBuffer fields, int run) {
-    return fields.getInt(sizeFieldOfFirstSample(fields, run));
   }
 }

@@ -64,6 +64,7 @@ public class FfmpegTranscodeEngine {
             .stallTimeout(encoderStallTimeout)
             .encodedFrameRate(encodedFrameRateOf(request))
             .videoDecision(request.transcodeDecision().videoDecision())
+            .requiresSoundTrack(namesItsAudioStream(request))
             .memoryBudget(memoryBudget)
             .sink(sink)
             .clock(MonotonicClock.system())
@@ -106,6 +107,11 @@ public class FfmpegTranscodeEngine {
   /** The encoder backends that this engine runs, one for each codec family it can encode. */
   public List<WorkerVerifiedEncoder> workerVerifiedEncoders() {
     return capabilityService.workerVerifiedEncoders();
+  }
+
+  private static boolean namesItsAudioStream(TranscodeRequest request) {
+    var audio = request.transcodeDecision().audioDecision();
+    return audio.mode() != AudioMode.NONE && audio.streamIndex().isPresent();
   }
 
   // An encode forces the probed frame rate on its output; a copy keeps the source's durations.

@@ -36,6 +36,9 @@ final class CodecConfigurationReader {
   static final int HVCC_FIELDS_BEFORE_ARRAYS = 22;
   // lengthSizeMinusOne sits in the low 2 bits of the last field before the arrays.
   private static final int HVCC_LENGTH_SIZE_FIELD = HVCC_FIELDS_BEFORE_ARRAYS - 1;
+  // avcC's lengthSizeMinusOne follows its version, profile, constraints and level (ISO/IEC
+  // 14496-15 5.3.2.1.2).
+  private static final int AVCC_LENGTH_SIZE_FIELD = 4;
   private static final Set<Integer> HEVC_PARAMETER_SET_TYPES = Set.of(32, 33, 34);
   // The NAL unit types of prefix and suffix SEI messages (ITU-T H.265 table 7-1).
   private static final Set<Integer> HEVC_SEI_TYPES = Set.of(39, 40);
@@ -58,6 +61,11 @@ final class CodecConfigurationReader {
         .map(CodecConfigurationReader::trackCodecOf)
         .flatMap(Optional::stream)
         .toList();
+  }
+
+  /** Whether the {@code moov} declares a sound track. */
+  static boolean declaresSoundTrack(InitializationSegment segment) {
+    return AudioTrack.of(moovOf(segment)).isPresent();
   }
 
   /**
@@ -158,10 +166,28 @@ final class CodecConfigurationReader {
    *     bytes
    */
   static int nalUnitLengthSizeOf(BoxView hevcSampleEntry) {
-    var hvcC = hevcSampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).requiredChild("hvcC").fields();
-    var lengthSize = (hvcC.skip(HVCC_LENGTH_SIZE_FIELD).u8() & 0x03) + 1;
+    return lengthSizeOf(hevcSampleEntry, "hvcC", HVCC_LENGTH_SIZE_FIELD);
+  }
+
+  /**
+   * The bytes of the length in front of each NAL unit in an AVC sample, as the sample entry's avcC
+   * declares them: 1, 2 or 4.
+   *
+   * @throws FragmentedMp4Exception when the avcC is missing or too short, or declares lengths of 3
+   *     bytes
+   */
+  static int avcNalUnitLengthSizeOf(BoxView avcSampleEntry) {
+    return lengthSizeOf(avcSampleEntry, "avcC", AVCC_LENGTH_SIZE_FIELD);
+  }
+
+  // lengthSizeMinusOne sits in the low 2 bits of the configuration box's field at the offset.
+  private static int lengthSizeOf(BoxView sampleEntry, String configurationBox, int field) {
+    var fields =
+        sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).requiredChild(configurationBox).fields();
+    var lengthSize = (fields.skip(field).u8() & 0x03) + 1;
     if (lengthSize == 3) {
-      throw FragmentedMp4Exception.malformed("hvcC declares NAL unit lengths of 3 bytes");
+      throw FragmentedMp4Exception.malformed(
+          configurationBox + " declares NAL unit lengths of 3 bytes");
     }
 
     return lengthSize;

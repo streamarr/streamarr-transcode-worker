@@ -31,7 +31,7 @@
         <archunit.version>1.5.0</archunit.version>
         <native.access.args>--enable-native-access=ALL-UNNAMED</native.access.args>
         <grpc.version>1.84.0</grpc.version>
-        <buf.sdk.version>1.84.0.2.20261104163220.3d48b104dc21</buf.sdk.version>
+        <buf.sdk.version>1.84.0.2.20261104171837.d8d0a969e17a</buf.sdk.version>
         <concurrency-limits.version>0.5.4</concurrency-limits.version>
         <protobuf-java.version>4.36.1</protobuf-java.version>
         <sonar.projectKey>streamarr_streamarr-transcode-worker</sonar.projectKey>

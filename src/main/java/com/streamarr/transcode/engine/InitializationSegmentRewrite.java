@@ -8,11 +8,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 /**
  * Rewrites the initialization segment that FFmpeg writes into the one the producer delivers. It
  * removes the SEI messages from every {@code hvc1} decoder configuration record, then writes the
- * static HDR metadata that a copy plans into that record as one prefix SEI array, and resizes each
+ * static HDR metadata that a copy plans into that record as one prefix SEI array, strips the
+ * metadata OBUs that a copy strips from its samples from the {@code av1C} record, and resizes each
  * box that holds a record. For a copy that plans a {@code dvh1} output, the {@code hvc1} entry
  * becomes {@code dvh1}. For a copy that normalizes its Dolby Vision record, the video sample entry
  * holds the record of the planned output in place of any record that FFmpeg wrote. When a copy's
@@ -29,6 +31,8 @@ final class InitializationSegmentRewrite {
   private static final int STSD_FIELDS = 8;
 
   private static final int PREFIX_SEI = 39;
+  // The av1C fields before its configOBUs.
+  private static final int AV1C_FIELDS = 4;
   // A box header's type follows its 32-bit size, in the compact and the 64-bit form alike.
   private static final int TYPE_OFFSET = 4;
 
@@ -38,6 +42,9 @@ final class InitializationSegmentRewrite {
   private final Optional<String> renamedHevcEntry;
   // The Dolby Vision record box that replaces any record of the video's sample entry.
   private final Optional<byte[]> normalizedRecord;
+  // The rewrite that strips av1C's configOBUs as the copy strips its samples; empty for a decision
+  // that lists no rewrite of samples.
+  private final Optional<Av1SampleRewrite> configurationObuRewrite;
 
   private InitializationSegmentRewrite(VideoDecision decision) {
     this.seiUnits = plannedSeiUnitsOf(decision);
@@ -50,11 +57,29 @@ final class InitializationSegmentRewrite {
         dolbyVision
             .filter(_ -> decision.lists(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
             .map(output -> DolbyVisionRecord.normalizedFor(output).box());
+    this.configurationObuRewrite = configurationObuRewriteOf(decision);
+  }
+
+  private static Optional<Av1SampleRewrite> configurationObuRewriteOf(VideoDecision decision) {
+    if (!(decision instanceof VideoDecision.Copy copy)) {
+      return Optional.empty();
+    }
+
+    var sampleRewrites =
+        copy.bitstreamRewrites().stream()
+            .filter(BitstreamRewrite::rewritesSamples)
+            .collect(Collectors.toUnmodifiableSet());
+    if (sampleRewrites.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(new Av1SampleRewrite(sampleRewrites));
   }
 
   /**
    * @throws FragmentedMp4Exception with {@link FragmentedMp4Exception.Reason#MALFORMED_BOX} when a
-   *     box on the way to a record declares a size that its parent cannot hold; with {@link
+   *     box on the way to a record declares a size that its parent cannot hold, or an av1C record
+   *     whose configOBUs the copy strips holds an OBU that cannot be read; with {@link
    *     FragmentedMp4Exception.Reason#OUTPUT_MISMATCH} when a record ends before its arrays do
    */
   static InitializationSegment rewrite(VideoDecision decision, InitializationSegment segment) {
@@ -112,6 +137,7 @@ final class InitializationSegmentRewrite {
       case "stsd" -> rebuiltAfter(type, body, STSD_FIELDS);
       case "hvc1", "av01" -> rebuiltVideoSampleEntry(type, body);
       case "hvcC" -> readable(() -> withPlannedSeiArray(body));
+      case "av1C" -> withoutStrippedConfigurationObus(body);
       default -> bytesOf(body);
     };
   }
@@ -175,6 +201,20 @@ final class InitializationSegmentRewrite {
         new byte[] {(byte) keptArrays},
         kept.toByteArray(),
         bytesOf(reading));
+  }
+
+  // FFmpeg copies the source's metadata OBUs into av1C's configOBUs (AV1 ISOBMFF binding 2.3.3),
+  // so the copy strips them there as it strips them from its samples. A record too short for its
+  // fields stays as it is, and the output check refuses it.
+  private byte[] withoutStrippedConfigurationObus(ByteBuffer av1C) {
+    if (configurationObuRewrite.isEmpty() || av1C.remaining() < AV1C_FIELDS) {
+      return bytesOf(av1C);
+    }
+
+    var configurationObus = av1C.slice(AV1C_FIELDS, av1C.remaining() - AV1C_FIELDS);
+    return concat(
+        bytesOf(av1C.slice(0, AV1C_FIELDS)),
+        bytesOf(configurationObuRewrite.get().rewrite(configurationObus)));
   }
 
   // array_completeness stays 0: the samples keep their own SEI messages (ISO/IEC 14496-15

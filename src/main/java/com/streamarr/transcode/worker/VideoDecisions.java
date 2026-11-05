@@ -75,19 +75,21 @@ final class VideoDecisions {
   private static VideoDecision.Copy copy(build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
     if (carriesEncodeValues(video)) {
       throw new InvalidJobSpecificationException(
-          "A stream copy carries a codec profile, tier, level, output dynamic range or"
-              + " deinterlace instruction");
+          "A stream copy carries a codec profile, tier, level or deinterlace instruction");
     }
 
     if (video.hasSourceDynamicRange()) {
       VideoDynamicRanges.of(video.getSourceDynamicRange());
     }
 
+    var rewrites = BitstreamRewrites.of(video.getBitstreamRewritesList());
     // A server that does not send the field leaves it false, so the copy keeps the Annex B filter.
     return VideoDecision.Copy.builder()
         .streamIndex(video.getStreamIndex())
         .codecString(video.getCodecString())
         .keepsPacketBytes(video.getCopyKeepsPacketBytes())
+        .bitstreamRewrites(rewrites)
+        .plannedOutput(PlannedCopies.of(video, rewrites))
         .build();
   }
 
@@ -101,7 +103,6 @@ final class VideoDecisions {
             != build.buf.gen.streamarr.transcode.v1.VideoCodecTier
                 .VIDEO_CODEC_TIER_UNSPECIFIED_VALUE
         || video.hasLevel()
-        || video.hasOutputDynamicRange()
         || video.hasDeinterlace();
   }
 
@@ -114,6 +115,10 @@ final class VideoDecisions {
 
     if (!video.hasLevel()) {
       throw new InvalidJobSpecificationException("The encode carries no level");
+    }
+
+    if (PlannedCopies.carriesPlannedValues(video)) {
+      throw new InvalidJobSpecificationException("An encode carries values that only a copy plans");
     }
 
     if (!video.hasSourceDynamicRange() || !video.hasOutputDynamicRange()) {
