@@ -3,7 +3,7 @@
     "image": "streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:6248ba61f42b1e2b4130b95fd0b2d20aa7f4488625eacbe13e7c0b073d9c164c",
     "ffmpeg": "ffmpeg version 8.1.3-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
   },
-  "recipe": "ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job's seek] -i SRC -map 0:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount (-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1)] [fixtures 11, 12, 12b, 13b and 13c only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
+  "recipe": "ffmpeg -y [-ss S: (K-1)*6 -noaccurate_seek for an encode with K > 0, else the job's seek] -i SRC -map 0:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount; -vf ending fps=24000/1001:eof_action=pass, then for an encode with K > 0 trim=start_pts=ceil(K*6 x 23.976) and -af ending atrim=start=K*6 between asetpts shifts by the whole AAC frames that fit in 6 s (-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1)] [fixtures 11, 12, 12b, 13b and 13c only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
   "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A sync video sample opens segment floor(presentationTime / (P * timescale)), even inside a fragment, or joins it when that segment is already open; every other sample joins the open segment (or waits for the first one), and a fragment belongs to every segment that holds one of its video samples. Segments numbered below startSequenceNumber are discarded preroll; a sync sample beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that sample on. firstVideoPresentationTime = the opening sync sample's decode time + its composition offset, in videoTimescale ticks, no edit list. Audio samples follow their own start: once the keyframe of a later segment has arrived, a segment closes after the fragment in which an audio sample of a later segment arrives or the video's decode end runs 1 s past the segment's end; droppedAudioSamples lists every audio sample that arrives after its segment closed, which the producer drops.",
   "fixtures": [
     {
@@ -62,7 +62,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -520,7 +520,7 @@
     {
       "name": "01-encode-cfr-seek30",
       "file": "01-encode-cfr-seek30.fmp4",
-      "proves": "An encoded replacement attempt from segment 5 (a job seeking to 30 s) seeks one period early, to -ss 24, under -r without -fps_mode: it starts at the seek point (24.024 s), pads nothing from zero, and segment 4 is preroll that the grouper discards. The forced keyframe times 30, 36, ..., 66 are absolute, so it forces the frames the start-0 recording forced (720, 864, 1007, 1151, 1295, 1439) and every delivered segment starts on the start-0 recording's ticks.",
+      "proves": "An encoded replacement attempt from segment 5 (a job seeking to 30 s) without the server's keyframe position reads from one period early, -ss 24 -noaccurate_seek, and trims after fps at frame 720: its video starts at 30.030 s, it pads nothing from zero, and has no video preroll. Its audio starts whole AAC frames before 30 s, so that a frame starts on 30 s. The forced keyframe times 30, 36, ..., 66 are absolute, so it forces the frames the start-0 recording forced (720, 864, 1007, 1151, 1295, 1439) and every delivered segment starts on the start-0 recording's ticks.",
       "recipeDeviation": null,
       "mode": "encode",
       "audio": "encode",
@@ -544,6 +544,7 @@
         "-y",
         "-ss",
         "24",
+        "-noaccurate_seek",
         "-i",
         "src/cfr.mp4",
         "-map",
@@ -575,13 +576,15 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass,trim=start_pts=720",
         "-b:v",
         "6000",
         "-maxrate",
         "6000",
         "-bufsize",
         "12000",
+        "-af",
+        "aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350:channel_layouts=mono,asetpts='PTS+round((0+floor(6*SR/(1024))*(1024))/SR/TB)',atrim=start=30,asetpts='PTS-round((0+floor(6*SR/(1024))*(1024))/SR/TB)'",
         "-c:a",
         "aac",
         "-ac",
@@ -612,7 +615,7 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 59617,
+      "byteLength": 53747,
       "initializationSegment": {
         "byteLength": 1368,
         "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
@@ -655,78 +658,69 @@
         {
           "number": 5,
           "firstVideoPresentationTime": 720720,
-          "firstFragmentIndex": 6,
-          "fragmentCount": 6,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8154
+          "byteLength": 11419
         },
         {
           "number": 6,
           "firstVideoPresentationTime": 864864,
-          "firstFragmentIndex": 12,
+          "firstFragmentIndex": 7,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8128
+          "byteLength": 8138
         },
         {
           "number": 7,
           "firstVideoPresentationTime": 1008007,
-          "firstFragmentIndex": 18,
+          "firstFragmentIndex": 13,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8308
+          "byteLength": 8246
         },
         {
           "number": 8,
           "firstVideoPresentationTime": 1152151,
-          "firstFragmentIndex": 24,
+          "firstFragmentIndex": 19,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8160
+          "byteLength": 8219
         },
         {
           "number": 9,
           "firstVideoPresentationTime": 1296295,
-          "firstFragmentIndex": 30,
+          "firstFragmentIndex": 25,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8142
+          "byteLength": 8169
         },
         {
           "number": 10,
           "firstVideoPresentationTime": 1440439,
-          "firstFragmentIndex": 36,
+          "firstFragmentIndex": 31,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8176
+          "byteLength": 8188
         }
       ],
-      "discardedPreroll": [
-        {
-          "number": 4,
-          "firstVideoPresentationTime": 576576,
-          "firstFragmentIndex": 0,
-          "fragmentCount": 6,
-          "keyframeCount": 1,
-          "byteLength": 9181
-        }
-      ],
+      "discardedPreroll": [],
       "failure": null,
       "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
       "diagnostics": {
-        "fragmentCount": 43,
-        "syncFirstFragments": 7,
-        "nonSyncFirstFragments": 35,
+        "fragmentCount": 38,
+        "syncFirstFragments": 6,
+        "nonSyncFirstFragments": 31,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
-        "videoSamples": 1007,
-        "largestFragmentByteLength": 2745,
-        "firstVideoPresentationTime": 576576,
-        "firstAudioBaseMediaDecodeTimeUnsigned": 1150976,
+        "videoSamples": 863,
+        "largestFragmentByteLength": 3890,
+        "firstVideoPresentationTime": 720720,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 1151232,
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -2002,
           "max": 3003
@@ -734,11 +728,6 @@
         "videoPictures": {
           "sampleEntry": "avc1",
           "keyframes": [
-            {
-              "presentationTime": 576576,
-              "nalUnitType": 5,
-              "startsClosedGop": true
-            },
             {
               "presentationTime": 720720,
               "nalUnitType": 5,
@@ -780,9 +769,9 @@
           "pipeReference": "01-encode-cfr-seek30.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1007,
-            "pipeVideoSamples": 1007,
-            "identicalPackets": 1007,
+            "hlsVideoSamples": 863,
+            "pipeVideoSamples": 863,
+            "identicalPackets": 863,
             "sharesVideoArguments": true
           },
           "segments": [
@@ -834,7 +823,7 @@
           "hlsOwnTimestampsMatchPipe": true,
           "hlsencModel": {
             "reference": "first video packet",
-            "referenceOnZeroBasedTimelineSeconds": 24.024,
+            "referenceOnZeroBasedTimelineSeconds": 30.03,
             "reproducesHlsCuts": true
           }
         },
@@ -1329,7 +1318,7 @@
     {
       "name": "03-encode-vfr",
       "file": "03-encode-vfr.fmp4",
-      "proves": "Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 under -r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms); the forced keyframe times put a keyframe on the first frame at or after each boundary, one in every interval.",
+      "proves": "Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 through fps=24000/1001 and -r 23.976 with no -fps_mode: constant-rate output starting at the first source frame (41.7 ms); the forced keyframe times put a keyframe on the first frame at or after each boundary, one in every interval.",
       "recipeDeviation": null,
       "mode": "encode",
       "audio": "encode",
@@ -1382,7 +1371,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -1419,7 +1408,7 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 92387,
+      "byteLength": 92375,
       "initializationSegment": {
         "byteLength": 1368,
         "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
@@ -1465,7 +1454,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9304
+          "byteLength": 9272
         },
         {
           "number": 1,
@@ -1473,7 +1462,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 7963
+          "byteLength": 7996
         },
         {
           "number": 2,
@@ -1481,7 +1470,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8110
+          "byteLength": 8082
         },
         {
           "number": 3,
@@ -1489,7 +1478,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8133
+          "byteLength": 8162
         },
         {
           "number": 4,
@@ -1497,7 +1486,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8203
+          "byteLength": 8221
         },
         {
           "number": 5,
@@ -1505,7 +1494,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8298
+          "byteLength": 8237
         },
         {
           "number": 6,
@@ -1513,7 +1502,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8168
+          "byteLength": 8180
         },
         {
           "number": 7,
@@ -1521,7 +1510,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8257
+          "byteLength": 8287
         },
         {
           "number": 8,
@@ -1529,7 +1518,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8123
+          "byteLength": 8092
         },
         {
           "number": 9,
@@ -1537,7 +1526,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8093
+          "byteLength": 8105
         },
         {
           "number": 10,
@@ -1545,7 +1534,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8367
+          "byteLength": 8373
         }
       ],
       "discardedPreroll": [],
@@ -1561,13 +1550,13 @@
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
-        "videoSamples": 1582,
-        "largestFragmentByteLength": 2843,
+        "videoSamples": 1581,
+        "largestFragmentByteLength": 2815,
         "firstVideoPresentationTime": 1001,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -4004,
-          "max": 3003
+          "max": 2002
         },
         "videoPictures": {
           "sampleEntry": "avc1",
@@ -1638,8 +1627,8 @@
           "pipeReference": "03-encode-vfr.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1582,
-            "pipeVideoSamples": 1582,
+            "hlsVideoSamples": 1581,
+            "pipeVideoSamples": 1581,
             "identicalPackets": 140,
             "sharesVideoArguments": false
           },
@@ -1678,15 +1667,15 @@
             },
             {
               "number": 8,
-              "firstVideoPresentationTime": 1153152
+              "firstVideoPresentationTime": 1154153
             },
             {
               "number": 9,
-              "firstVideoPresentationTime": 1297296
+              "firstVideoPresentationTime": 1298297
             },
             {
               "number": 10,
-              "firstVideoPresentationTime": 1442441
+              "firstVideoPresentationTime": 1441440
             }
           ],
           "agrees": false,
@@ -1730,17 +1719,17 @@
             {
               "number": 8,
               "grouping": 1152151,
-              "hls": 1153152
+              "hls": 1154153
             },
             {
               "number": 9,
               "grouping": 1296295,
-              "hls": 1297296
+              "hls": 1298297
             },
             {
               "number": 10,
               "grouping": 1440439,
-              "hls": 1442441
+              "hls": 1441440
             }
           ],
           "hlsOwnTimestampsMatchPipe": false,
@@ -1757,9 +1746,9 @@
           "pipeReference": "03-encode-vfr.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1582,
-            "pipeVideoSamples": 1582,
-            "identicalPackets": 1582,
+            "hlsVideoSamples": 1581,
+            "pipeVideoSamples": 1581,
+            "identicalPackets": 1581,
             "sharesVideoArguments": true
           },
           "segments": [
@@ -2427,7 +2416,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -3439,7 +3428,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -4709,7 +4698,7 @@
     {
       "name": "09-svtav1-vfr",
       "file": "09-svtav1-vfr.fmp4",
-      "proves": "Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, the verified-encoder GOP of 145 frames and the forced keyframe times: one keyframe in every interval, on the same frames libx264 chose in 03.",
+      "proves": "Irregular variable-frame-rate source through SVT-AV1 with fps and -r 23.976, the verified-encoder GOP of 145 frames and the forced keyframe times: one keyframe in every interval, on the same frames libx264 chose in 03.",
       "recipeDeviation": null,
       "mode": "encode",
       "audio": "encode",
@@ -4758,7 +4747,7 @@
         "-level:v",
         "20",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-crf",
         "35",
         "-maxrate",
@@ -4795,7 +4784,7 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 97510,
+      "byteLength": 97188,
       "initializationSegment": {
         "byteLength": 1357,
         "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e",
@@ -4841,7 +4830,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9567
+          "byteLength": 9589
         },
         {
           "number": 1,
@@ -4849,7 +4838,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8772
+          "byteLength": 8734
         },
         {
           "number": 2,
@@ -4857,7 +4846,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8625
+          "byteLength": 8624
         },
         {
           "number": 3,
@@ -4873,7 +4862,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8452
+          "byteLength": 8431
         },
         {
           "number": 5,
@@ -4881,7 +4870,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8582
+          "byteLength": 8578
         },
         {
           "number": 6,
@@ -4889,7 +4878,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8717
+          "byteLength": 8633
         },
         {
           "number": 7,
@@ -4897,7 +4886,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8481
+          "byteLength": 8473
         },
         {
           "number": 8,
@@ -4905,7 +4894,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8837
+          "byteLength": 8765
         },
         {
           "number": 9,
@@ -4913,7 +4902,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8510
+          "byteLength": 8433
         },
         {
           "number": 10,
@@ -4921,7 +4910,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8798
+          "byteLength": 8759
         }
       ],
       "discardedPreroll": [],
@@ -4937,8 +4926,8 @@
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
-        "videoSamples": 1582,
-        "largestFragmentByteLength": 2375,
+        "videoSamples": 1581,
+        "largestFragmentByteLength": 2382,
         "firstVideoPresentationTime": 1001,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -5025,9 +5014,9 @@
           "pipeReference": "09-svtav1-vfr.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1582,
-            "pipeVideoSamples": 1582,
-            "identicalPackets": 1582,
+            "hlsVideoSamples": 1581,
+            "pipeVideoSamples": 1581,
+            "identicalPackets": 1581,
             "sharesVideoArguments": true
           },
           "segments": [
@@ -5140,8 +5129,8 @@
           "pipeReference": "09-svtav1-vfr.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1582,
-            "pipeVideoSamples": 1582,
+            "hlsVideoSamples": 1581,
+            "pipeVideoSamples": 1581,
             "identicalPackets": 143,
             "sharesVideoArguments": false
           },
@@ -5259,9 +5248,9 @@
           "pipeReference": "09-svtav1-vfr.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1582,
-            "pipeVideoSamples": 1582,
-            "identicalPackets": 1582,
+            "hlsVideoSamples": 1581,
+            "pipeVideoSamples": 1581,
+            "identicalPackets": 1581,
             "sharesVideoArguments": true
           },
           "segments": [
@@ -5325,7 +5314,7 @@
     {
       "name": "09-svtav1-vfr-seek30",
       "file": "09-svtav1-vfr-seek30.fmp4",
-      "proves": "The same SVT-AV1 recipe as a replacement attempt from segment 5, seeking one period early (-ss 24): it starts at 24.024 s, pads nothing from zero, and discards segment 4 as preroll. Every delivered segment starts on the ticks of 09, including segment 5 at 30.030 s, the frame 09 repeats from the last source frame before 30 s; a seek to 30 s itself started at the next source frame, 30.072 s.",
+      "proves": "The same SVT-AV1 recipe as a replacement attempt from segment 5, reading from one period early (-ss 24 -noaccurate_seek) and trimmed at 30 s: it starts at 30.030 s, pads nothing from zero, and has no preroll. Every delivered segment starts on the ticks of 09, including segment 5 at 30.030 s, the frame 09 repeats from the last source frame before 30 s; an exact seek to 30 s started at the next source frame, 30.072 s.",
       "recipeDeviation": null,
       "mode": "encode",
       "audio": "encode",
@@ -5349,6 +5338,7 @@
         "-y",
         "-ss",
         "24",
+        "-noaccurate_seek",
         "-i",
         "src/vfr.mp4",
         "-map",
@@ -5376,13 +5366,15 @@
         "-level:v",
         "20",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass,trim=start_pts=720",
         "-crf",
         "35",
         "-maxrate",
         "6000",
         "-svtav1-params",
         "mbr-overshoot-pct=0:lp=1",
+        "-af",
+        "aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350:channel_layouts=mono,asetpts='PTS+round((0+floor(6*SR/(1024))*(1024))/SR/TB)',atrim=start=30,asetpts='PTS-round((0+floor(6*SR/(1024))*(1024))/SR/TB)'",
         "-c:a",
         "aac",
         "-ac",
@@ -5413,7 +5405,7 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 62067,
+      "byteLength": 55399,
       "initializationSegment": {
         "byteLength": 1357,
         "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e",
@@ -5456,78 +5448,69 @@
         {
           "number": 5,
           "firstVideoPresentationTime": 720720,
-          "firstFragmentIndex": 7,
-          "fragmentCount": 6,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8572
+          "byteLength": 11125
         },
         {
           "number": 6,
           "firstVideoPresentationTime": 864864,
-          "firstFragmentIndex": 13,
+          "firstFragmentIndex": 7,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8551
+          "byteLength": 8562
         },
         {
           "number": 7,
           "firstVideoPresentationTime": 1008007,
-          "firstFragmentIndex": 19,
+          "firstFragmentIndex": 13,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8785
+          "byteLength": 8509
         },
         {
           "number": 8,
           "firstVideoPresentationTime": 1152151,
-          "firstFragmentIndex": 25,
+          "firstFragmentIndex": 19,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8479
+          "byteLength": 8770
         },
         {
           "number": 9,
           "firstVideoPresentationTime": 1296295,
-          "firstFragmentIndex": 31,
+          "firstFragmentIndex": 25,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8589
+          "byteLength": 8359
         },
         {
           "number": 10,
           "firstVideoPresentationTime": 1440439,
-          "firstFragmentIndex": 37,
+          "firstFragmentIndex": 31,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8656
+          "byteLength": 8717
         }
       ],
-      "discardedPreroll": [
-        {
-          "number": 4,
-          "firstVideoPresentationTime": 576576,
-          "firstFragmentIndex": 0,
-          "fragmentCount": 7,
-          "keyframeCount": 1,
-          "byteLength": 9078
-        }
-      ],
+      "discardedPreroll": [],
       "failure": null,
       "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,
       "diagnostics": {
-        "fragmentCount": 43,
-        "syncFirstFragments": 7,
-        "nonSyncFirstFragments": 36,
+        "fragmentCount": 37,
+        "syncFirstFragments": 6,
+        "nonSyncFirstFragments": 31,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
-        "videoSamples": 1007,
-        "largestFragmentByteLength": 2339,
-        "firstVideoPresentationTime": 576576,
-        "firstAudioBaseMediaDecodeTimeUnsigned": 1150976,
+        "videoSamples": 862,
+        "largestFragmentByteLength": 3276,
+        "firstVideoPresentationTime": 720720,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 1151232,
         "startPlusDurationsMissesNextStartByTicks": {
           "min": 0,
           "max": 0
@@ -5535,12 +5518,6 @@
         "videoPictures": {
           "sampleEntry": "av01",
           "keyframes": [
-            {
-              "presentationTime": 576576,
-              "frameType": "KEY_FRAME",
-              "showFrame": true,
-              "startsClosedGop": true
-            },
             {
               "presentationTime": 720720,
               "frameType": "KEY_FRAME",
@@ -5588,9 +5565,9 @@
           "pipeReference": "09-svtav1-vfr-seek30.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1007,
-            "pipeVideoSamples": 1007,
-            "identicalPackets": 1007,
+            "hlsVideoSamples": 862,
+            "pipeVideoSamples": 862,
+            "identicalPackets": 862,
             "sharesVideoArguments": true
           },
           "segments": [
@@ -5642,7 +5619,7 @@
           "hlsOwnTimestampsMatchPipe": true,
           "hlsencModel": {
             "reference": "first video packet",
-            "referenceOnZeroBasedTimelineSeconds": 24.024,
+            "referenceOnZeroBasedTimelineSeconds": 30.03,
             "reproducesHlsCuts": true
           }
         },
@@ -5653,9 +5630,9 @@
           "pipeReference": "09-svtav1-vfr.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1582,
-            "pipeVideoSamples": 1582,
-            "identicalPackets": 1582,
+            "hlsVideoSamples": 1581,
+            "pipeVideoSamples": 1581,
+            "identicalPackets": 1581,
             "sharesVideoArguments": true
           },
           "segments": [
@@ -5984,7 +5961,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -6284,7 +6261,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -6555,7 +6532,7 @@
         "-level:v",
         "20",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-crf",
         "35",
         "-maxrate",
@@ -6831,7 +6808,7 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -6871,7 +6848,7 @@
       "byteLength": 100128,
       "initializationSegment": {
         "byteLength": 3870,
-        "sha256": "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
+        "sha256": "c831786d4754bf1c70c781c91e40f4158e599eb2221a13dfffb2df422abe57d5",
         "tracks": [
           {
             "trackId": 1,
@@ -7164,7 +7141,7 @@
     {
       "name": "13-x265-cfr-seek30",
       "file": "13-x265-cfr-seek30.fmp4",
-      "proves": "The libx265 replacement attempt from segment 5, seeking one period early (-ss 24): segment 4 is preroll, the list forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), every delivered segment starts on 13's ticks, and every keyframe is an IDR picture (NAL type 20).",
+      "proves": "The libx265 replacement attempt from segment 5, reading from one period early (-ss 24 -noaccurate_seek) and trimmed at 30 s: no preroll, the list forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), every delivered segment starts on 13's ticks, and every keyframe is an IDR picture (NAL type 20).",
       "recipeDeviation": null,
       "mode": "encode",
       "audio": "encode",
@@ -7188,6 +7165,7 @@
         "-y",
         "-ss",
         "24",
+        "-noaccurate_seek",
         "-i",
         "src/cfr.mp4",
         "-map",
@@ -7217,13 +7195,15 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass,trim=start_pts=720",
         "-b:v",
         "6000",
         "-maxrate",
         "6000",
         "-bufsize",
         "12000",
+        "-af",
+        "aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350:channel_layouts=mono,asetpts='PTS+round((0+floor(6*SR/(1024))*(1024))/SR/TB)',atrim=start=30,asetpts='PTS-round((0+floor(6*SR/(1024))*(1024))/SR/TB)'",
         "-c:a",
         "aac",
         "-ac",
@@ -7254,10 +7234,10 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 65048,
+      "byteLength": 58577,
       "initializationSegment": {
         "byteLength": 3870,
-        "sha256": "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
+        "sha256": "c831786d4754bf1c70c781c91e40f4158e599eb2221a13dfffb2df422abe57d5",
         "tracks": [
           {
             "trackId": 1,
@@ -7297,31 +7277,31 @@
         {
           "number": 5,
           "firstVideoPresentationTime": 720720,
-          "firstFragmentIndex": 6,
-          "fragmentCount": 6,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8772
+          "byteLength": 10939
         },
         {
           "number": 6,
           "firstVideoPresentationTime": 864864,
-          "firstFragmentIndex": 12,
+          "firstFragmentIndex": 7,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8658
+          "byteLength": 8690
         },
         {
           "number": 7,
           "firstVideoPresentationTime": 1008007,
-          "firstFragmentIndex": 18,
+          "firstFragmentIndex": 13,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8723
+          "byteLength": 8710
         },
         {
           "number": 8,
           "firstVideoPresentationTime": 1152151,
-          "firstFragmentIndex": 24,
+          "firstFragmentIndex": 19,
           "fragmentCount": 6,
           "keyframeCount": 1,
           "byteLength": 8773
@@ -7329,59 +7309,44 @@
         {
           "number": 9,
           "firstVideoPresentationTime": 1296295,
-          "firstFragmentIndex": 30,
+          "firstFragmentIndex": 25,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8684
+          "byteLength": 8670
         },
         {
           "number": 10,
           "firstVideoPresentationTime": 1440439,
-          "firstFragmentIndex": 36,
+          "firstFragmentIndex": 31,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8915
+          "byteLength": 8925
         }
       ],
-      "discardedPreroll": [
-        {
-          "number": 4,
-          "firstVideoPresentationTime": 576576,
-          "firstFragmentIndex": 0,
-          "fragmentCount": 6,
-          "keyframeCount": 1,
-          "byteLength": 8653
-        }
-      ],
+      "discardedPreroll": [],
       "failure": null,
       "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
       "diagnostics": {
-        "fragmentCount": 43,
-        "syncFirstFragments": 7,
-        "nonSyncFirstFragments": 35,
+        "fragmentCount": 38,
+        "syncFirstFragments": 6,
+        "nonSyncFirstFragments": 31,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
-        "videoSamples": 1007,
-        "largestFragmentByteLength": 1929,
-        "firstVideoPresentationTime": 576576,
-        "firstAudioBaseMediaDecodeTimeUnsigned": 1150976,
+        "videoSamples": 863,
+        "largestFragmentByteLength": 2682,
+        "firstVideoPresentationTime": 720720,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 1151232,
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -5005,
-          "max": 3003
+          "max": 4004
         },
         "videoPictures": {
           "sampleEntry": "hvc1",
           "keyframes": [
-            {
-              "presentationTime": 576576,
-              "nalUnitType": 20,
-              "raslPictures": 0,
-              "startsClosedGop": true
-            },
             {
               "presentationTime": 720720,
               "nalUnitType": 20,
@@ -7429,9 +7394,9 @@
           "pipeReference": "13-x265-cfr-seek30.fmp4",
           "hlsExitStatus": 0,
           "frameIdentity": {
-            "hlsVideoSamples": 1007,
-            "pipeVideoSamples": 1007,
-            "identicalPackets": 1007,
+            "hlsVideoSamples": 863,
+            "pipeVideoSamples": 863,
+            "identicalPackets": 863,
             "sharesVideoArguments": true
           },
           "segments": [
@@ -7483,7 +7448,7 @@
           "hlsOwnTimestampsMatchPipe": true,
           "hlsencModel": {
             "reference": "first video packet",
-            "referenceOnZeroBasedTimelineSeconds": 24.024,
+            "referenceOnZeroBasedTimelineSeconds": 30.03,
             "reproducesHlsCuts": true
           }
         },
@@ -7593,7 +7558,7 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -7633,7 +7598,7 @@
       "byteLength": 47752,
       "initializationSegment": {
         "byteLength": 3870,
-        "sha256": "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
+        "sha256": "c831786d4754bf1c70c781c91e40f4158e599eb2221a13dfffb2df422abe57d5",
         "tracks": [
           {
             "trackId": 1,
@@ -7871,7 +7836,7 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -7911,7 +7876,7 @@
       "byteLength": 48735,
       "initializationSegment": {
         "byteLength": 3870,
-        "sha256": "07f99711b5f27695e835cbbed5ef996cdae636c82bdf4c525b3afc0b0172e9fc",
+        "sha256": "40f3ee0b50fc58e9b1f70402455c7298e3f2871492aa1418e8396616266807cb",
         "tracks": [
           {
             "trackId": 1,
@@ -10599,7 +10564,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass",
         "-b:v",
         "6000",
         "-maxrate",
@@ -11697,8 +11662,8 @@
         3870
       ],
       "sha256": [
-        "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
-        "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4"
+        "c831786d4754bf1c70c781c91e40f4158e599eb2221a13dfffb2df422abe57d5",
+        "c831786d4754bf1c70c781c91e40f4158e599eb2221a13dfffb2df422abe57d5"
       ]
     },
     {
@@ -11755,8 +11720,8 @@
       "exitStatus": 0,
       "videoSamples": 1583,
       "firstVideoPresentationTime": 0,
-      "videoSamplesWithoutFpsMode": 1007,
-      "firstVideoPresentationTimeWithoutFpsMode": 576576
+      "videoSamplesWithoutFpsMode": 863,
+      "firstVideoPresentationTimeWithoutFpsMode": 720720
     }
   }
 }

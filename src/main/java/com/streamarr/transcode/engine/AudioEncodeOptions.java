@@ -70,6 +70,21 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return new AudioEncodeOptions(inputOptions, options);
   }
 
+  /** The FFmpeg encoder that these options name. */
+  String encoder() {
+    return outputOptions.get(outputOptions.indexOf("-c:a") + 1);
+  }
+
+  /** The samples in each frame of the encoder, when these options set it. */
+  OptionalInt frameSize() {
+    var option = outputOptions.indexOf("-frame_size:a");
+    if (option < 0) {
+      return OptionalInt.empty();
+    }
+
+    return OptionalInt.of(Integer.parseInt(outputOptions.get(option + 1)));
+  }
+
   // ADR 0043: no dynamic range compression, and the dialogue normalization that a hardware
   // decoder applies to the copy.
   private static List<String> decoderOptions(AudioDecision audio, SourceAudio source) {
