@@ -4652,9 +4652,33 @@ class WorkerMediaSmokeTest {
 
     var sourceSamples = decodedAudio(Files.readAllBytes(source));
     var unpaddedSamples = decodedAudio(unpaddedUploads.contentOf(unpaddedUploads.names()));
-    var paddedSamples = decodedAudio(paddedUploads.contentOf(paddedUploads.names()));
-    var advertisedEndBytes = FLAC_SOURCE_SEGMENT_COUNT * 6 * FLAC_SOURCE_SAMPLE_RATE * 2;
     assertThat(unpaddedSamples).as("the unpadded encode").isEqualTo(sourceSamples);
+    assertSourceSamplesThenSilenceToTheAdvertisedEnd(
+        decodedAudio(paddedUploads.contentOf(paddedUploads.names())), sourceSamples);
+  }
+
+  // The job names the second of two FLAC tracks, which ends at 10 s. The first runs to the video's
+  // end at another pitch, so a padded encode of the first would hold no silence.
+  @Test
+  @DisplayName(
+      "Should decode to every sample of the audio stream that the job names, then only digital"
+          + " silence up to the advertised end, when a lossless encode pads the second audio stream")
+  void shouldDecodeToEverySampleOfTheNamedStreamThenOnlySilenceWhenALosslessEncodePadsTheSecond()
+      throws Exception {
+    var source = flacSecondAudioEndsBeforeVideoSource();
+    var job = flacAudioEndsBeforeVideoJob(source);
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(2);
+    paddedTo(job, FLAC_SOURCE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertSourceSamplesThenSilenceToTheAdvertisedEnd(
+        decodedAudio(uploads.contentOf(uploads.names())), decodedAudio(source, "0:2"));
+  }
+
+  private static void assertSourceSamplesThenSilenceToTheAdvertisedEnd(
+      byte[] paddedSamples, byte[] sourceSamples) {
+    var advertisedEndBytes = FLAC_SOURCE_SEGMENT_COUNT * 6 * FLAC_SOURCE_SAMPLE_RATE * 2;
     assertThat(Arrays.copyOf(paddedSamples, sourceSamples.length))
         .as("the padded encode up to the source's end")
         .isEqualTo(sourceSamples);
@@ -5066,6 +5090,46 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // The video of the FLAC source above, an 880 Hz sine that runs for the video's 18 s, then the
+  // 440 Hz sine that ends at 10 s, both as 16-bit mono FLAC.
+  private static synchronized Path flacSecondAudioEndsBeforeVideoSource() throws Exception {
+    var source = seekableSources.resolve("flac-second-audio-ends-before-video.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=18",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=880:sample_rate=" + FLAC_SOURCE_SAMPLE_RATE + ":duration=18",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=" + FLAC_SOURCE_SAMPLE_RATE + ":duration=10",
+              "-map",
+              "0:v",
+              "-map",
+              "1:a",
+              "-map",
+              "2:a",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s16"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   // A job that downmixes the 5.1 source whose audio ends at 10 s to named stereo AAC through the
   // limiter, holding the last frame too when it encodes the video.
   private static VariantJob.Builder surroundAudioEndsBeforeVideoNamedStereoJob(
@@ -5132,8 +5196,13 @@ class WorkerMediaSmokeTest {
   private byte[] decodedAudio(byte[] media) throws Exception {
     var file = Files.createTempFile(root, "decoded", ".media");
     Files.write(file, media);
+    return decodedAudio(file, "0:a:0");
+  }
+
+  // The stream of the media that the map names, decoded to 16-bit little-endian samples.
+  private byte[] decodedAudio(Path media, String map) throws Exception {
     var samples = Files.createTempFile(root, "decoded", ".s16le");
-    runFfmpeg(List.of("-i", file.toString(), "-map", "0:a:0", "-f", "s16le"), samples);
+    runFfmpeg(List.of("-i", media.toString(), "-map", map, "-f", "s16le"), samples);
     return Files.readAllBytes(samples);
   }
 
