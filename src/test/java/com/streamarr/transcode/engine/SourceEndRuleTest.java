@@ -29,6 +29,13 @@ class SourceEndRuleTest {
   private static final ObservedSourceStream AUDIO_ENDING_AT_84_SECONDS =
       audioEndingAt84Seconds().build();
 
+  private static final TimeBase MPEG_TS_TIME_BASE = new TimeBase(1, 90_000);
+  private static final TimeBase AUDIO_TIME_BASE = new TimeBase(1, 48_000);
+  // Segments start at 0 s, at the MPEG-TS tick 614,400 (6.8266... s) and at 10 s.
+  private static final SegmentIntervals EXACT_STARTS_ON_MPEG_TS_TICKS =
+      SegmentIntervals.onExactStarts(
+          3, new ExactSegmentStarts(List.of(0L, 614_400L, 900_000L), 1, 90_000));
+
   private static final List<StreamEnd> BOTH_ENDS =
       List.of(
           new StreamEnd(VIDEO_INDEX, Duration.ofSeconds(64)),
@@ -237,6 +244,90 @@ class SourceEndRuleTest {
             .build();
 
     var report = rule.reportOn(List.of(video, audio), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(0, List.of()));
+  }
+
+  // Segment 1 starts at the MPEG-TS tick 614,400, 6.8266... s, which the copied audio packet at
+  // 327,680 / 48,000 s starts exactly on; truncated to nanoseconds, it would fall in segment 0.
+  @Test
+  @DisplayName(
+      "Should report the segment whose exact start a copied audio packet starts on when an encode"
+          + " that holds the last frame reads its last audio there")
+  void
+      shouldReportTheSegmentWhoseExactStartTheLastCopiedAudioPacketStartsOnWhenAHeldEncodeReadsIt() {
+    var video =
+        videoEndingAt64Seconds()
+            .lastStart(MediaTime.of(Duration.ofMillis(958)))
+            .end(MediaTime.of(Duration.ofSeconds(1)))
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ZERO)))
+            .build();
+    var audio =
+        audioEndingAt84Seconds()
+            .lastStart(new MediaTime(327_680, AUDIO_TIME_BASE))
+            .end(new MediaTime(328_704, AUDIO_TIME_BASE))
+            .build();
+    var rule =
+        SourceEndRule.builder()
+            .intervals(EXACT_STARTS_ON_MPEG_TS_TICKS)
+            .mediaSegmentCount(3)
+            .video(held())
+            .copiesAudio(true)
+            .build();
+
+    var report = rule.reportOn(List.of(video, audio), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(1, List.of()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the segment whose exact start a stream copy's last keyframe presents on when"
+          + " the copy delivered no segment")
+  void
+      shouldReportTheSegmentWhoseExactStartAStreamCopysLastKeyframePresentsOnWhenItDeliveredNone() {
+    var video =
+        videoEndingAt64Seconds()
+            .lastStart(new MediaTime(618_000, MPEG_TS_TIME_BASE))
+            .end(new MediaTime(621_600, MPEG_TS_TIME_BASE))
+            .lastKeyframeStart(Optional.of(new MediaTime(614_400, MPEG_TS_TIME_BASE)))
+            .build();
+    var rule =
+        SourceEndRule.builder()
+            .intervals(EXACT_STARTS_ON_MPEG_TS_TICKS)
+            .mediaSegmentCount(3)
+            .video(copy())
+            .build();
+
+    var report = rule.reportOn(List.of(video), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(1, List.of()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should list the encoded audio after a segment only when its last sample ends after that"
+          + " segment's exact end")
+  void shouldListTheEncodedAudioAfterASegmentOnlyWhenItsLastSampleEndsAfterThatSegmentsExactEnd() {
+    var video =
+        videoEndingAt64Seconds()
+            .lastStart(MediaTime.of(Duration.ofMillis(958)))
+            .end(MediaTime.of(Duration.ofSeconds(1)))
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ZERO)))
+            .build();
+    var endingOnTheStart =
+        audioEndingAt84Seconds()
+            .lastStart(new MediaTime(326_656, AUDIO_TIME_BASE))
+            .end(new MediaTime(327_680, AUDIO_TIME_BASE))
+            .build();
+    var rule =
+        SourceEndRule.builder()
+            .intervals(EXACT_STARTS_ON_MPEG_TS_TICKS)
+            .mediaSegmentCount(3)
+            .video(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
+            .build();
+
+    var report = rule.reportOn(List.of(video, endingOnTheStart), NOTHING_DELIVERED);
 
     assertThat(report.endedEarly()).contains(new EndedEarly(0, List.of()));
   }

@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.function.Predicate;
 import lombok.NonNull;
 
 /**
@@ -116,6 +117,47 @@ final class SegmentIntervals {
     return low;
   }
 
+  /**
+   * The number of the segment whose interval holds this time, negative before the first; on a list,
+   * every time from the last listed start on is in the last listed segment.
+   */
+  long numberAt(MediaTime time) {
+    if (time.ticks() < 0 || isPlainGrid()) {
+      return time.floorIn(slotsOf(periodSeconds));
+    }
+
+    return lastSegmentWhoseStart(start -> start.compareTo(time) <= 0);
+  }
+
+  /**
+   * The number of the segment whose interval holds the instants just before this time, as the last
+   * instant that a sample ending at this time covers.
+   */
+  long numberJustBefore(MediaTime time) {
+    if (time.ticks() <= 0 || isPlainGrid()) {
+      return time.ceilIn(slotsOf(periodSeconds)) - 1;
+    }
+
+    return lastSegmentWhoseStart(start -> start.compareTo(time) < 0);
+  }
+
+  // The last listed segment whose start passes the test, which segment 0's start, 0, passes.
+  private long lastSegmentWhoseStart(Predicate<MediaTime> test) {
+    var low = 0;
+    var high = starts.length - 1;
+    while (low < high) {
+      var middle = (low + high + 1) >>> 1;
+      if (test.test(startTimeOf(middle))) {
+        low = middle;
+        continue;
+      }
+
+      high = middle - 1;
+    }
+
+    return low;
+  }
+
   // Compares the start, in ticks of the start time base, with the presentation time, in ticks of
   // the timescale, by cross-multiplication, so that neither is rounded; it fails rather than wraps.
   private boolean startsAtOrBefore(long start, long presentationTime, long timescale) {
@@ -160,6 +202,23 @@ final class SegmentIntervals {
     }
 
     return OptionalLong.of(MediaTicks.firstTickAtOrAfter(listEnd.get(), timescale));
+  }
+
+  /**
+   * Where segment {@code number}'s interval ends on the zero-based timeline, exactly: for the last
+   * listed segment, the advertised end, where its audio ends; empty when that segment runs to the
+   * end of the media, and for a number past the list.
+   */
+  Optional<MediaTime> endTimeOf(long number) {
+    if (isPlainGrid() || number + 1 < starts.length) {
+      return Optional.of(startTimeOf(number + 1));
+    }
+
+    if (number + 1 > starts.length) {
+      return Optional.empty();
+    }
+
+    return listEnd.map(MediaTime::of);
   }
 
   /**

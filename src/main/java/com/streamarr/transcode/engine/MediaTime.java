@@ -43,6 +43,33 @@ record MediaTime(long ticks, TimeBase timeBase) implements Comparable<MediaTime>
     return Duration.ofNanos(nanoseconds.longValueExact());
   }
 
+  /** This time in ticks of the other time base, rounded down. */
+  long floorIn(TimeBase other) {
+    var parts = dividedBy(other);
+    if (parts[1].signum() < 0) {
+      return parts[0].subtract(BigInteger.ONE).longValueExact();
+    }
+
+    return parts[0].longValueExact();
+  }
+
+  /** This time in ticks of the other time base, rounded up. */
+  long ceilIn(TimeBase other) {
+    var parts = dividedBy(other);
+    if (parts[1].signum() > 0) {
+      return parts[0].add(BigInteger.ONE).longValueExact();
+    }
+
+    return parts[0].longValueExact();
+  }
+
+  // The quotient, truncated toward zero, and the remainder of this time over the other's tick.
+  private BigInteger[] dividedBy(TimeBase other) {
+    return seconds()
+        .multiply(BigInteger.valueOf(other.denominator()))
+        .divideAndRemainder(denominator().multiply(BigInteger.valueOf(other.numerator())));
+  }
+
   @Override
   public int compareTo(MediaTime other) {
     return seconds()

@@ -206,6 +206,56 @@ class SegmentIntervalsTest {
     assertThat(intervals.numberOfAudioSampleAt(492_000, AUDIO_TIMESCALE)).isEqualTo(4);
   }
 
+  @ParameterizedTest(name = "{0} ticks of 1/90000 s: at {1}, just before {2}")
+  @CsvSource({
+    "-1, -1, -1",
+    "0, 0, -1",
+    "314999, 0, 0",
+    "315000, 1, 0",
+    "315001, 1, 1",
+    "855000, 3, 2",
+    "9000000, 3, 3"
+  })
+  @DisplayName(
+      "Should number an exact time, and the instants just before it, by the exact starts when the"
+          + " job carries exact starts")
+  void shouldNumberAnExactTimeAndTheInstantsJustBeforeItByTheExactStarts(
+      long ticks, long numberAt, long numberJustBefore) {
+    var intervals = SegmentIntervals.onExactStarts(3, MPEG_TS_KEYFRAMES_AT_HALF_SECONDS);
+    var time = new MediaTime(ticks, new TimeBase(1, 90_000));
+
+    assertThat(intervals.numberAt(time)).isEqualTo(numberAt);
+    assertThat(intervals.numberJustBefore(time)).isEqualTo(numberJustBefore);
+  }
+
+  @ParameterizedTest(name = "{0} ms: at {1}, just before {2}")
+  @CsvSource({"-6001, -2, -2", "-6000, -1, -2", "-1, -1, -1", "0, 0, -1", "6000, 1, 0"})
+  @DisplayName(
+      "Should number an exact time, and the instants just before it, by whole periods when the grid"
+          + " is plain")
+  void shouldNumberAnExactTimeAndTheInstantsJustBeforeItByWholePeriodsWhenTheGridIsPlain(
+      long milliseconds, long numberAt, long numberJustBefore) {
+    var intervals = SegmentIntervals.onPlainGrid(6);
+    var time = MediaTime.of(Duration.ofMillis(milliseconds));
+
+    assertThat(intervals.numberAt(time)).isEqualTo(numberAt);
+    assertThat(intervals.numberJustBefore(time)).isEqualTo(numberJustBefore);
+  }
+
+  @Test
+  @DisplayName(
+      "Should end each exact segment at the next one's start, and the last at the advertised end,"
+          + " when the job carries exact starts")
+  void shouldEndEachExactSegmentAtTheNextOnesStartAndTheLastAtTheAdvertisedEnd() {
+    var intervals = SegmentIntervals.onExactStarts(3, MPEG_TS_KEYFRAMES_AT_HALF_SECONDS);
+
+    assertThat(intervals.endTimeOf(0)).contains(new MediaTime(315_000, new TimeBase(1, 90_000)));
+    assertThat(intervals.endTimeOf(3)).as("without an advertised end").isEmpty();
+    assertThat(intervals.withLastListedSegmentEndingAt(Duration.ofMillis(10_250)).endTimeOf(3))
+        .contains(MediaTime.of(Duration.ofMillis(10_250)));
+    assertThat(intervals.endTimeOf(4)).as("past the list").isEmpty();
+  }
+
   @Test
   @DisplayName(
       "Should fail instead of wrapping when comparing an exact start with a time overflows 64 bits")
