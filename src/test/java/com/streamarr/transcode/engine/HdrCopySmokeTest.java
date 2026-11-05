@@ -206,7 +206,10 @@ class HdrCopySmokeTest {
       throws Exception {
     var source = withDolbyVisionRecord(hdr10, "hvc1", "dvvC", PROFILE_8_LEVEL_1_PQ);
     var copy =
-        dolbyVisionCopy(CODEC_STRING, dolbyVisionOutput(8, 1, PlannedCopyOutput.SampleEntry.HVC1))
+        dolbyVisionCopy(
+                CODEC_STRING,
+                PlannedCopyOutputs.pq(),
+                dolbyVisionOutput(8, 1, PlannedCopyOutput.SampleEntry.HVC1))
             .build();
 
     var initialization = copied(source, copy, 0);
@@ -227,7 +230,9 @@ class HdrCopySmokeTest {
     var source = withDolbyVisionRecord(hdr10, sourceSampleEntry, "dvcC", PROFILE_5_LEVEL_1);
     var copy =
         dolbyVisionCopy(
-                PROFILE_5_CODEC_STRING, dolbyVisionOutput(5, 0, PlannedCopyOutput.SampleEntry.DVH1))
+                PROFILE_5_CODEC_STRING,
+                PlannedCopyOutputs.pq(),
+                dolbyVisionOutput(5, 0, PlannedCopyOutput.SampleEntry.DVH1))
             .keepsPacketBytes(sourceSampleEntry.equals("dvh1"))
             .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
             .build();
@@ -265,7 +270,10 @@ class HdrCopySmokeTest {
     }
 
     var copy =
-        dolbyVisionCopy(CODEC_STRING, dolbyVisionOutput(8, 1, PlannedCopyOutput.SampleEntry.HVC1))
+        dolbyVisionCopy(
+                CODEC_STRING,
+                PlannedCopyOutputs.pq(),
+                dolbyVisionOutput(8, 1, PlannedCopyOutput.SampleEntry.HVC1))
             .keepsPacketBytes(container.equals("mp4"))
             .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
             .build();
@@ -318,14 +326,17 @@ class HdrCopySmokeTest {
   }
 
   private static VideoDecision.Copy.CopyBuilder dolbyVisionCopy(
-      String codecString, PlannedCopyOutput.DolbyVisionOutput dolbyVision) {
+      String codecString,
+      VideoDynamicRange range,
+      PlannedCopyOutput.DolbyVisionOutput dolbyVision) {
     return VideoDecision.Copy.builder()
         .streamIndex(0)
         .codecString(codecString)
         .keepsPacketBytes(true)
         .plannedOutput(
             Optional.of(
-                PlannedCopyOutputs.pqOutputBuilder()
+                PlannedCopyOutput.builder()
+                    .dynamicRange(range)
                     .dolbyVision(Optional.of(dolbyVision))
                     .build()));
   }
