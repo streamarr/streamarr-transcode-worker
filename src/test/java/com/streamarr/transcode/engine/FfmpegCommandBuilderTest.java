@@ -382,6 +382,71 @@ class FfmpegCommandBuilderTest {
         .flatMap(source -> softwareEncodersFor(source, CompatibleBase.SDR));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264_nvenc", "hevc_nvenc"})
+  @DisplayName(
+      "Should decode and scale an SDR source on the CPU into 8-bit 4:2:0 frames when an NVENC"
+          + " encoder encodes")
+  void shouldDecodeAndScaleAnSdrSourceOnTheCpuInto8Bit420FramesWhenAnNvencEncoderEncodes(
+      String encoder) {
+    var encode =
+        nvencEncode(encoder)
+            .sourceDynamicRange(dynamicRange(CompatibleBase.SDR))
+            .outputDynamicRange(dynamicRange(CompatibleBase.SDR));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), encoder);
+
+    assertThat(cmd).noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
+    assertThat(videoFilter(cmd))
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
+  }
+
+  @ParameterizedTest(name = "{1} from {0}")
+  @MethodSource("nvencToneMappedConversions")
+  @DisplayName(
+      "Should decode, scale and tone map an HDR source on the CPU into 8-bit 4:2:0 SDR frames when"
+          + " an NVENC encoder encodes")
+  void shouldDecodeScaleAndToneMapAnHdrSourceOnTheCpuInto8Bit420SdrFramesWhenAnNvencEncoderEncodes(
+      CompatibleBase source, String encoder) {
+    var encode =
+        nvencEncode(encoder)
+            .sourceDynamicRange(dynamicRange(source))
+            .outputDynamicRange(dynamicRange(CompatibleBase.SDR));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), encoder);
+
+    assertThat(cmd).noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
+    assertThat(videoFilter(cmd))
+        .isEqualTo(
+            "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
+                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT");
+  }
+
+  private static Stream<Arguments> nvencToneMappedConversions() {
+    return Stream.of(CompatibleBase.PQ, CompatibleBase.HLG)
+        .flatMap(
+            source ->
+                Stream.of("h264_nvenc", "hevc_nvenc")
+                    .map(encoder -> Arguments.of(source, encoder)));
+  }
+
+  private static VideoDecision.Encode.EncodeBuilder nvencEncode(String encoder) {
+    return switch (encoder) {
+      case "h264_nvenc" -> VideoDecisionFixtures.encodeBuilder();
+      case "hevc_nvenc" -> hevcEncode();
+      default -> throw new AssertionError("No NVENC encode for " + encoder);
+    };
+  }
+
+  // A GPU decode, a GPU device for filters, or a filter that uploads frames or runs on CUDA.
+  private static boolean movesFramesToTheGpu(String argument) {
+    return argument.startsWith("-hwaccel")
+        || argument.equals("-init_hw_device")
+        || argument.equals("-filter_hw_device")
+        || argument.contains("hwupload")
+        || argument.contains("cuda");
+  }
+
   private static Stream<Arguments> softwareEncodersFor(
       CompatibleBase source, CompatibleBase output) {
     return Stream.of("libx264", "libx265", "libsvtav1")
