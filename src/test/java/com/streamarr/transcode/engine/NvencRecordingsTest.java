@@ -1,12 +1,12 @@
 package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import org.assertj.core.api.SoftAssertions;
@@ -26,6 +26,8 @@ import tools.jackson.databind.json.JsonMapper;
 class NvencRecordingsTest {
 
   private static final Path RESULTS = Path.of("src", "test", "resources", "nvenc");
+  private static final List<String> NVENC_ENCODERS = List.of("h264_nvenc", "hevc_nvenc");
+  private static final List<String> DEFAULT_LADDER_RUNGS = List.of("1080p", "720p", "480p", "360p");
 
   @Test
   @DisplayName(
@@ -34,12 +36,8 @@ class NvencRecordingsTest {
   void
       shouldReachEachRecordedOutputCheckVerdictWithTheWorkersOwnCheckWhenNvencRecordingsAreCommitted()
           throws IOException {
-    var results = RESULTS.resolve("recordings.json");
-    assumeTrue(
-        Files.exists(results),
-        "no NVENC recordings yet: run src/test/fmp4-recorder/record-nvenc.sh on an NVIDIA GPU host");
-    var recordings = JsonMapper.builder().build().readTree(results.toFile()).get("recordings");
-    assertThat(recordings).as("the recordings in %s", results).isNotEmpty();
+    var recordings = committedRecordings().get("recordings");
+    assertThat(recordings).as("the committed recordings").isNotEmpty();
 
     var softly = new SoftAssertions();
     for (var recording : recordings) {
@@ -59,11 +57,7 @@ class NvencRecordingsTest {
   void
       shouldShowTheKeyframesAdr0037AsksOfAKeyframeVerifiedEncoderInEveryExtendedRecordingWhenTheWorkerMarksAnNvencEncoderKeyframeVerified()
           throws IOException {
-    var results = RESULTS.resolve("recordings.json");
-    assumeTrue(
-        Files.exists(results),
-        "no NVENC recordings yet: run src/test/fmp4-recorder/record-nvenc.sh on an NVIDIA GPU host");
-    var document = JsonMapper.builder().build().readTree(results.toFile());
+    var document = committedRecordings();
     var verified = new ArrayList<JsonNode>();
     for (var recording : document.get("recordings")) {
       if (FfmpegCommandBuilder.isKeyframeVerified(recording.get("plan").get("encoder").asString())
@@ -114,6 +108,50 @@ class NvencRecordingsTest {
     }
 
     softly.assertAll();
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold every extended recording at every default-ladder rung, with its replacement pair"
+          + " and its GOP restart, when the worker marks an NVENC encoder keyframe-verified")
+  void
+      shouldHoldEveryExtendedRecordingAtEveryDefaultLadderRungWithItsReplacementPairAndItsGopRestartWhenTheWorkerMarksAnNvencEncoderKeyframeVerified()
+          throws IOException {
+    var document = committedRecordings();
+    var recorded = new ArrayList<String>();
+    var withGopRestart = new ArrayList<String>();
+    for (var recording : document.get("recordings")) {
+      recorded.add(recording.get("name").asString());
+      if (!recording.get("verdicts").get("gopRestart").isNull()) {
+        withGopRestart.add(recording.get("name").asString());
+      }
+    }
+
+    var paired = new ArrayList<String>();
+    document
+        .get("initializationSegmentPairs")
+        .forEach(pair -> paired.add(pair.get("replacement").asString()));
+    var required =
+        NVENC_ENCODERS.stream()
+            .filter(FfmpegCommandBuilder::isKeyframeVerified)
+            .flatMap(encoder -> DEFAULT_LADDER_RUNGS.stream().map(rung -> encoder + "-" + rung))
+            .toList();
+
+    assertThat(required).as("the keyframe-verified NVENC encoders' rungs").isNotEmpty();
+    assertThat(recorded)
+        .containsAll(required.stream().map(prefix -> prefix + "-extended-first").toList());
+    assertThat(paired)
+        .containsAll(required.stream().map(prefix -> prefix + "-extended-replacement").toList());
+    assertThat(withGopRestart)
+        .containsAll(required.stream().map(prefix -> prefix + "-extended-missed").toList());
+  }
+
+  private static JsonNode committedRecordings() throws IOException {
+    var results = RESULTS.resolve("recordings.json");
+    assertThat(results)
+        .as("the recordings of record-nvenc.sh, which a keyframe-verified NVENC encoder needs")
+        .exists();
+    return JsonMapper.builder().build().readTree(results.toFile());
   }
 
   private static boolean passesTheWorkersCheck(JsonNode recording) throws IOException {
