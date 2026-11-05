@@ -4460,6 +4460,9 @@ class WorkerMediaSmokeTest {
   // A tone that a channel does not hold reads at least 40 dB below the source's tones.
   private static final double ABSENT_TONE_AMPLITUDE = TONE_AMPLITUDE / 100;
   private static final double WITHIN_1_DB = Math.pow(10, 1.0 / 20);
+  // A tone keeps the source's phase, so a tone that arrives in quadrature, or from the other side
+  // of an opposite-phase pair, fails.
+  private static final double MOST_DEGREES_FROM_THE_SOURCES_PHASE = 10;
   private static final int TONE_SAMPLE_RATE = 48_000;
   // Each tone is read over whole seconds after each codec's start-up, so that the tones, all at
   // whole hertz, do not read into each other.
@@ -4743,10 +4746,10 @@ class WorkerMediaSmokeTest {
                 .filter(route -> route.to().equals(speaker))
                 .filter(route -> tones.get(route.from()).frequency() == frequency)
                 .toList();
-        var read = toneAmplitude(samples, frequency);
+        var read = ToneReading.of(samples, frequency);
         var description = String.format(Locale.ROOT, "%d Hz in %s", frequency, speaker);
         if (routes.isEmpty()) {
-          assertThat(Math.abs(read)).as(description).isLessThan(ABSENT_TONE_AMPLITUDE);
+          assertThat(read.amplitude()).as(description).isLessThan(ABSENT_TONE_AMPLITUDE);
           continue;
         }
 
@@ -4754,9 +4757,12 @@ class WorkerMediaSmokeTest {
             routes.stream()
                 .mapToDouble(route -> route.gain() * tones.get(route.from()).amplitude())
                 .sum();
-        assertThat(read / expected)
-            .as("%s, read %.5f against %.5f", description, read, expected)
+        assertThat(read.amplitude() / Math.abs(expected))
+            .as("%s, read %.5f against %.5f", description, read.amplitude(), Math.abs(expected))
             .isBetween(1 / WITHIN_1_DB, WITHIN_1_DB);
+        assertThat(read.phaseDegreesAgainst(Math.signum(expected)))
+            .as("%s, degrees from the source's phase", description)
+            .isLessThan(MOST_DEGREES_FROM_THE_SOURCES_PHASE);
       }
     }
   }
@@ -4786,18 +4792,37 @@ class WorkerMediaSmokeTest {
     return decoded;
   }
 
-  // The tone's amplitude in the decoded channel, signed by its phase against the source's tone of
-  // that frequency.
-  private static double toneAmplitude(int[] channel, int frequency) {
-    var from = TONE_READ_FROM_SECOND * TONE_SAMPLE_RATE;
-    var frames = TONE_READ_SECONDS * TONE_SAMPLE_RATE;
-    var sum = 0.0;
-    for (var frame = from; frame < from + frames; frame++) {
-      var time = (double) frame / TONE_SAMPLE_RATE;
-      sum += channel[frame] / FULL_SCALE * Math.sin(2 * Math.PI * frequency * time);
+  /**
+   * A tone's sine and cosine components in a decoded channel, against the source's tones, which are
+   * sines from media time zero.
+   */
+  private record ToneReading(double sine, double cosine) {
+
+    // Both components over whole seconds, so that the other tones, all at whole hertz, read zero.
+    private static ToneReading of(int[] channel, int frequency) {
+      var from = TONE_READ_FROM_SECOND * TONE_SAMPLE_RATE;
+      var frames = TONE_READ_SECONDS * TONE_SAMPLE_RATE;
+      var sine = 0.0;
+      var cosine = 0.0;
+      for (var frame = from; frame < from + frames; frame++) {
+        var angle = 2 * Math.PI * frequency * frame / TONE_SAMPLE_RATE;
+        var sample = channel[frame] / FULL_SCALE;
+        sine += sample * Math.sin(angle);
+        cosine += sample * Math.cos(angle);
+      }
+
+      return new ToneReading(2 * sine / frames, 2 * cosine / frames);
     }
 
-    return 2 * sum / frames;
+    private double amplitude() {
+      return Math.hypot(sine, cosine);
+    }
+
+    // How far the tone's phase lies from the source's tone, or from its opposite when the polarity
+    // is negative: 0 to 180 degrees.
+    private double phaseDegreesAgainst(double polarity) {
+      return Math.abs(Math.toDegrees(Math.atan2(polarity * cosine, polarity * sine)));
+    }
   }
 
   // The channel configuration of the file's AAC, from the ADTS header that FFmpeg writes for it
