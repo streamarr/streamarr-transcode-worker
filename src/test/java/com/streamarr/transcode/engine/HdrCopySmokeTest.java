@@ -6,6 +6,7 @@ import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
+import com.streamarr.transcode.worker.support.TeeingProcessLauncher;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -332,13 +333,16 @@ class HdrCopySmokeTest {
           + " segment 2 when the copy plans a Dolby Vision output")
   void shouldDeliverTheSameInitializationFromSegments0And2WhenTheCopyPlansDolbyVision(
       DolbyVisionCopy dolbyVision) {
-    var fromStart = copiedSink(dolbyVision.source(), dolbyVision.copy(), 0);
-    var replacement = copiedSink(dolbyVision.source(), dolbyVision.copy(), 2);
+    var fromStart = attempted(dolbyVision.source(), dolbyVision.copy(), 0);
+    var replacement = attempted(dolbyVision.source(), dolbyVision.copy(), 2);
 
-    assertThat(replacement.acceptedNames())
-        .as("the replacement's deliveries")
-        .containsExactly("init.mp4", "segment2.m4s", "segment3.m4s");
-    assertThat(replacement.contentOf("init.mp4")).isEqualTo(fromStart.contentOf("init.mp4"));
+    assertThat(replacement.ffmpegVideoSamples())
+        .as("the video samples that the replacement's FFmpeg wrote from a later keyframe")
+        .hasSizeLessThan(fromStart.ffmpegVideoSamples().size())
+        .first()
+        .matches(Sample::isSync, "is a sync sample");
+    assertThat(replacement.sink().contentOf("init.mp4"))
+        .isEqualTo(fromStart.sink().contentOf("init.mp4"));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -722,7 +726,7 @@ class HdrCopySmokeTest {
 
   private static AttemptOutcome outcomeOf(Path source, VideoDecision.Copy copy) throws Exception {
     var producer =
-        engine()
+        engine(new ProcessBuilderLauncher())
             .startProducer(
                 request(source, copy, 0),
                 new RecordingSegmentSink(),
@@ -736,25 +740,38 @@ class HdrCopySmokeTest {
 
   private static RecordingSegmentSink copiedSink(
       Path source, VideoDecision.Copy copy, int firstSegment) {
-    var sink = new RecordingSegmentSink();
-
-    var producer =
-        engine()
-            .startProducer(
-                request(source, copy, firstSegment), sink, SegmentMemoryBudget.forSlots(1));
-
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
-    return sink;
+    return attempted(source, copy, firstSegment).sink();
   }
 
-  private static FfmpegTranscodeEngine engine() {
+  private static Attempt attempted(Path source, VideoDecision.Copy copy, int firstSegment) {
+    var sink = new RecordingSegmentSink();
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var request = request(source, copy, firstSegment);
+
+    var producer = engine(launcher).startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    return new Attempt(sink, launcher.outputOf(request.attemptId()));
+  }
+
+  /** A completed attempt's deliveries, and what its FFmpeg wrote to its standard output. */
+  private record Attempt(RecordingSegmentSink sink, byte[] ffmpegOutput) {
+
+    // FFmpeg's own video samples, before the producer drops any that precede the first segment.
+    List<Sample> ffmpegVideoSamples() {
+      var movie = Mp4Samples.read(ffmpegOutput);
+      return movie.samplesOf(movie.videoTrack());
+    }
+  }
+
+  private static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
     var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
     capabilities.detectCapabilities();
     assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
         .capabilityService(capabilities)
-        .launcher(new ProcessBuilderLauncher())
+        .launcher(launcher)
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
   }
