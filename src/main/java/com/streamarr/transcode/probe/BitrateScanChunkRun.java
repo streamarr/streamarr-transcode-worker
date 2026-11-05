@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
@@ -546,18 +547,55 @@ final class BitrateScanChunkRun {
   private Listed listFrom(ProbedSource probed, Timeline timeline, Optional<BigDecimal> start)
       throws ExecutionException, InterruptedException {
     var packets = timeline.listing().packets(start.isEmpty());
+    var lines = new CountedLines(packets);
     var diagnostics = new DemuxerErrors(probed.formatName());
-    var exitCode = ffprobe.run(arguments(probed, start), packets, diagnostics);
+    var exitCode = ffprobe.run(arguments(probed, start, OptionalInt.empty()), lines, diagnostics);
+    // ffprobe prints ahead of the reader, as far as the pipe holds, so a listing stopped early can
+    // log an error from past the packets it took.
+    if (diagnostics.isFailed() && packets.isStoppedEarly()) {
+      var taken = OptionalInt.of(lines.count());
+      var relisted = timeline.listing().packets(start.isEmpty());
+      return relist(probed, relisted, arguments(probed, start, taken));
+    }
+
     return new Listed(packets, exitCode, diagnostics.isFailed());
   }
 
   private record Listed(ChunkPackets packets, int exitCode, boolean isDemuxingFailed) {}
 
-  private static List<String> arguments(ProbedSource probed, Optional<BigDecimal> start) {
+  /**
+   * Lists the chunk again with arguments that end the listing after the packets that a stopped
+   * listing took, so that ffprobe stops by itself rather than when the reader stops it. ffprobe
+   * reads one packet past those that it prints and then exits, so the relisting reads no further
+   * than the packet after the one that stopped the first listing. Its packets and its demuxer
+   * errors come from the same read. The first listing's error stands unless the relisting stops
+   * too: an error that lost packets leaves the count short of the chunk's packets.
+   */
+  private Listed relist(ProbedSource probed, ChunkPackets packets, List<String> arguments)
+      throws ExecutionException, InterruptedException {
+    var diagnostics = new DemuxerErrors(probed.formatName());
+    KeyframePacketScan.PacketLines everyLine =
+        line -> {
+          packets.take(line);
+          return true;
+        };
+    var exitCode = ffprobe.run(arguments, everyLine, diagnostics);
+    if (exitCode != 0) {
+      throw new PacketScanException("ffprobe's relisting exited with code " + exitCode);
+    }
+
+    return new Listed(packets, exitCode, diagnostics.isFailed() || !packets.isStoppedEarly());
+  }
+
+  /** The listing's arguments; a packet count ends the listing after that many packets. */
+  private static List<String> arguments(
+      ProbedSource probed, Optional<BigDecimal> start, OptionalInt packetCount) {
     var arguments = new ArrayList<>(List.of("-v", "error"));
     arguments.addAll(FfprobeExecutor.READ_LIMITS);
-    start.ifPresent(
-        seconds -> arguments.addAll(List.of("-read_intervals", seconds.toPlainString() + "%")));
+    if (start.isPresent() || packetCount.isPresent()) {
+      arguments.addAll(List.of("-read_intervals", readInterval(start, packetCount)));
+    }
+
     arguments.addAll(
         List.of(
             "-show_entries",
@@ -566,6 +604,16 @@ final class BitrateScanChunkRun {
             "compact=p=0",
             probed.source().toString()));
     return arguments;
+  }
+
+  /** From the start, or from the file's start, and up to the packet count when there is one. */
+  private static String readInterval(Optional<BigDecimal> start, OptionalInt packetCount) {
+    var from = start.map(BigDecimal::toPlainString).orElse("") + "%";
+    if (packetCount.isEmpty()) {
+      return from;
+    }
+
+    return from + "+#" + packetCount.getAsInt();
   }
 
   private ProbeAttemptReport report(ProbedSource probed, Timeline timeline, Listed listed) {
@@ -649,6 +697,27 @@ final class BitrateScanChunkRun {
 
   private static ProbeAttemptReport failed(ProbedSource probed, ProbeFailure failure) {
     return ProbeAttemptReport.resultOnly(probed.result().toBuilder().setFailure(failure).build());
+  }
+
+  /** Passes each line of a listing to the chunk's packets, and counts the lines that it took. */
+  private static final class CountedLines implements KeyframePacketScan.PacketLines {
+
+    private final ChunkPackets packets;
+    private int count;
+
+    private CountedLines(ChunkPackets packets) {
+      this.packets = packets;
+    }
+
+    @Override
+    public boolean take(String line) {
+      count++;
+      return packets.take(line);
+    }
+
+    int count() {
+      return count;
+    }
   }
 
   /**

@@ -149,8 +149,13 @@ final class ChunkPackets implements KeyframePacketScan.PacketLines {
     record CopyChangesPackets(int streamIndex) implements Stop {}
   }
 
+  /** Takes nothing after it asks to stop, so that a later packet cannot undo the stop. */
   @Override
   public boolean take(String line) {
+    if (isStoppedEarly) {
+      return false;
+    }
+
     var packet = Packet.parse(line);
     if (packet.streamIndex() == chosenStreamIndex) {
       takeVideo(packet);
