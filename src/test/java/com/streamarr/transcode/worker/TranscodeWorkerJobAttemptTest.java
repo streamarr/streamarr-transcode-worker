@@ -97,6 +97,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Timeout(value = 1, unit = TimeUnit.MINUTES)
 class TranscodeWorkerJobAttemptTest {
 
+  // Keyframes 10 s apart on 3 s slots: segments start at slots 0, 3, 6 and 10.
+  private static final List<Integer> TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS =
+      List.of(0, 3, 6, 10);
+
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
   private static final int RACE_ITERATIONS = 100;
@@ -1797,6 +1801,146 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSubsequence("-ss", "30", "-i");
     }
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload every listed segment and complete the attempt when source keyframes further"
+          + " apart than the period open the job's merged segments")
+  void shouldUploadEveryListedSegmentAndCompleteTheAttemptWhenSourceKeyframesOpenMergedSegments()
+      throws Exception {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var launcher = ScriptedProcessLauncher.writing(recording.file());
+    var jobBuilder = copyJobBuilderFor(recording);
+    // Keyframes at 0 s, 10.01 s and 20.02 s on 6 s slots: slots 2 and 4 merge.
+    jobBuilder
+        .getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(recording.period())
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartSlots(List.of(0, 1, 3));
+    var job = jobBuilder.build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should close the last listed segment's audio at the job's advertised end when a held"
+          + " encode's audio outlasts the video and that end")
+  void shouldCloseTheLastListedSegmentsAudioAtTheAdvertisedEndWhenAHeldEncodesAudioOutlastsIt()
+      throws Exception {
+    // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s.
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    // 6 s slots: slot 2 merges into segment 1, and segment 2 runs from 18 s to 21 s.
+    job.getExecutionBuilder()
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartSlots(List.of(0, 1, 3))
+        .getAdvertisedEndBuilder()
+        .setSeconds(21);
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(recording.file()))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      var uploads = uploadsOf(connection, job.build());
+      assertThat(uploads)
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+      var lastSegment =
+          Mp4Samples.read(uploadedBytes(List.of(uploads.getFirst(), uploads.getLast())));
+      var audioTimescale = lastSegment.audioTrack().timescale();
+      assertThat(lastSegment.samplesOf(lastSegment.audioTrack()))
+          .extracting(Mp4Samples.Sample::presentationTime)
+          .as("segment 2's audio starts from 18 s and before the advertised end")
+          .isNotEmpty()
+          .allMatch(start -> start >= 18 * audioTimescale && start < 21 * audioTimescale);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should seek a stream copy to its first segment's listed start when the job carries a"
+          + " segment list")
+  void shouldSeekAStreamCopyToItsFirstSegmentsListedStartWhenTheJobCarriesASegmentList()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder();
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        .setStartSequenceNumber(3)
+        .setSeekPositionSeconds(30);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .as("segment 3 starts at slot 10")
+          .containsSubsequence("-ss", "30", "-i");
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("segmentListsThatBreakTheContract")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its segment list breaks the"
+          + " contract")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsSegmentListBreaksTheContract(
+      String breach, List<Integer> startSlots) throws Exception {
+    var job = variantJobBuilder();
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartSlots(startSlots);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest(name = "advertised end at {0} s")
+  @ValueSource(ints = {29, 30})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its advertised end does not lie"
+          + " after the last listed segment's start")
+  void shouldRefuseTheJobWhenItsAdvertisedEndDoesNotLieAfterTheLastListedSegmentsStart(
+      int advertisedEndSeconds) throws Exception {
+    var job = heldAndPaddedJob();
+    // Segment 3 starts at slot 10, 30 s.
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        .getAdvertisedEndBuilder()
+        .setSeconds(advertisedEndSeconds)
+        .setNanos(0);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> segmentListsThatBreakTheContract() {
+    return Stream.of(
+        Arguments.of("fewer entries than media segments", List.of(0, 3, 6)),
+        Arguments.of("more entries than media segments", List.of(0, 3, 6, 10, 12)),
+        Arguments.of("a first entry after slot 0", List.of(1, 3, 6, 10)),
+        Arguments.of("a repeated entry", List.of(0, 3, 3, 10)),
+        Arguments.of("a decreasing entry", List.of(0, 6, 3, 10)));
   }
 
   @ParameterizedTest(name = "{0}")

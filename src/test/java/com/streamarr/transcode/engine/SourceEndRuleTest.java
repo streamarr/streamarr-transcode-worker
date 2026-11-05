@@ -83,6 +83,28 @@ class SourceEndRuleTest {
     assertThat(report.endedEarly()).contains(new EndedEarly(9, List.of(AUDIO_INDEX)));
   }
 
+  @Test
+  @DisplayName(
+      "Should report the merged segment that holds the video's last keyframe, and the audio after"
+          + " its listed end, when a stream copy's job carries a segment list")
+  void shouldReportTheMergedSegmentThatHoldsTheVideosLastKeyframeWhenAStreamCopysJobCarriesAList() {
+    var video =
+        videoEndingAt64Seconds().lastKeyframeStart(Optional.of(Duration.ofMillis(59_000))).build();
+    // 6 s slots: segment 8 spans slots 8 and 9, from 48 s to 60 s.
+    var rule =
+        SourceEndRule.builder()
+            .intervals(
+                SegmentIntervals.onSegmentList(
+                    6, List.of(0L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 10L, 13L)))
+            .mediaSegmentCount(11)
+            .video(copy())
+            .build();
+
+    var report = rule.reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(8, List.of(AUDIO_INDEX)));
+  }
+
   // Frame-rate conversion can move the last source frame, at 63.96 s, into the next segment.
   @Test
   @DisplayName(
@@ -204,7 +226,7 @@ class SourceEndRuleTest {
             .build();
     var rule =
         SourceEndRule.builder()
-            .periodSeconds(6)
+            .intervals(SegmentIntervals.onPlainGrid(6))
             .mediaSegmentCount(14)
             .video(held())
             .copiesAudio(true)
@@ -232,7 +254,7 @@ class SourceEndRuleTest {
             .build();
     var rule =
         SourceEndRule.builder()
-            .periodSeconds(6)
+            .intervals(SegmentIntervals.onPlainGrid(6))
             .mediaSegmentCount(14)
             .video(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
             .copiesAudio(copiesAudio)
@@ -337,7 +359,11 @@ class SourceEndRuleTest {
 
   // 14 segments of 6 s: the last advertised segment, 13, runs from 78 s to 84 s.
   private static SourceEndRule ruleFor(VideoDecision video) {
-    return SourceEndRule.builder().periodSeconds(6).mediaSegmentCount(14).video(video).build();
+    return SourceEndRule.builder()
+        .intervals(SegmentIntervals.onPlainGrid(6))
+        .mediaSegmentCount(14)
+        .video(video)
+        .build();
   }
 
   private static VideoDecision copy() {

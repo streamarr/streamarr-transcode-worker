@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.Builder;
@@ -22,11 +23,13 @@ public record TranscodeRequest(
     String variantLabel,
     int startSequenceNumber,
     int mediaSegmentCount,
+    @NonNull List<Long> segmentStartSlots,
     @NonNull Optional<Duration> seekPosition,
     @NonNull Optional<SourceAudio> sourceAudio,
     @NonNull Optional<Duration> advertisedEnd) {
 
   public TranscodeRequest {
+    segmentStartSlots = List.copyOf(segmentStartSlots);
     if (encoderPreset == null && encodesVideo(transcodeDecision)) {
       throw new IllegalArgumentException("A video encode requires an encoder preset");
     }
@@ -53,10 +56,20 @@ public record TranscodeRequest(
 
   public static TranscodeRequestBuilder builder() {
     return new TranscodeRequestBuilder()
+        .segmentStartSlots(List.of())
         .seekPosition(Optional.empty())
         .outputFrameRate(Optional.empty())
         .sourceAudio(Optional.empty())
         .advertisedEnd(Optional.empty());
+  }
+
+  /**
+   * The media segments' intervals: the job's segment list, whose last segment ends at the
+   * advertised end when the job carries one, or the plain grid when it has no list.
+   */
+  SegmentIntervals segmentIntervals() {
+    var intervals = SegmentIntervals.onSegmentList(targetSegmentDuration, segmentStartSlots);
+    return advertisedEnd.map(intervals::withLastListedSegmentEndingAt).orElse(intervals);
   }
 
   private static boolean holdsOrPads(TranscodeDecision decision) {

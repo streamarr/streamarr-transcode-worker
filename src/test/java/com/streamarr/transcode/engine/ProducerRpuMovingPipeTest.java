@@ -793,7 +793,7 @@ class ProducerRpuMovingPipeTest {
         .encodedFrameRate(Optional.of(recording.source().videoFrameRate()))
         .videoDecision(VideoDecisionFixtures.forRecording(recording))
         .paddedAudioEnd(Optional.empty())
-        .periodSeconds(recording.period())
+        .intervals(SegmentIntervals.onPlainGrid(recording.period()))
         .startSequenceNumber(recording.startSequenceNumber())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink)

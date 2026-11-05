@@ -3,6 +3,8 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
+import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -15,6 +17,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 class SegmentIntervalsTest {
 
   private static final long MILLISECONDS = 1000;
+  // Keyframes 10 s apart on 3 s slots: the slots without one merge into the segment before them.
+  private static final List<Long> TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS =
+      List.of(0L, 3L, 6L, 10L);
 
   @ParameterizedTest(name = "{0} ms is in segment {1}")
   @CsvSource({"0, 0", "5999, 0", "6000, 1", "-1, -1", "-6000, -1", "-6001, -2"})
@@ -33,8 +38,110 @@ class SegmentIntervalsTest {
   void shouldEndASegmentsIntervalWhereTheNextOneStartsWhenTheGridIsPlain() {
     var intervals = SegmentIntervals.onPlainGrid(6);
 
-    assertThat(intervals.endOf(10, MILLISECONDS)).isEqualTo(66_000);
-    assertThat(intervals.numberAt(intervals.endOf(10, MILLISECONDS), MILLISECONDS)).isEqualTo(11);
+    assertThat(intervals.endOf(10, MILLISECONDS)).hasValue(66_000);
+    assertThat(intervals.numberAt(66_000, MILLISECONDS)).isEqualTo(11);
+  }
+
+  @ParameterizedTest(name = "{0} ms is in segment {1}")
+  @CsvSource({
+    "0, 0",
+    "8999, 0",
+    "9000, 1",
+    "17999, 1",
+    "18000, 2",
+    "29999, 2",
+    "30000, 3",
+    "3600000, 3",
+    "-1, -1"
+  })
+  @DisplayName(
+      "Should place a presentation time in the segment whose listed interval holds it when slots"
+          + " merge")
+  void shouldPlaceAPresentationTimeInTheSegmentWhoseListedIntervalHoldsItWhenSlotsMerge(
+      long milliseconds, long number) {
+    var intervals = SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS);
+
+    assertThat(intervals.numberAt(milliseconds, MILLISECONDS)).isEqualTo(number);
+  }
+
+  @Test
+  @DisplayName(
+      "Should start and end each listed segment at its slots and leave the last one open when"
+          + " slots merge")
+  void shouldStartAndEndEachListedSegmentAtItsSlotsAndLeaveTheLastOneOpenWhenSlotsMerge() {
+    var intervals = SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS);
+
+    assertThat(intervals.startOf(2, MILLISECONDS)).isEqualTo(18_000);
+    assertThat(intervals.endOf(2, MILLISECONDS)).hasValue(30_000);
+    assertThat(intervals.startOf(3, MILLISECONDS)).isEqualTo(30_000);
+    assertThat(intervals.endOf(3, MILLISECONDS))
+        .as("without an advertised end, runs to the end of the media")
+        .isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should end the last listed segment's audio at the advertised end and number later audio"
+          + " after it when the job carries an advertised end")
+  void shouldEndTheLastListedSegmentsAudioAtTheAdvertisedEndWhenTheJobCarriesOne() {
+    var intervals =
+        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+
+    assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_500);
+    assertThat(intervals.numberOfAudioSampleAt(34_499, MILLISECONDS)).isEqualTo(3);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS))
+        .as("audio after the last listed segment")
+        .isEqualTo(4);
+    assertThat(intervals.endOf(4, MILLISECONDS)).as("past the list").isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a keyframe past the advertised end in the last listed segment when the job"
+          + " carries an advertised end")
+  void shouldKeepAKeyframePastTheAdvertisedEndInTheLastListedSegmentWhenTheJobCarriesOne() {
+    var intervals =
+        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+
+    assertThat(intervals.numberAt(34_500, MILLISECONDS)).isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName(
+      "Should end the last listed segment at the first tick at or after the advertised end when"
+          + " that end falls between two ticks")
+  void shouldEndTheLastListedSegmentAtTheFirstTickAtOrAfterTheAdvertisedEndBetweenTwoTicks() {
+    var intervals =
+        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500).plusNanos(1));
+
+    assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_501);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(3);
+    assertThat(intervals.numberOfAudioSampleAt(34_501, MILLISECONDS)).isEqualTo(4);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep each segment of the plain grid one period long when the job carries an"
+          + " advertised end")
+  void shouldKeepEachSegmentOfThePlainGridOnePeriodLongWhenTheJobCarriesAnAdvertisedEnd() {
+    var intervals =
+        SegmentIntervals.onPlainGrid(3).withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+
+    assertThat(intervals.endOf(11, MILLISECONDS)).hasValue(36_000);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(11);
+  }
+
+  @Test
+  @DisplayName("Should use the plain grid when the segment list is empty")
+  void shouldUseThePlainGridWhenTheSegmentListIsEmpty() {
+    var intervals = SegmentIntervals.onSegmentList(3, List.of());
+
+    assertThat(intervals.numberAt(30_000, MILLISECONDS)).isEqualTo(10);
+    assertThat(intervals.startOf(10, MILLISECONDS)).isEqualTo(30_000);
+    assertThat(intervals.endOf(10, MILLISECONDS)).hasValue(33_000);
   }
 
   @ParameterizedTest

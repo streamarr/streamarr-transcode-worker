@@ -42,6 +42,8 @@ final class SegmentAssembler {
   private Optional<VideoSampleRewrite> sampleRewrite = Optional.empty();
 
   /**
+   * @param intervals the media segments' intervals, which decide the segment of each keyframe and
+   *     audio sample
    * @param startSequenceNumber the first segment this job attempt delivers; segments below it are
    *     preroll and are discarded
    * @param maximumSegmentBytes the largest media segment the assembler delivers, and the most bytes
@@ -56,14 +58,13 @@ final class SegmentAssembler {
    */
   @Builder
   private SegmentAssembler(
-      int periodSeconds,
+      @NonNull SegmentIntervals intervals,
       int startSequenceNumber,
       long maximumSegmentBytes,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
       boolean requiresSoundTrack,
       @NonNull Optional<Duration> paddedAudioEnd) {
-    var intervals = SegmentIntervals.onPlainGrid(periodSeconds);
     this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
     this.audio = new AudioSampleQueue(intervals, startSequenceNumber, paddedAudioEnd);
     this.video = new VideoProgress(intervals);

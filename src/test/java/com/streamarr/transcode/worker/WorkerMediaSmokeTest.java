@@ -149,6 +149,9 @@ class WorkerMediaSmokeTest {
   // starts past the source's first frame either way.
   private static final int SEEKABLE_SOURCE_SECONDS = 18;
   private static final int SEEKABLE_SOURCE_SEGMENT_COUNT = 3;
+  private static final int SLOT_SECONDS = 3;
+  // The 3 s slots where the segments of the source with keyframes 10 s apart start.
+  private static final List<Integer> TEN_SECOND_KEYFRAME_SEGMENT_STARTS = List.of(0, 3, 6, 10);
   private static final int REPLACEMENT_START_SEQUENCE_NUMBER = 2;
   // The seekable sources' 6 s period in their 48 kHz audio timescale.
   private static final long SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS = 6L * 48_000;
@@ -5107,6 +5110,101 @@ class WorkerMediaSmokeTest {
       case TRANSCODE_MODE_REMUX, TRANSCODE_MODE_VIDEO_TRANSCODE -> AudioMode.AUDIO_MODE_COPY;
       default -> AudioMode.AUDIO_MODE_TRANSCODE;
     };
+  }
+
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 2})
+  @DisplayName(
+      "Should upload every listed segment, each opening at the source keyframe in its first slot"
+          + " with only its listed interval's audio, when a copy's job merges 3 s slots between"
+          + " keyframes 10 s apart")
+  void shouldUploadEveryListedSegmentWhenACopysJobMergesSlotsBetweenKeyframesTenSecondsApart(
+      int startSequenceNumber) throws Exception {
+    var source = tenSecondKeyframeSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .setStartSequenceNumber(startSequenceNumber)
+        .setSeekPositionSeconds(
+            TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(
+            uploadNames(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size()).stream()
+                .filter(
+                    name -> !name.startsWith("segment") || numberOf(name) >= startSequenceNumber)
+                .toList());
+    for (var number = startSequenceNumber;
+        number < TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size();
+        number++) {
+      var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
+      var firstSlot = listedInterval(number, movie.videoTrack().timescale());
+      var video = movie.samplesOf(movie.videoTrack()).getFirst();
+      assertThat(video.isSync()).as("segment %d opens at a keyframe", number).isTrue();
+      assertThat(video.presentationTime())
+          .as("segment %d opens in its first slot", number)
+          .isBetween(firstSlot.start(), firstSlot.start() + SLOT_SECONDS * firstSlot.timescale());
+      var audioInterval = listedInterval(number, movie.audioTrack().timescale());
+      assertThat(movie.samplesOf(movie.audioTrack()))
+          .as("segment %d's audio starts inside its listed interval", number)
+          .isNotEmpty()
+          .allMatch(sample -> audioInterval.interval().holds(sample.presentationTime()));
+    }
+  }
+
+  // Segment N's listed interval in ticks of the timescale; segment 0 keeps the AAC priming frame
+  // from before zero, and the last runs to the end of the media.
+  private static ListedInterval listedInterval(int number, long timescale) {
+    var starts = TEN_SECOND_KEYFRAME_SEGMENT_STARTS;
+    var start = starts.get(number) * SLOT_SECONDS * timescale;
+    var end = Long.MAX_VALUE;
+    if (number + 1 < starts.size()) {
+      end = starts.get(number + 1) * SLOT_SECONDS * timescale;
+    }
+
+    var from = start;
+    if (number == 0) {
+      from = Long.MIN_VALUE;
+    }
+
+    return new ListedInterval(start, timescale, new AudioInterval(from, end));
+  }
+
+  private record ListedInterval(long start, long timescale, AudioInterval interval) {}
+
+  // The seekable source's frames and noise for 35 s with a keyframe every 240 frames, 10 s at
+  // 24 fps, which libx264 with the default keyint=250 also leaves for a static scene: on 3 s slots,
+  // slots 1, 2, 4, 5, 7, 8, 9 and 11 hold no keyframe.
+  private static synchronized Path tenSecondKeyframeSource() throws Exception {
+    var matroska = seekableSources.resolve("ten-second-keyframes.mkv");
+    if (!generatedSeekableSources.contains(matroska)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-t",
+              "35",
+              "-c:v",
+              "libx264",
+              "-x264-params",
+              "keyint=240:min-keyint=240:scenecut=0",
+              "-c:a",
+              "aac"),
+          matroska);
+      generatedSeekableSources.add(matroska);
+    }
+
+    return matroska;
   }
 
   // H.264 with a keyframe every 2 s, so that a stream copy's seek to a segment boundary lands on

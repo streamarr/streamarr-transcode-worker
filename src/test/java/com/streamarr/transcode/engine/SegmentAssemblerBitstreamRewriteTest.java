@@ -607,7 +607,7 @@ class SegmentAssemblerBitstreamRewriteTest {
 
   private static SegmentAssembler assemblerFor(VideoDecision decision) {
     return SegmentAssembler.builder()
-        .periodSeconds(1)
+        .intervals(SegmentIntervals.onPlainGrid(1))
         .startSequenceNumber(0)
         .maximumSegmentBytes(Mp4Stream.SEGMENT_CAP)
         .encodedFrameRate(Optional.empty())

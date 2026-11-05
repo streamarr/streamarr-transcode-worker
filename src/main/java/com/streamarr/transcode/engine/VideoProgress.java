@@ -63,7 +63,8 @@ final class VideoProgress {
    * which the segment closes without waiting for an audio sample of a later one.
    */
   boolean hasPassed(long number) {
-    return endTicks >= intervals.endOf(number, timescale) + MARGIN_SECONDS * timescale + leadTicks;
+    var end = intervals.endOf(number, timescale);
+    return end.isPresent() && endTicks >= end.getAsLong() + MARGIN_SECONDS * timescale + leadTicks;
   }
 
   private long inVideoTicks(long presentationTime, long audioTimescale) {
