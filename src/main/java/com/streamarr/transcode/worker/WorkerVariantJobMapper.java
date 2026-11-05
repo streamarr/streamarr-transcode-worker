@@ -84,42 +84,51 @@ final class WorkerVariantJobMapper {
   // The contract's slots are uint32, which Java reads as int, so they compare as unsigned values.
   private static List<Long> segmentStartSlots(TranscodeExecution execution) {
     var slots = execution.getSegmentStartSlotsList().stream().map(Integer::toUnsignedLong).toList();
-    if (slots.isEmpty()) {
-      return slots;
-    }
-
-    if (slots.size() != execution.getMediaSegmentCount()) {
-      throw new InvalidJobSpecificationException(
-          "The segment list holds "
-              + slots.size()
-              + " start slots for "
-              + execution.getMediaSegmentCount()
-              + " media segments");
-    }
-
-    if (slots.getFirst() != 0) {
-      throw new InvalidJobSpecificationException(
-          "The segment list starts at slot " + slots.getFirst() + " instead of 0");
-    }
-
-    for (var index = 1; index < slots.size(); index++) {
-      requireLaterSlot(slots, index);
-    }
-
+    requireSegmentList(slots, execution.getMediaSegmentCount(), "slot");
     return slots;
   }
 
-  private static void requireLaterSlot(List<Long> slots, int index) {
-    if (slots.get(index) <= slots.get(index - 1)) {
+  // A non-empty segment list holds one start for each media segment, from 0 and strictly
+  // increasing, in units such as slots.
+  private static void requireSegmentList(List<Long> starts, int mediaSegmentCount, String unit) {
+    if (starts.isEmpty()) {
+      return;
+    }
+
+    if (starts.size() != mediaSegmentCount) {
+      throw new InvalidJobSpecificationException(
+          "The segment list holds "
+              + starts.size()
+              + " starts for "
+              + mediaSegmentCount
+              + " media segments");
+    }
+
+    if (starts.getFirst() != 0) {
+      throw new InvalidJobSpecificationException(
+          "The segment list starts at " + unit + " " + starts.getFirst() + " instead of 0");
+    }
+
+    for (var index = 1; index < starts.size(); index++) {
+      requireLaterStart(starts, index, unit);
+    }
+  }
+
+  private static void requireLaterStart(List<Long> starts, int index, String unit) {
+    if (starts.get(index) <= starts.get(index - 1)) {
       throw new InvalidJobSpecificationException(
           "Segment "
               + index
-              + " starts at slot "
-              + slots.get(index)
+              + " starts at "
+              + unit
+              + " "
+              + starts.get(index)
               + ", not after segment "
               + (index - 1)
-              + "'s slot "
-              + slots.get(index - 1));
+              + "'s "
+              + unit
+              + " "
+              + starts.get(index - 1));
     }
   }
 
