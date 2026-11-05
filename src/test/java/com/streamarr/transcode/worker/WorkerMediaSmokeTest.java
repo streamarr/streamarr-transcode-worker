@@ -4308,15 +4308,25 @@ class WorkerMediaSmokeTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("keptThreeAndFourChannelLayouts")
+  @MethodSource("layoutToneEncodes")
   @DisplayName(
-      "Should keep each tone's level in its own channel when a 3- or 4-channel source encodes in"
-          + " its own layout")
-  void shouldKeepEachTonesLevelInItsOwnChannelWhenAThreeOrFourChannelSourceKeepsItsLayout(
+      "Should place each source tone in each output channel at ADR 0050's gain and in the source's"
+          + " phase when an encode keeps, steps or folds the source's layout as the job names")
+  void shouldPlaceEachSourceToneAtAdr0050sGainWhenAnEncodeKeepsStepsOrFoldsTheLayout(
       ToneEncode encode) throws Exception {
     var delivered = deliveredToneEncode(encode);
 
     assertTonesLandAtTheirGains(encode, delivered);
+  }
+
+  // Each 3- and 4-channel layout kept or stepped to stereo, 7.0 folded to 5.0, and 6.1 to 5.1.
+  static Stream<ToneEncode> layoutToneEncodes() {
+    return Stream.of(
+            keptThreeAndFourChannelLayouts(),
+            threeAndFourChannelStereoSteps(),
+            sevenPointZeroFolds(),
+            sixPointOneEncodes())
+        .flatMap(encodes -> encodes);
   }
 
   static Stream<ToneEncode> keptThreeAndFourChannelLayouts() {
@@ -4337,18 +4347,6 @@ class WorkerMediaSmokeTest {
     return Stream.concat(aac, dolbyDigital);
   }
 
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("threeAndFourChannelStereoSteps")
-  @DisplayName(
-      "Should mix each tone into the stereo pair at ADR 0050's gain when a 3- or 4-channel source"
-          + " encodes in stereo")
-  void shouldMixEachToneIntoTheStereoPairWhenAThreeOrFourChannelSourceEncodesInStereo(
-      ToneEncode encode) throws Exception {
-    var delivered = deliveredToneEncode(encode);
-
-    assertTonesLandAtTheirGains(encode, delivered);
-  }
-
   // Of these layouts, AAC carries only 3.0 and 4.0, and AC-3 and E-AC-3 carry all but 3.0(back)
   // and 3.1 (ADR 0050), so the job names stereo for the rest.
   static Stream<ToneEncode> threeAndFourChannelStereoSteps() {
@@ -4367,18 +4365,6 @@ class WorkerMediaSmokeTest {
                     Stream.of("3.0(back)", "3.1")
                         .map(layout -> steppedToStereo(layout, codec).build()));
     return Stream.of(aac, aacQuads, dolbyDigital).flatMap(encodes -> encodes);
-  }
-
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("sevenPointZeroFolds")
-  @DisplayName(
-      "Should fold each 7.0 surround into its own side's surround at -3 dB and write no"
-          + " low-frequency channel when the job names a 5.0 layout")
-  void shouldFoldEach70SurroundIntoItsOwnSidesSurroundWhenTheJobNamesA50Layout(ToneEncode encode)
-      throws Exception {
-    var delivered = deliveredToneEncode(encode);
-
-    assertTonesLandAtTheirGains(encode, delivered);
   }
 
   static Stream<ToneEncode> sevenPointZeroFolds() {
@@ -4412,17 +4398,6 @@ class WorkerMediaSmokeTest {
         .containsOnly(0);
   }
 
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("sixPointOneEncodes")
-  @DisplayName(
-      "Should mix the 6.1 back centre into each surround at 0.7071 when the job names a 5.1 layout")
-  void shouldMixThe61BackCentreIntoEachSurroundWhenTheJobNamesA51Layout(ToneEncode encode)
-      throws Exception {
-    var delivered = deliveredToneEncode(encode);
-
-    assertTonesLandAtTheirGains(encode, delivered);
-  }
-
   static Stream<ToneEncode> sixPointOneEncodes() {
     return Stream.of(
         sixPointOneTo51("ac3", "5.1(side)"),
@@ -4444,13 +4419,7 @@ class WorkerMediaSmokeTest {
   }
 
   static Stream<ToneEncode> aacToneEncodes() {
-    return Stream.of(
-            keptThreeAndFourChannelLayouts(),
-            threeAndFourChannelStereoSteps(),
-            sevenPointZeroFolds(),
-            sixPointOneEncodes())
-        .flatMap(encodes -> encodes)
-        .filter(encode -> "aac".equals(encode.codec()));
+    return layoutToneEncodes().filter(encode -> "aac".equals(encode.codec()));
   }
 
   // ADR 0050's −3 dB, at which a downmix mixes one channel into another.
