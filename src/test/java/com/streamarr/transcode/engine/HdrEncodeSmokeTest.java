@@ -33,7 +33,8 @@ import org.junit.jupiter.api.io.TempDir;
  * HDR10, HLG and 10-bit SDR sources are synthetic libx265 streams at 64x36 and 24 fps with a
  * keyframe every second. The profile 5 source is the synthetic {@code dolby-vision-5-dvh1.mp4}
  * sample-entry fixture, whose RPUs come from dovi_tool's generator: these tests check the reshape's
- * plumbing, not its colours.
+ * plumbing, not its colours. Each job asks for the software encoder, which carries the encode
+ * features also on a host whose codec family resolves to a hardware encoder.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")
@@ -138,6 +139,7 @@ class HdrEncodeSmokeTest {
             .tier(Optional.of(VideoCodecTier.MAIN))
             .level(AV1_LEVEL)
             .codecString(AV1_TEN_BIT_CODEC_STRING)
+            .softwareEncoder(true)
             .outputPictureFormat(tenBit())
             .staticHdrMetadata(Optional.of(SOURCE_METADATA))
             .build();
@@ -270,7 +272,7 @@ class HdrEncodeSmokeTest {
 
     service.detectCapabilities();
 
-    assertThat(service.workerVerifiedEncoders())
+    assertThat(service.softwareEncoders())
         .extracting(encoder -> encoder.backend().encoder(), WorkerVerifiedEncoder::encodeFeatures)
         .containsExactlyInAnyOrder(
             tuple("libx264", Set.of()),
@@ -320,6 +322,7 @@ class HdrEncodeSmokeTest {
         .tier(Optional.of(VideoCodecTier.MAIN))
         .level(HEVC_LEVEL)
         .codecString(HEVC_MAIN_10_CODEC_STRING)
+        .softwareEncoder(true)
         .outputPictureFormat(tenBit())
         .staticHdrMetadata(Optional.of(SOURCE_METADATA));
   }
