@@ -6267,6 +6267,41 @@ class WorkerMediaSmokeTest {
         .isGreaterThan(1_000);
   }
 
+  // FFmpeg encodes -ac 4 in AC-3 as quad(side), the first four-channel layout its encoder lists,
+  // where the source's side channels play 700 Hz on the left and 900 Hz on the right.
+  @Test
+  @DisplayName(
+      "Should keep the side channels apart when an encode holds the last frame and encodes four"
+          + " channels of quad(side) audio in AC-3")
+  void shouldKeepTheSideChannelsApartWhenAnEncodeHoldsAndEncodesFourChannelsOfQuadSideInAc3()
+      throws Exception {
+    var source = videoEndsBeforeQuadSideAudioSource();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds(VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT * 6L);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("ac3")
+        .setChannels(4)
+        .setBitrateBitsPerSecond(384_000);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var samples =
+        ByteBuffer.wrap(decodedAudio(uploads.contentOf(List.of("init.mp4", segmentName(12)))))
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .asShortBuffer();
+    assertThat(
+            IntStream.range(0, samples.limit() / 4)
+                .map(frame -> Math.abs(samples.get(4 * frame + 2) - samples.get(4 * frame + 3)))
+                .max()
+                .orElseThrow())
+        .as("the widest difference between segment 12's side left and side right samples")
+        .isGreaterThan(1_000);
+  }
+
   // The source's last frame starts at 5.983 s, inside segment 0, but FFmpeg's conversion to 24 fps
   // can place the output's last frame at 6 s, inside segment 1.
   @Test
@@ -8277,6 +8312,56 @@ class WorkerMediaSmokeTest {
               "48",
               "-c:a",
               "copy"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source whose video ends before its audio, with quad(side) AC-3 audio whose four channels
+  // play 300, 500, 700 and 900 Hz.
+  private static synchronized Path videoEndsBeforeQuadSideAudioSource() throws Exception {
+    var source = seekableSources.resolve("video-ends-before-quad-side-audio.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=300:r=48000:d=84",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=500:r=48000:d=84",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=700:r=48000:d=84",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=900:r=48000:d=84",
+              "-filter_complex",
+              "[1][2][3][4]join=inputs=4:channel_layout=quad(side)[a]",
+              "-map",
+              "0:v",
+              "-map",
+              "[a]",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "ac3",
+              "-b:a",
+              "384k"),
           source);
       generatedSeekableSources.add(source);
     }

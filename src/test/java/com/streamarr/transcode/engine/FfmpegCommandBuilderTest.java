@@ -3707,6 +3707,32 @@ class FfmpegCommandBuilderTest {
         .isEqualTo("[1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]");
   }
 
+  // FFmpeg gives -ac's count the first layout of that count that the encoder lists: AC-3 and
+  // E-AC-3 list quad(side) and 5.1(side) first, ALAC 7.1(wide). An encoder that lists none, as
+  // AAC, takes the count's default layout.
+  @ParameterizedTest(name = "{1} channels of {0}")
+  @CsvSource({"aac, 6, 6c", "ac3, 4, quad(side)", "eac3, 6, 5.1(side)", "alac, 8, 7.1(wide)"})
+  @DisplayName(
+      "Should give the audio the layout that the encoder takes for -ac's count as it enters the"
+          + " held video's graph when an encode holds the last frame and names no layout")
+  void shouldGiveTheAudioTheEncodersLayoutForTheChannelCountWhenAnEncodeHoldsAndNamesNoLayout(
+      String codec, int channels, String layout) {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .audioDecision(
+                audio(TranscodeMode.FULL_TRANSCODE).codec(codec).channels(channels).build())
+            .build();
+    var cmd =
+        command(
+            request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
+            "libx264");
+
+    assertThat(heldAudioGraph(cmd))
+        .isEqualTo("[1:a:0]anull,aformat=channel_layouts=" + layout + "[filtered_held_audio]");
+  }
+
   // A Matroska demuxer that discards the video after a seek drops every audio block until one
   // passes the seek's cue, laced frames that reach past the first segment's start among them, so
   // the audio's input keeps its video in use, as the one input did.

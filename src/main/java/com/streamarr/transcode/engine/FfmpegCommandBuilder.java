@@ -28,6 +28,17 @@ public class FfmpegCommandBuilder {
   private static final String HELD_VIDEO_LABEL = "[held_video]";
   private static final String HELD_AUDIO_LABEL = "[held_audio]";
   private static final String FILTERED_HELD_AUDIO_LABEL = "[filtered_held_audio]";
+  // The first layout of each channel count, from one channel up, that an encoder lists.
+  private static final List<String> AC3_FIRST_LISTED_LAYOUTS =
+      List.of("mono", "stereo", "3.0(back)", "quad(side)", "5.0(side)", "5.1(side)");
+  private static final Map<String, List<String>> FIRST_LISTED_LAYOUTS =
+      Map.of(
+          "ac3",
+          AC3_FIRST_LISTED_LAYOUTS,
+          "eac3",
+          AC3_FIRST_LISTED_LAYOUTS,
+          "alac",
+          List.of("mono", "stereo", "3.0", "4.0", "5.0", "5.1", "6.1(back)", "7.1(wide)"));
   // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final String PROFILE_OPTION = "-profile:v";
@@ -547,11 +558,25 @@ public class FfmpegCommandBuilder {
             HELD_AUDIO_LABEL));
   }
 
-  // A named layout's -ch_layout, or -ac's count of channels in no named layout.
+  // A named layout's -ch_layout, or the layout that FFmpeg gives -ac's count of channels.
   private static String outputChannels(List<String> cmd) {
     return optionValue(cmd, "-ch_layout")
-        .or(() -> optionValue(cmd, "-ac").map(count -> count + "c"))
-        .orElseThrow();
+        .orElseGet(
+            () ->
+                layoutOfChannelCount(
+                    optionValue(cmd, "-c:a").orElseThrow(),
+                    Integer.parseInt(optionValue(cmd, "-ac").orElseThrow())));
+  }
+
+  // FFmpeg gives -ac's count the first layout of that count that the encoder lists, and the count's
+  // default layout when the encoder lists none, as AAC, Opus and FLAC do.
+  private static String layoutOfChannelCount(String encoder, int channels) {
+    var listed = FIRST_LISTED_LAYOUTS.getOrDefault(encoder, List.of());
+    if (channels > listed.size()) {
+      return channels + "c";
+    }
+
+    return listed.get(channels - 1);
   }
 
   private static Optional<String> optionValue(List<String> cmd, String option) {
