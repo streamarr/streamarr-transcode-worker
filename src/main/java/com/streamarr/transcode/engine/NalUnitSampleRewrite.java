@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -30,6 +31,8 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   private static final int REGISTERED_USER_DATA = 4;
   private static final byte[] HDR10_PLUS_PREFIX = {(byte) 0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04};
   private static final int RBSP_STOP_BYTE = 0x80;
+  // An HEVC NAL unit header of type 62 in layer 0 at temporal id 0.
+  private static final byte[] BASE_LAYER_RPU_HEADER = {0x7C, 0x01};
 
   private final NalSyntax syntax;
   private final int lengthSize;
@@ -142,9 +145,23 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     }
 
     var rpu = rpus.getFirst();
+    if (!hasBaseLayerRpuHeader(rpu)) {
+      throw conversionFailed(
+          "an RPU NAL unit header of "
+              + HexFormat.of().formatHex(new byte[] {rpu.get(0), rpu.get(1)})
+              + " where the decoder reads an RPU only from layer 0 at temporal id 0");
+    }
+
     var headerBytes = syntax.headerBytes();
     return withHeaderOf(
         rpu, convertedToProfile81(rpu.slice(headerBytes, rpu.remaining() - headerBytes)));
+  }
+
+  // The pinned decoder reads an RPU only from a NAL unit of type 62 with forbidden_zero_bit 0,
+  // nuh_layer_id 0 and nuh_temporal_id_plus1 1, which is the header 7C 01; a picture whose RPU
+  // sits under another header would play without Dolby Vision, so the conversion refuses it.
+  private static boolean hasBaseLayerRpuHeader(ByteBuffer rpu) {
+    return rpu.get(0) == BASE_LAYER_RPU_HEADER[0] && rpu.get(1) == BASE_LAYER_RPU_HEADER[1];
   }
 
   private static byte[] convertedToProfile81(ByteBuffer escapedPayload) {

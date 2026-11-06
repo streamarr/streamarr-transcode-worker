@@ -716,8 +716,22 @@ class SegmentAssemblerBitstreamRewriteTest {
             "a NAL unit of one byte beside an RPU",
             sample(aud(), new byte[] {0, 0, 0, 1, 0x7C}, slice(0), felRpu)),
         Arguments.of(
+            "an RPU in a NAL unit of layer 1, which the decoder skips",
+            sample(aud(), slice(0), withSecondHeaderByte(felRpu, 0x09))),
+        Arguments.of(
+            "an RPU in a NAL unit with temporal id 1, which the decoder skips",
+            sample(aud(), slice(0), withSecondHeaderByte(felRpu, 0x02))),
+        Arguments.of(
             "a profile 5 RPU",
             sample(aud(), slice(0), SyntheticRpus.profile7().profile5().nalUnit())));
+  }
+
+  // The length-prefixed NAL unit with its second header byte, nuh_layer_id's low bits and
+  // nuh_temporal_id_plus1, replaced.
+  private static byte[] withSecondHeaderByte(byte[] nalUnit, int value) {
+    var changed = nalUnit.clone();
+    changed[5] = (byte) value;
+    return changed;
   }
 
   // A copy of single-track profile 7 that the server planned as profile 8.1 at level 6 on its PQ

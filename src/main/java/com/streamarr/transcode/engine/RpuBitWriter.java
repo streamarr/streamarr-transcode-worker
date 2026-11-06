@@ -5,12 +5,18 @@ import java.io.ByteArrayOutputStream;
 /** Writes the bits of an RPU, most significant first, as {@link RpuBitReader} reads them. */
 final class RpuBitWriter {
 
+  private static final int WIDEST_FIELD = 32;
+
   private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
   private int current;
   private int filled;
 
   /** The low {@code count} bits of the value, for counts up to 32. */
   RpuBitWriter bits(long value, int count) {
+    if (count < 0 || count > WIDEST_FIELD) {
+      throw new IllegalArgumentException("a field of " + count + " bits");
+    }
+
     for (var index = count - 1; index >= 0; index--) {
       bit((value >>> index) & 1);
     }

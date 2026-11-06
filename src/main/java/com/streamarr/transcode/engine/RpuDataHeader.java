@@ -37,6 +37,7 @@ record RpuDataHeader(
   private static final int FIXED_POINT_COEFFICIENTS = 0;
   private static final int FLOATING_POINT_COEFFICIENTS = 1;
   private static final int FLOATING_POINT_COEFFICIENT_BITS = 32;
+  private static final long LARGEST_COEFFICIENT_LOG2_DENOM = 23;
   private static final int COMPRESSED_DM_METADATA = 1;
   // The VDR bit depth that tells profile 7 from profile 4, both of which carry a residual.
   private static final long PROFILE_7_VDR_BIT_DEPTH_MINUS8 = 4;
@@ -72,6 +73,22 @@ record RpuDataHeader(
     return header.build();
   }
 
+  // The denominator sizes every fixed-point coefficient fraction, so a value past the syntax's
+  // bound
+  // would size them as no field of the RPU can be.
+  private static long coefficientLog2Denom(RpuBitReader reader) {
+    var denominator = reader.unsignedExpGolomb();
+    if (denominator > LARGEST_COEFFICIENT_LOG2_DENOM) {
+      throw new DolbyVisionRpuException(
+          "a coefficient_log2_denom of "
+              + denominator
+              + " where the syntax allows up to "
+              + LARGEST_COEFFICIENT_LOG2_DENOM);
+    }
+
+    return denominator;
+  }
+
   private static void parseSequenceInformation(
       RpuBitReader reader, RpuDataHeaderBuilder header, int rpuFormat) {
     header.chromaResamplingExplicitFilter(reader.flag());
@@ -84,7 +101,7 @@ record RpuDataHeader(
 
     header.coefficientDataType(coefficientDataType);
     if (coefficientDataType == FIXED_POINT_COEFFICIENTS) {
-      header.coefficientLog2Denom(reader.unsignedExpGolomb());
+      header.coefficientLog2Denom(coefficientLog2Denom(reader));
     }
 
     header.vdrRpuNormalizedIdc((int) reader.bits(2)).baseLayerFullRange(reader.flag());

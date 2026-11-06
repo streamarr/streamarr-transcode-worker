@@ -7,6 +7,7 @@ package com.streamarr.transcode.engine;
 final class RpuBitReader {
 
   private static final int LONGEST_EXP_GOLOMB_RUN = 32;
+  private static final int WIDEST_FIELD = 32;
 
   private final byte[] bytes;
   private int position;
@@ -16,9 +17,15 @@ final class RpuBitReader {
   }
 
   /**
-   * @throws DolbyVisionRpuException when the bytes end first
+   * @throws DolbyVisionRpuException when the bytes end first, or the count is not a width of the
+   *     syntax: a negative count would come from a field of the RPU read as one, so it is malformed
+   *     input, not a programming error
    */
   long bits(int count) {
+    if (count < 0 || count > WIDEST_FIELD) {
+      throw new DolbyVisionRpuException("a field of " + count + " bits");
+    }
+
     if (count > bitsRemaining()) {
       throw new DolbyVisionRpuException("the RPU ends before its syntax does");
     }
