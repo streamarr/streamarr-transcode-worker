@@ -11,6 +11,7 @@ final class BitReader {
   private static final int LONGEST_LONG_PREFIX = 31;
   private static final long UNSIGNED_32_BITS = 0xFFFF_FFFFL;
   private static final int LONGEST_TABLE_CODE_BITS = 19;
+  private static final int BITS_AFTER_A_FULL_TABLE_PREFIX = LONGEST_TABLE_CODE_BITS - TABLE_BITS;
 
   private final byte[] bytes;
   private int position;
@@ -117,7 +118,7 @@ final class BitReader {
       case 0, 1, 2, 3, 4 -> (1L << leadingZeros) - 1 + bits(leadingZeros);
       case 5 -> bits(5) < 4 ? 31 : 32;
       case TABLE_BITS -> {
-        skip(LONGEST_TABLE_CODE_BITS - TABLE_BITS);
+        skip(BITS_AFTER_A_FULL_TABLE_PREFIX);
         yield 32;
       }
       default -> {

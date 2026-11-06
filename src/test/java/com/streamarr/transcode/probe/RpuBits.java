@@ -186,8 +186,7 @@ record RpuBits(
     }
   }
 
-  /** One extension block: its level and its payload bytes. */
-  /** An extension block whose length field declares {@code declaredLength} payload bytes. */
+  /** One extension block: its level, its payload bytes and the length its length field declares. */
   record ExtensionBlock(int level, List<Integer> payload, int declaredLength) {
 
     ExtensionBlock(int level, List<Integer> payload) {
