@@ -225,6 +225,52 @@ class HeldPictureReadPositionTest {
     assertThat(readPosition).contains(Duration.ofSeconds(8));
   }
 
+  // An MP4 clip that its edit list trims inside a GOP marks its keyframe, and every picture before
+  // the clip's start, to decode but not to present.
+  @Test
+  @DisplayName(
+      "Should read from the start of the timeline when the video's only keyframe decodes but is not"
+          + " presented")
+  void shouldReadFromTheStartOfTheTimelineWhenTheOnlyKeyframeDecodesButIsNotPresented()
+      throws Exception {
+    var framecrc =
+        """
+        #tb 0: 1/1000
+        0, -1083, -1000, 42, 2590, 0x0a1b2c3d, F=0x5
+        0, -1042, -875, 42, 918, 0x0a1b2c3d, F=0x4
+        0, 0, 42, 42, 418, 0x0a1b2c3d, F=0x0
+        """;
+    var engine =
+        engine(
+            ScriptedProcessLauncher.forCommands(
+                (command, _) ->
+                    ScriptedProcess.builder()
+                        .output(
+                            command.contains("-ss")
+                                ? new byte[0]
+                                : framecrc.getBytes(StandardCharsets.US_ASCII))
+                        .build()));
+
+    var readPosition = engine.heldPictureReadPosition(heldRequest(4, 8), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(Duration.ZERO);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the attempt's own seek position and launch no scan when the read-back is the"
+          + " start of the timeline")
+  void shouldKeepTheSeekPositionAndLaunchNoScanWhenTheReadBackIsTheStartOfTheTimeline()
+      throws Exception {
+    var source = new ScriptedKeyframeSource(List.of(), 20);
+    var engine = engineReading(source);
+
+    var readPosition = engine.heldPictureReadPosition(heldRequest(0, 8), bytesRead::addAndGet);
+
+    assertThat(readPosition).isEmpty();
+    assertThat(source.scannedIntervals()).isEmpty();
+  }
+
   @Test
   @DisplayName("Should fail the search when a scan's FFmpeg cannot start")
   void shouldFailTheSearchWhenAScansFfmpegCannotStart() {

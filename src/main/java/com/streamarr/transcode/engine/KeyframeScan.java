@@ -35,7 +35,6 @@ final class KeyframeScan {
   // What framecrc prints for a time the packet does not carry: FFmpeg's AV_NOPTS_VALUE.
   private static final long NO_TIME = Long.MIN_VALUE;
   private static final int KEYFRAME = 0x1;
-  private static final int DISCARD = 0x4;
   private static final String VIDEO_STREAM = "0";
   private static final long NANOS_PER_SECOND = Duration.ofSeconds(1).toNanos();
 
@@ -181,12 +180,14 @@ final class KeyframeScan {
             isKeyframe(record)));
   }
 
+  // A keyframe that its container marks to decode but not to present, as an edit list marks its
+  // preroll, still starts decoding.
   private static boolean isKeyframe(Matcher record) {
     var flags =
         Optional.ofNullable(record.group(5))
             .map(value -> Integer.parseUnsignedInt(value, 16))
             .orElse(KEYFRAME);
-    return (flags & KEYFRAME) != 0 && (flags & DISCARD) == 0;
+    return (flags & KEYFRAME) != 0;
   }
 
   private static Duration durationOf(TimeBase timeBase, long ticks) {

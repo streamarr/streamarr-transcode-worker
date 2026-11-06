@@ -28,15 +28,16 @@ final class LastKeyframeSearch {
 
   /**
    * Where the attempt reads from: a seek position that reads the keyframe that the search finds,
-   * never before zero; empty when a keyframe presents between the seek position and the first
-   * segment's start.
+   * never before zero; empty when the seek position is zero, which reads every keyframe, or when a
+   * keyframe presents between the seek position and the first segment's start.
    *
    * @throws NoKeyframeBeforeReadBackException when no keyframe presents before the seek position
    */
   static Optional<Duration> readPosition(
       Duration seekPosition, Duration firstSegmentStart, KeyframeScan scan)
       throws InterruptedException {
-    if (firstSegmentStart.compareTo(seekPosition) <= 0
+    if (!seekPosition.isPositive()
+        || firstSegmentStart.compareTo(seekPosition) <= 0
         || scan.firstKeyframe(seekPosition, firstSegmentStart).isPresent()) {
       return Optional.empty();
     }

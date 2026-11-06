@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** A held encode's search for the video's last keyframe, run by real FFmpeg. */
 @Tag("SmokeTest")
@@ -95,6 +96,51 @@ class KeyframeSearchSmokeTest {
     var readPosition = engine().heldPictureReadPosition(request.build(), _ -> {}).orElseThrow();
 
     assertThat(readPosition).isZero();
+  }
+
+  // The clip's edit list starts it 1 s into its only GOP, so its keyframe and every picture before
+  // the clip's start decode but are not presented. The attempt for the segment at 8 s reads back
+  // from 4 s, or from the start of the timeline.
+  @ParameterizedTest(name = "read back from {0} s")
+  @ValueSource(ints = {4, 0})
+  @DisplayName(
+      "Should read from the start of the timeline when the only keyframe of an MP4 clip, which its"
+          + " edit list trims inside its GOP, decodes but is not presented")
+  void shouldReadFromTheStartOfTheTimelineWhenAnEditListClipsOnlyKeyframeIsNotPresented(
+      int readBackSeconds) throws Exception {
+    var source = clipTrimmedInsideItsOnlyGop();
+    var request =
+        heldRequest(source, OptionalInt.empty()).toBuilder()
+            .startSequenceNumber(4)
+            .seekPosition(Optional.of(Duration.ofSeconds(readBackSeconds)))
+            .build();
+
+    var readPosition = engine().heldPictureReadPosition(request, _ -> {});
+
+    assertThat(readPosition.orElse(Duration.ofSeconds(readBackSeconds)))
+        .as("where the attempt reads from")
+        .isZero();
+  }
+
+  // 6 s of H.264 at 24 fps with one keyframe, copied from 1 s into a 20 s MP4 source.
+  private Path clipTrimmedInsideItsOnlyGop() throws Exception {
+    var whole = root.resolve("whole.mp4");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=24:duration=20",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-x264-params",
+            "scenecut=0:keyint=1000:min-keyint=1000",
+            whole.toString()));
+    var clip = root.resolve("clip.mp4");
+    ffmpeg(List.of("-ss", "1", "-i", whole.toString(), "-c", "copy", "-t", "6", clip.toString()));
+    return clip;
   }
 
   // 20 s of H.264 at 128x72 and 4 fps, with one keyframe, starting 2 s after a 440 Hz tone, and an
