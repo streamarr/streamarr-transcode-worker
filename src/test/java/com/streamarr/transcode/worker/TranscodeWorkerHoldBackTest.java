@@ -15,9 +15,9 @@ import static org.awaitility.Awaitility.await;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.HoldBackCommand;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
-import build.buf.gen.streamarr.transcode.v1.HoldBackCommand;
 import build.buf.gen.streamarr.transcode.v1.YieldToSeekCommand;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -79,7 +79,8 @@ class TranscodeWorkerHoldBackTest {
   }
 
   @Test
-  @DisplayName("Should resume a held job attempt at its release time when no later hold-back arrives")
+  @DisplayName(
+      "Should resume a held job attempt at its release time when no later hold-back arrives")
   void shouldResumeAHeldJobAttemptAtItsReleaseTimeWhenNoLaterHoldBackArrives() throws Exception {
     try (var worker = worker()) {
       var connection = startThreeAttempts(worker);
@@ -128,6 +129,26 @@ class TranscodeWorkerHoldBackTest {
 
   @Test
   @DisplayName(
+      "Should keep a held job attempt paused for a seek's yield that lists it after the hold-back"
+          + " leaves it out")
+  void shouldKeepAHeldJobAttemptPausedForASeeksYieldThatListsItAfterTheHoldBackLeavesItOut()
+      throws Exception {
+    try (var worker = worker()) {
+      var connection = startThreeAttempts(worker);
+      holdBack(connection, Map.of(ahead, LONG_HOLD));
+      promptly().until(() -> heldAttempts().equals(List.of(ahead)));
+      yieldToSeek(connection, ahead);
+
+      // Holding the other attempt shows that the worker applied the hold-back that leaves it out.
+      holdBack(connection, Map.of(behind, LONG_HOLD));
+
+      promptly().until(() -> heldAttempts().equals(List.of(ahead, behind)));
+      exitAll();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should keep a job attempt paused while either a seek's yield or a hold-back lists it")
   void shouldKeepAJobAttemptPausedWhileEitherASeeksYieldOrAHoldBackListsIt() throws Exception {
     try (var worker = worker()) {
@@ -155,10 +176,10 @@ class TranscodeWorkerHoldBackTest {
     try (var worker = worker()) {
       var connection = startThreeAttempts(worker);
       var unknown = variantJobBuilder().build();
-      connection.deliver(
-          holdBackCommand(anotherWorker(connection), Map.of(behind, LONG_HOLD)));
+      connection.deliver(holdBackCommand(anotherWorker(connection), Map.of(behind, LONG_HOLD)));
 
-      holdBack(connection, Map.of(ahead, Duration.ZERO, unknown, LONG_HOLD, fartherAhead, LONG_HOLD));
+      holdBack(
+          connection, Map.of(ahead, Duration.ZERO, unknown, LONG_HOLD, fartherAhead, LONG_HOLD));
 
       promptly().until(() -> heldAttempts().equals(List.of(fartherAhead)));
       assertThat(eventsOf(connection)).containsOnly(EventCase.JOB_ATTEMPT_STARTED).hasSize(3);
@@ -263,7 +284,8 @@ class TranscodeWorkerHoldBackTest {
     var command =
         YieldToSeekCommand.newBuilder()
             .setTarget(connection.registration().getWorker())
-            .addAllJobAttemptIds(List.of(paused).stream().map(VariantJob::getJobAttemptId).toList());
+            .addAllJobAttemptIds(
+                List.of(paused).stream().map(VariantJob::getJobAttemptId).toList());
     command.getHoldLimitBuilder().setSeconds(LONG_HOLD.getSeconds());
     connection.deliver(EstablishWorkerSessionResponse.newBuilder().setYieldToSeek(command).build());
   }

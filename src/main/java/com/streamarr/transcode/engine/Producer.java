@@ -98,9 +98,11 @@ public final class Producer {
   private boolean heldBack;
   private boolean pausesEnded;
   // Guarded by lock. After a resume, FFmpeg runs for as long as it was paused and until the sink
-  // accepts another media segment before it pauses again.
+  // accepts another media segment before it pauses again. Only running time serves that run: while
+  // a hold stops FFmpeg, the run still owed waits in owedRunNanos.
   private long pausedAtNanos;
   private OptionalLong restEndsAtNanos = OptionalLong.empty();
+  private long owedRunNanos;
   private boolean deliveredSinceResume = true;
   private long resumes;
   private List<PausedProcess> pausedProcesses = List.of();
@@ -276,15 +278,17 @@ public final class Producer {
    * once the attempt has an outcome, once FFmpeg's output has ended, and after a resume until
    * FFmpeg has run for as long as it was paused and the sink has accepted another media segment, so
    * that pauses take at most half of FFmpeg's time and at most one pause falls between two media
-   * segments.
+   * segments. Time that a hold stops FFmpeg serves none of that run. While a hold stops FFmpeg, the
+   * pause keeps it stopped after the hold ends.
    */
   public boolean pauseFfmpeg() {
     synchronized (lock) {
-      if (ffmpegPaused || heldBack || pausesEnded || !deliveredSinceResume || isResting()) {
+      if (ffmpegPaused || pausesEnded || !deliveredSinceResume || isResting()) {
         return false;
       }
 
-      if (!stopFfmpegProcesses()) {
+      // A hold already stopped FFmpeg; the seek's pause keeps it stopped once the hold ends.
+      if (!heldBack && !stopFfmpegProcesses()) {
         return false;
       }
 
@@ -324,12 +328,15 @@ public final class Producer {
 
     ffmpegPaused = false;
     var resumedAt = clock.nanoTime();
-    restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
     deliveredSinceResume = false;
     resumes++;
-    if (!heldBack) {
-      continueFfmpegProcesses();
+    if (heldBack) {
+      owedRunNanos = resumedAt - pausedAtNanos;
+      return;
     }
+
+    restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
+    continueFfmpegProcesses();
   }
 
   /**
@@ -355,6 +362,8 @@ public final class Producer {
       }
 
       heldBack = true;
+      owedRunNanos = remainingRunNanos();
+      restEndsAtNanos = OptionalLong.empty();
       return true;
     }
   }
@@ -373,9 +382,22 @@ public final class Producer {
     }
 
     heldBack = false;
-    if (!ffmpegPaused) {
-      continueFfmpegProcesses();
+    if (ffmpegPaused) {
+      return;
     }
+
+    restEndsAtNanos = OptionalLong.of(clock.nanoTime() + owedRunNanos);
+    owedRunNanos = 0;
+    continueFfmpegProcesses();
+  }
+
+  // Guarded by lock. The run after the latest resume that FFmpeg has still to serve.
+  private long remainingRunNanos() {
+    if (restEndsAtNanos.isEmpty()) {
+      return owedRunNanos;
+    }
+
+    return Math.max(0, restEndsAtNanos.getAsLong() - clock.nanoTime());
   }
 
   // Guarded by lock.
@@ -388,7 +410,8 @@ public final class Producer {
 
   // Guarded by lock.
   private boolean isResting() {
-    return restEndsAtNanos.isPresent() && clock.nanoTime() - restEndsAtNanos.getAsLong() < 0;
+    return owedRunNanos > 0
+        || restEndsAtNanos.isPresent() && clock.nanoTime() - restEndsAtNanos.getAsLong() < 0;
   }
 
   // FFmpeg must run to quit, to exit after its output ends and to be terminated.

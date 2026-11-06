@@ -1314,8 +1314,113 @@ class ProducerTest {
     producer.releaseHeldFfmpeg();
 
     assertThat(stoppedWhileHeld).isTrue();
-    assertThat(pausedAgainWhileHeld).as("a held attempt takes no seek's pause").isFalse();
+    assertThat(pausedAgainWhileHeld).as("a seek's pause that ended owes its run first").isFalse();
     assertThat(process.isPausedBySignal()).isFalse();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep FFmpeg stopped for a seek's pause that arrives during a hold-back until that"
+          + " pause ends, when the hold-back ends first")
+  void shouldKeepFfmpegStoppedForASeeksPauseThatArrivesDuringAHoldBackUntilThatPauseEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+
+    var pausedForASeek = producer.pauseFfmpeg();
+    producer.releaseHeldFfmpeg();
+    var stoppedAfterTheHold = process.isPausedBySignal();
+    producer.resumeFfmpeg();
+
+    assertThat(pausedForASeek).isTrue();
+    assertThat(stoppedAfterTheHold).isTrue();
+    assertThat(process.isPausedBySignal()).isFalse();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should count no held time toward the run that a seek's pause owes when a hold-back stops"
+          + " FFmpeg within that run")
+  void shouldCountNoHeldTimeTowardTheRunThatASeeksPauseOwesWhenAHoldBackStopsFfmpegWithinIt() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideMediaSegment(recording, 4))
+            .build();
+    var clock = new SteppedClock();
+    sink.holding(1);
+    var producer = producerFor(process, recording).clock(clock).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    sink.release();
+    awaiting().until(() -> sink.startedNames().size() == 4);
+    clock.advance(Duration.ofSeconds(1));
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(30));
+    producer.releaseHeldFfmpeg();
+    clock.advance(Duration.ofSeconds(3));
+
+    var pausedWithinItsRun = producer.pauseFfmpeg();
+
+    assertThat(pausedWithinItsRun).as("4 s of the 5 s run remained at the hold").isFalse();
+    clock.advance(Duration.ofSeconds(1));
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    producer.resumeFfmpeg();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should start the run that a seek's pause owes only once FFmpeg runs again, when that pause"
+          + " ends during a hold-back")
+  void
+      shouldStartTheRunThatASeeksPauseOwesOnlyOnceFfmpegRunsAgainWhenThatPauseEndsDuringAHoldBack() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideMediaSegment(recording, 4))
+            .build();
+    var clock = new SteppedClock();
+    sink.holding(1);
+    var producer = producerFor(process, recording).clock(clock).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(30));
+    producer.releaseHeldFfmpeg();
+    sink.release();
+    awaiting().until(() -> sink.startedNames().size() == 4);
+    clock.advance(Duration.ofSeconds(4));
+
+    var pausedWithinItsRun = producer.pauseFfmpeg();
+
+    assertThat(pausedWithinItsRun).as("FFmpeg has run 4 s of the 5 s it owes").isFalse();
+    clock.advance(Duration.ofSeconds(1));
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    producer.resumeFfmpeg();
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
