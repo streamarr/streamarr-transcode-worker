@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -25,7 +26,9 @@ import lombok.NonNull;
  * fragment carried them. It closes once its grouper has closed it and an audio sample of a later
  * segment has arrived or the video has run a margin past its end, at once when the movie has no
  * sound track, or when the output ends. No segment takes audio past its interval, not even the last
- * when the audio outlasts the video.
+ * when the audio outlasts the video. An AV1 encode's {@code av1C} takes the sequence header of the
+ * first video sample, so the assembler holds that initialization segment back until the first
+ * fragment that carries video.
  */
 final class SegmentAssembler {
 
@@ -40,6 +43,8 @@ final class SegmentAssembler {
   private final boolean requiresSoundTrack;
   // Set by the initialization segment, which the reader returns before any fragment.
   private Optional<VideoSampleRewrite> sampleRewrite = Optional.empty();
+  // An AV1 encode's initialization segment, held until the first fragment that carries video.
+  private Optional<InitializationSegment> heldInitializationSegment = Optional.empty();
 
   /**
    * @param intervals the media segments' intervals, which decide the segment of each keyframe and
@@ -80,26 +85,71 @@ final class SegmentAssembler {
    * failure that ends the output once they are delivered.
    *
    * @throws FragmentedMp4Exception when the initialization segment it delivers declares no sound
-   *     track that it requires or other video than the decision, when a video sample that the copy
-   *     rewrites cannot be read, when the grouper refuses the fragment, when it holds a short video
-   *     sample or an audio sample that starts before the one before it, or when the rewritten
-   *     initialization segment or a segment it closes is larger than the segment cap once rebuilt,
-   *     after which nothing is delivered, not even the segments it would close
+   *     track that it requires or other video than the decision, when the first video sample of an
+   *     AV1 encode holds no sequence header that matches its {@code av1C}, when a video sample that
+   *     the copy rewrites cannot be read, when the grouper refuses the fragment, when it holds a
+   *     short video sample or an audio sample that starts before the one before it, or when the
+   *     rewritten initialization segment or a segment it closes is larger than the segment cap once
+   *     rebuilt, after which nothing is delivered, not even the segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
-        var delivered = InitializationSegmentRewrite.rewrite(videoDecision, initializationSegment);
-        requireWithinTheCap(delivered);
-        requireSoundTrack(delivered);
-        VideoOutputCheck.requireMatch(videoDecision, delivered);
-        sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
-        yield Closing.of(
-            List.of(
-                new ClosedSegment.Initialization(delivered, initializationSegment.bytes().length)));
+        var rewritten = InitializationSegmentRewrite.rewrite(videoDecision, initializationSegment);
+        var checked = delivered(initializationSegment, rewritten);
+        if (InitializationSegmentRewrite.awaitsFirstVideoSample(
+            videoDecision, initializationSegment)) {
+          // The checks have refused at once what the first video sample cannot change.
+          heldInitializationSegment = Optional.of(initializationSegment);
+          yield Closing.of(List.of());
+        }
+
+        yield Closing.of(List.of(checked));
       }
-      case Fragment fragment -> closingOf(checkedForShortSamples(rewritten(fragment)));
+      case Fragment fragment -> closingOf(fragment);
     };
+  }
+
+  private ClosedSegment.Initialization delivered(
+      InitializationSegment read, InitializationSegment delivered) {
+    requireWithinTheCap(delivered);
+    requireSoundTrack(delivered);
+    VideoOutputCheck.requireMatch(videoDecision, delivered);
+    sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
+    return new ClosedSegment.Initialization(delivered, read.bytes().length);
+  }
+
+  // The held initialization segment goes out ahead of whatever the first fragment with video
+  // closes.
+  private Closing closingOf(Fragment fragment) {
+    var initialization = initializationReleasedBy(fragment);
+    var closing = closingOfRewritten(checkedForShortSamples(rewritten(fragment)));
+    if (initialization.isEmpty()) {
+      return closing;
+    }
+
+    var closed = new ArrayList<ClosedSegment>();
+    closed.add(initialization.get());
+    closed.addAll(closing.closedSegments());
+    return new Closing(closed, closing.failure());
+  }
+
+  private Optional<ClosedSegment.Initialization> initializationReleasedBy(Fragment fragment) {
+    if (heldInitializationSegment.isEmpty() || fragment.videoSamples().isEmpty()) {
+      return Optional.empty();
+    }
+
+    var held = heldInitializationSegment.get();
+    heldInitializationSegment = Optional.empty();
+    var firstVideoSample = fragment.videoSamples().getFirst();
+    var sample =
+        ByteBuffer.wrap(
+                fragment.mediaDataBox(),
+                firstVideoSample.mediaDataPosition(),
+                Math.toIntExact(firstVideoSample.size()))
+            .slice();
+    return Optional.of(
+        delivered(held, InitializationSegmentRewrite.rewrite(videoDecision, held, sample)));
   }
 
   private void requireSoundTrack(InitializationSegment segment) {
@@ -111,10 +161,12 @@ final class SegmentAssembler {
 
   /**
    * Ends the grouping at the end of the output and drops the audio samples after the last segment's
-   * interval, which belong to segments that no keyframe opened because the video ended first. The
-   * assembler then holds only what the segments that {@link #finish()} closes need.
+   * interval, which belong to segments that no keyframe opened because the video ended first, and
+   * an AV1 encode's initialization segment held for a video sample that never came. The assembler
+   * then holds only what the segments that {@link #finish()} closes need.
    */
   void dropAudioAfterTheLastSegment() {
+    heldInitializationSegment = Optional.empty();
     grouper.finish().map(AwaitingSegment::of).ifPresent(awaitingAudio::addLast);
     if (!awaitingAudio.isEmpty()) {
       audio.discardAfter(awaitingAudio.getLast().sequenceNumber());
@@ -136,12 +188,13 @@ final class SegmentAssembler {
   }
 
   /**
-   * The memory of the fragments the assembler holds, their bytes and their samples' heap: for the
-   * open segment, or for the first one, for the segments awaiting audio, and for the audio samples
-   * it holds for later segments.
+   * The memory of the units the assembler holds: the bytes of an initialization segment it holds
+   * back, and the fragments' bytes and their samples' heap: for the open segment, or for the first
+   * one, for the segments awaiting audio, and for the audio samples it holds for later segments.
    */
   long heldBytes() {
-    return heldFragments().stream().mapToLong(Fragment::heldBytes).sum();
+    return heldInitializationSegment.map(segment -> (long) segment.bytes().length).orElse(0L)
+        + heldFragments().stream().mapToLong(Fragment::heldBytes).sum();
   }
 
   /** The audio samples dropped because they arrived after their segment closed. */
@@ -150,10 +203,12 @@ final class SegmentAssembler {
   }
 
   /**
-   * Drops every fragment the assembler holds, which the producer then never delivers: those of the
-   * open segment, those of the segments awaiting audio, and the audio samples held for later ones.
+   * Drops every unit the assembler holds, which the producer then never delivers: an initialization
+   * segment it holds back, the fragments of the open segment, those of the segments awaiting audio,
+   * and the audio samples held for later ones.
    */
   void discardHeldFragments() {
+    heldInitializationSegment = Optional.empty();
     grouper.discardOpenFragments();
     awaitingAudio.clear();
     audio.discard();
@@ -181,7 +236,7 @@ final class SegmentAssembler {
         .orElse(fragment);
   }
 
-  private Closing closingOf(Fragment fragment) {
+  private Closing closingOfRewritten(Fragment fragment) {
     audio
         .add(fragment)
         .ifPresent(

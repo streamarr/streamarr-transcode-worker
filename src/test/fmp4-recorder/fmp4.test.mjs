@@ -391,6 +391,31 @@ describe('deliveredInitializationSegment', () => {
     assert.deepEqual(deliveredInitializationSegment(recorded), recorded);
   });
 
+  // av1C fields of AV1 Main at level 2.0, 8-bit 4:2:0, then a sequence header, a metadata OBU and
+  // the in-band sequence header that replaces the first.
+  const AV1C_FIELDS = Buffer.from('81000c00', 'hex');
+  const WRITTEN_SEQUENCE_HEADER = Buffer.from('0a0e02000005157f8c02f81010101040', 'hex');
+  const CONTENT_LIGHT_LEVEL = Buffer.from('2a060103e8019080', 'hex');
+  const IN_BAND_SEQUENCE_HEADER = Buffer.from('0a0e02000005157f8c4af91010101040', 'hex');
+
+  function av01(...configurationObus) {
+    return box('av01', Buffer.alloc(78), box('av1C', AV1C_FIELDS, ...configurationObus), box('pasp', u32(1), u32(1)));
+  }
+
+  it('writes the in-band sequence header into an av1C record ahead of its other configOBUs', () => {
+    const recorded = segmentWith(av01(CONTENT_LIGHT_LEVEL, WRITTEN_SEQUENCE_HEADER));
+
+    const delivered = deliveredInitializationSegment(recorded, IN_BAND_SEQUENCE_HEADER);
+
+    assert.deepEqual(delivered, segmentWith(av01(IN_BAND_SEQUENCE_HEADER, CONTENT_LIGHT_LEVEL)));
+  });
+
+  it('keeps the bytes of an av1C record when no in-band sequence header is given', () => {
+    const recorded = segmentWith(av01(WRITTEN_SEQUENCE_HEADER));
+
+    assert.deepEqual(deliveredInitializationSegment(recorded), recorded);
+  });
+
   it('fails on a record that ends inside an array', () => {
     const truncated = box('hvcC', RECORD_FIELDS, Buffer.from([1, 0x27, 0, 1, 0, 9, 0x4e]));
 

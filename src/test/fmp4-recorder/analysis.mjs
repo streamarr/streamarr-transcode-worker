@@ -44,6 +44,23 @@ export function group(stream, period, startSequenceNumber) {
   return groupOnGrid(gridFragments(stream), { period, startSequenceNumber });
 }
 
+/**
+ * The sequence header OBU of an AV1 stream's first video sample, which the worker writes into av1C
+ * in place of the one FFmpeg wrote, because SVT-AV1 writes that one before it chooses its coding
+ * tools; null for other video, or a stream without a video sample. Every AV1 recording encodes.
+ */
+export function inBandSequenceHeaderOf(stream) {
+  const [first] = videoSamples(stream);
+  if (videoTrackOf(stream).sampleEntry !== 'av01' || first === undefined) {
+    return null;
+  }
+  const header = obusOf(stream.data, first).find((obu) => obu.type === OBU_SEQUENCE_HEADER);
+  if (header === undefined) {
+    throw new Mp4FormatError(`the first AV1 sample, at ${first.offset}, holds no sequence header`);
+  }
+  return stream.data.subarray(header.start, header.payload + header.size);
+}
+
 export function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -74,7 +91,9 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
         trexDefaultSampleDuration: track.trexDuration ?? null,
       })),
     },
-    deliveredInitializationSegment: digestOf(deliveredInitializationSegment(stream.initializationSegmentBytes)),
+    deliveredInitializationSegment: digestOf(
+      deliveredInitializationSegment(stream.initializationSegmentBytes, inBandSequenceHeaderOf(stream)),
+    ),
     segments: delivered.map((segment) => describeSegment(segment, stream)),
     discardedPreroll: preroll.map((segment) => describeSegment(segment, stream)),
     failure,

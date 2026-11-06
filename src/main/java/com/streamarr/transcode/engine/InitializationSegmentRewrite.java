@@ -4,6 +4,8 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -21,7 +23,12 @@ import java.util.stream.Collectors;
  * source keeps its parameter sets only in its samples, FFmpeg builds the record from the first
  * sample and copies that sample's SEI messages into it. Attempts that start at different keyframes
  * would then write different records, which ADR 0037 forbids, so the record holds only what the job
- * names. The samples keep their SEI messages.
+ * names. The samples keep their SEI messages. An AV1 encode's {@code av1C} record holds the
+ * sequence header of the first video sample in place of the one that FFmpeg wrote: SVT-AV1 writes
+ * that one before it chooses its coding tools, and puts another in the video stream itself. Every
+ * sequence header of a coded video sequence must match (AV1 7.5), and a decoder can initialize from
+ * {@code av1C}. The encoder settings alone decide the in-band header, so every attempt writes the
+ * same record.
  */
 final class InitializationSegmentRewrite {
 
@@ -33,6 +40,7 @@ final class InitializationSegmentRewrite {
   private static final int PREFIX_SEI = 39;
   // The av1C fields before its configOBUs.
   private static final int AV1C_FIELDS = 4;
+  private static final int OBU_SEQUENCE_HEADER = 1;
   // A box header's type follows its 32-bit size, in the compact and the 64-bit form alike.
   private static final int TYPE_OFFSET = 4;
 
@@ -45,8 +53,12 @@ final class InitializationSegmentRewrite {
   // The rewrite that strips av1C's configOBUs as the copy strips its samples; empty for a decision
   // that lists no rewrite of samples.
   private final Optional<Av1SampleRewrite> configurationObuRewrite;
+  // The sequence header that av1C takes from the first video sample; empty for any video but an AV1
+  // encode.
+  private final Optional<Av1SequenceHeader> inBandSequenceHeader;
 
-  private InitializationSegmentRewrite(VideoDecision decision) {
+  private InitializationSegmentRewrite(
+      VideoDecision decision, Optional<Av1SequenceHeader> inBandSequenceHeader) {
     this.seiUnits = plannedSeiUnitsOf(decision);
     var dolbyVision = plannedDolbyVisionOf(decision);
     this.renamedHevcEntry =
@@ -58,6 +70,7 @@ final class InitializationSegmentRewrite {
             .filter(_ -> decision.lists(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
             .map(output -> DolbyVisionRecord.normalizedFor(output).box());
     this.configurationObuRewrite = configurationObuRewriteOf(decision);
+    this.inBandSequenceHeader = inBandSequenceHeader;
   }
 
   private static Optional<Av1SampleRewrite> configurationObuRewriteOf(VideoDecision decision) {
@@ -83,10 +96,44 @@ final class InitializationSegmentRewrite {
    *     FragmentedMp4Exception.Reason#OUTPUT_MISMATCH} when a record ends before its arrays do
    */
   static InitializationSegment rewrite(VideoDecision decision, InitializationSegment segment) {
-    var rewrite = new InitializationSegmentRewrite(decision);
+    return new InitializationSegmentRewrite(decision, Optional.empty()).rebuilt(segment);
+  }
+
+  /**
+   * Whether the rewrite needs the first video sample, which an AV1 encode's {@code av1C} takes its
+   * sequence header from.
+   *
+   * @throws FragmentedMp4Exception with {@link FragmentedMp4Exception.Reason#MALFORMED_BOX} when a
+   *     box on the way to the video sample entry is missing or too short
+   */
+  static boolean awaitsFirstVideoSample(VideoDecision decision, InitializationSegment segment) {
+    return decision instanceof VideoDecision.Encode
+        && CodecConfigurationReader.firstVideoSampleEntryOf(segment)
+            .filter(sampleEntry -> sampleEntry.type().equals("av01"))
+            .isPresent();
+  }
+
+  /**
+   * The rewrite of an AV1 encode's initialization segment, whose {@code av1C} holds the first video
+   * sample's sequence header ahead of its other configOBUs.
+   *
+   * @throws FragmentedMp4Exception with {@link FragmentedMp4Exception.Reason#OUTPUT_MISMATCH} when
+   *     the sample holds no sequence header, the {@code av1C} ends before its configOBUs, or its
+   *     profile, level, tier, bit depth or chroma fields differ from the sequence header's; with
+   *     {@link FragmentedMp4Exception.Reason#MALFORMED_BOX} when the sample's OBUs before the
+   *     sequence header, the sequence header itself, or the {@code av1C}'s configOBUs cannot be
+   *     read
+   */
+  static InitializationSegment rewrite(
+      VideoDecision decision, InitializationSegment segment, ByteBuffer firstVideoSample) {
+    var inBandSequenceHeader = Av1SequenceHeader.firstIn(firstVideoSample);
+    return new InitializationSegmentRewrite(decision, Optional.of(inBandSequenceHeader))
+        .rebuilt(segment);
+  }
+
+  private InitializationSegment rebuilt(InitializationSegment segment) {
     return new InitializationSegment(
-        rewrite.rebuiltChildren(
-            "initialization segment", ByteBuffer.wrap(segment.bytes()), Set.of()));
+        rebuiltChildren("initialization segment", ByteBuffer.wrap(segment.bytes()), Set.of()));
   }
 
   private static Optional<PlannedCopyOutput.DolbyVisionOutput> plannedDolbyVisionOf(
@@ -137,7 +184,7 @@ final class InitializationSegmentRewrite {
       case "stsd" -> rebuiltAfter(type, body, STSD_FIELDS);
       case "hvc1", "av01" -> rebuiltVideoSampleEntry(type, body);
       case "hvcC" -> readable(() -> withPlannedSeiArray(body));
-      case "av1C" -> withoutStrippedConfigurationObus(body);
+      case "av1C" -> withInBandSequenceHeader(withoutStrippedConfigurationObus(body));
       default -> bytesOf(body);
     };
   }
@@ -215,6 +262,54 @@ final class InitializationSegmentRewrite {
     return concat(
         bytesOf(av1C.slice(0, AV1C_FIELDS)),
         bytesOf(configurationObuRewrite.get().rewrite(configurationObus)));
+  }
+
+  // The in-band sequence header replaces any sequence header OBU among the configOBUs, ahead of
+  // their other OBUs, once av1C's profile, level, tier, bit depth and chroma fields match it, which
+  // keeps the codec string that the record declares.
+  private byte[] withInBandSequenceHeader(byte[] av1C) {
+    if (inBandSequenceHeader.isEmpty()) {
+      return av1C;
+    }
+
+    var header = inBandSequenceHeader.get();
+    if (av1C.length < AV1C_FIELDS) {
+      throw new FragmentedMp4Exception(
+          Reason.OUTPUT_MISMATCH, "the AV1 encode's av1C ends before its configOBUs");
+    }
+
+    var declared = HexFormat.of().formatHex(av1C, 1, 3);
+    var inBand =
+        HexFormat.of()
+            .formatHex(
+                new byte[] {(byte) header.profileAndLevel(), (byte) header.tierDepthAndChroma()});
+    if (!declared.equals(inBand)) {
+      throw new FragmentedMp4Exception(
+          Reason.OUTPUT_MISMATCH,
+          "the AV1 encode's av1C declares the codec fields "
+              + declared
+              + " where its in-band sequence header declares "
+              + inBand);
+    }
+
+    var configurationObus = ByteBuffer.wrap(av1C, AV1C_FIELDS, av1C.length - AV1C_FIELDS).slice();
+    return concat(
+        Arrays.copyOf(av1C, AV1C_FIELDS), header.obu(), withoutSequenceHeaders(configurationObus));
+  }
+
+  private static byte[] withoutSequenceHeaders(ByteBuffer configurationObus) {
+    var kept = new ByteArrayOutputStream();
+    var position = 0;
+    while (position < configurationObus.limit()) {
+      var obu = Av1Obu.at(configurationObus, position);
+      if (obu.type() != OBU_SEQUENCE_HEADER) {
+        kept.writeBytes(bytesOf(configurationObus.slice(obu.start(), obu.end() - obu.start())));
+      }
+
+      position = obu.end();
+    }
+
+    return kept.toByteArray();
   }
 
   // array_completeness stays 0: the samples keep their own SEI messages (ISO/IEC 14496-15

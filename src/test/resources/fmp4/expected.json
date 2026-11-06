@@ -4821,7 +4821,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1357,
-        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e"
+        "sha256": "b0ceaee5af00a5bff4a9f63546d300471cdc8ce2afe17988de7dabc173d1ef90"
       },
       "segments": [
         {
@@ -5442,7 +5442,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1357,
-        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e"
+        "sha256": "b0ceaee5af00a5bff4a9f63546d300471cdc8ce2afe17988de7dabc173d1ef90"
       },
       "segments": [
         {
@@ -6606,7 +6606,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1357,
-        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e"
+        "sha256": "b0ceaee5af00a5bff4a9f63546d300471cdc8ce2afe17988de7dabc173d1ef90"
       },
       "segments": [
         {
