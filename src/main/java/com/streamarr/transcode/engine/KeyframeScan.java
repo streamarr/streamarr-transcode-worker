@@ -149,18 +149,18 @@ final class KeyframeScan {
 
   // A packet without a presentation time counts at its decode time, as a raw H.264 stream's does.
   private Optional<VideoPacket> readRecord(String line, Optional<TimeBase> timeBase) {
-    var record = RECORD.matcher(line);
-    if (!record.find()) {
+    var packetRecord = RECORD.matcher(line);
+    if (!packetRecord.find()) {
       return Optional.empty();
     }
 
-    bytesRead.accept(Long.parseLong(record.group(4)));
-    if (!VIDEO_STREAM.equals(record.group(1))) {
+    bytesRead.accept(Long.parseLong(packetRecord.group(4)));
+    if (!VIDEO_STREAM.equals(packetRecord.group(1))) {
       return Optional.empty();
     }
 
-    var decodeTime = Long.parseLong(record.group(2));
-    var presentationTime = Long.parseLong(record.group(3));
+    var decodeTime = Long.parseLong(packetRecord.group(2));
+    var presentationTime = Long.parseLong(packetRecord.group(3));
     if (presentationTime == NO_TIME) {
       presentationTime = decodeTime;
     }
@@ -177,14 +177,14 @@ final class KeyframeScan {
         new VideoPacket(
             durationOf(timeBase.get(), presentationTime),
             durationOf(timeBase.get(), decodeTime),
-            isKeyframe(record)));
+            isKeyframe(packetRecord)));
   }
 
   // A keyframe that its container marks to decode but not to present, as an edit list marks its
   // preroll, still starts decoding.
-  private static boolean isKeyframe(Matcher record) {
+  private static boolean isKeyframe(Matcher packetRecord) {
     var flags =
-        Optional.ofNullable(record.group(5))
+        Optional.ofNullable(packetRecord.group(5))
             .map(value -> Integer.parseUnsignedInt(value, 16))
             .orElse(KEYFRAME);
     return (flags & KEYFRAME) != 0;

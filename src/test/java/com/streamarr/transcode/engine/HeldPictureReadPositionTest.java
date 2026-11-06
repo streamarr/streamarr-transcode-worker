@@ -27,7 +27,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("Held Picture Read Position Tests")
 class HeldPictureReadPositionTest {
 
-  private final UUID attemptId = UUID.randomUUID();
   private final AtomicLong bytesRead = new AtomicLong();
 
   @Test
@@ -288,7 +287,7 @@ class HeldPictureReadPositionTest {
 
   @Test
   @DisplayName("Should fail the search when no keyframe lies before the read-back")
-  void shouldFailTheSearchWhenNoKeyframeLiesBeforeTheReadBack() throws Exception {
+  void shouldFailTheSearchWhenNoKeyframeLiesBeforeTheReadBack() {
     var source = new ScriptedKeyframeSource(List.of(), 20);
     var engine = engineReading(source);
     var request = heldRequest(14, 24);
@@ -313,7 +312,7 @@ class HeldPictureReadPositionTest {
 
   @Test
   @DisplayName("Should fail the search when a scan's FFmpeg exits with an error")
-  void shouldFailTheSearchWhenAScansFfmpegExitsWithAnError() throws Exception {
+  void shouldFailTheSearchWhenAScansFfmpegExitsWithAnError() {
     var engine =
         engine(
             ScriptedProcessLauncher.forCommands(

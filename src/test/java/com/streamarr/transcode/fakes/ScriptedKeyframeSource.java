@@ -79,9 +79,11 @@ public final class ScriptedKeyframeSource {
         .filter(time -> isRead(time, seek, until))
         .forEach(time -> framecrc.append(videoRecord(time)));
     for (var millis = from.toMillis(); millis < until.toMillis(); millis += PACKET_MILLIS) {
-      framecrc.append(
-          "1, %d, %d, %d, %d, 0x0a1b2c3d\n"
-              .formatted(millis, millis, PACKET_MILLIS, AUDIO_PACKET_BYTES));
+      framecrc
+          .append(
+              "1, %d, %d, %d, %d, 0x0a1b2c3d"
+                  .formatted(millis, millis, PACKET_MILLIS, AUDIO_PACKET_BYTES))
+          .append('\n');
       bytesWritten += AUDIO_PACKET_BYTES;
     }
 
@@ -106,13 +108,14 @@ public final class ScriptedKeyframeSource {
   private String videoRecord(Duration presentationTime) {
     bytesWritten += VIDEO_PACKET_BYTES;
     var flags = keyframes.contains(presentationTime) ? "" : ", F=0x0";
-    return "0, %d, %d, %d, %d, 0x0a1b2c3d%s\n"
-        .formatted(
-            presentationTime.minus(REORDER_DELAY).toMillis(),
-            presentationTime.toMillis(),
-            PACKET_MILLIS,
-            VIDEO_PACKET_BYTES,
-            flags);
+    return "0, %d, %d, %d, %d, 0x0a1b2c3d%s"
+            .formatted(
+                presentationTime.minus(REORDER_DELAY).toMillis(),
+                presentationTime.toMillis(),
+                PACKET_MILLIS,
+                VIDEO_PACKET_BYTES,
+                flags)
+        + "\n";
   }
 
   private byte[] landingCheck(Duration seek) {

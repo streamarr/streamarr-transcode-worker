@@ -94,6 +94,13 @@ public class FfmpegCommandBuilder {
   // framecrc of the chosen source streams, so no output copies the source's metadata or chapters.
   private static final List<String> NO_SOURCE_METADATA =
       List.of("-map_metadata", "-1", "-map_chapters", "-1");
+  private static final String STANDARD_OUTPUT = "pipe:1";
+  private static final String FRAMECRC = "framecrc";
+  private static final List<String> FRAMECRC_ON_STANDARD_OUTPUT =
+      List.of("-f", FRAMECRC, STANDARD_OUTPUT);
+  // A keyframe scan's options before its seek: its times lie on the attempt's zero-based timeline.
+  private static final List<String> KEYFRAME_SCAN_OPTIONS =
+      List.of("-nostdin", "-v", "quiet", "-copyts", "-start_at_zero");
   private static final List<String> SOURCE_COPY_OUTPUT =
       List.of(
           "-f",
@@ -106,7 +113,7 @@ public class FfmpegCommandBuilder {
           "1000000",
           FLUSH_PACKETS,
           "1",
-          "pipe:1");
+          STANDARD_OUTPUT);
 
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
@@ -299,7 +306,7 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
     addSourceAudioStreams(cmd, decision.audioDecision(), source);
     cmd.addAll(NO_SOURCE_METADATA);
-    cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
+    cmd.addAll(List.of("-f", FRAMECRC, FLUSH_PACKETS, "1", "pipe:2"));
   }
 
   // The exclusions undo both maps of a named stream that is no audio stream, and the PCM encoder
@@ -326,23 +333,13 @@ public class FfmpegCommandBuilder {
    */
   List<String> buildSeekLandingCommand(
       Path source, TranscodeDecision decision, Duration seekPosition) {
-    var cmd =
-        new ArrayList<>(
-            List.of(
-                ffmpegPath,
-                "-nostdin",
-                "-v",
-                "quiet",
-                "-copyts",
-                "-start_at_zero",
-                "-ss",
-                seekArgument(seekPosition),
-                "-i",
-                source.toString()));
+    var cmd = new ArrayList<>(List.of(ffmpegPath));
+    cmd.addAll(KEYFRAME_SCAN_OPTIONS);
+    cmd.addAll(List.of("-ss", seekArgument(seekPosition), "-i", source.toString()));
     addChosenSourceStreams(cmd, decision, 0);
     cmd.addAll(List.of("-c", "copy", "-copyinkf", "-copypriorss", "1", "-frames:v", "1"));
     cmd.addAll(NO_SOURCE_METADATA);
-    cmd.addAll(List.of("-f", "framecrc", "pipe:1"));
+    cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
     return List.copyOf(cmd);
   }
 
@@ -354,9 +351,8 @@ public class FfmpegCommandBuilder {
    */
   List<String> buildKeyframeScanCommand(
       Path source, TranscodeDecision decision, Duration from, Duration length) {
-    var cmd =
-        new ArrayList<>(
-            List.of(ffmpegPath, "-nostdin", "-v", "quiet", "-copyts", "-start_at_zero"));
+    var cmd = new ArrayList<>(List.of(ffmpegPath));
+    cmd.addAll(KEYFRAME_SCAN_OPTIONS);
     if (from.isPositive()) {
       cmd.addAll(List.of("-ss", seekArgument(from)));
     }
@@ -365,7 +361,7 @@ public class FfmpegCommandBuilder {
     addChosenSourceStreams(cmd, decision, 0);
     cmd.addAll(List.of("-c", "copy", "-copyinkf"));
     cmd.addAll(NO_SOURCE_METADATA);
-    cmd.addAll(List.of("-f", "framecrc", "pipe:1"));
+    cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
     return List.copyOf(cmd);
   }
 
@@ -376,7 +372,7 @@ public class FfmpegCommandBuilder {
   private static void addVideoTimingOutput(List<String> cmd, VideoDecision video) {
     cmd.addAll(List.of("-map", "0:" + video.streamIndex(), "-c:v", "copy"));
     cmd.addAll(NO_SOURCE_METADATA);
-    cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1"));
+    cmd.addAll(List.of("-f", FRAMECRC, FLUSH_PACKETS, "1"));
   }
 
   // The encode of the copy reads the copy's video on its standard input, where FFmpeg reads no
@@ -1193,7 +1189,7 @@ public class FfmpegCommandBuilder {
             String.join("+", MP4_MOVFLAGS),
             "-frag_duration",
             String.valueOf(TimeUnit.MICROSECONDS.convert(fragmentationTarget)),
-            "pipe:1"));
+            STANDARD_OUTPUT));
   }
 
   @Builder
