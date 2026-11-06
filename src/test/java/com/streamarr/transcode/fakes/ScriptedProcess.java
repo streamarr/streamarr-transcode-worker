@@ -70,6 +70,7 @@ public final class ScriptedProcess extends Process {
   private final Optional<RuntimeException> uncheckedReadFailure;
   private final boolean resumesOnQuit;
   private final boolean ignoresTermination;
+  private final boolean keepsRunningWhenPaused;
   private final boolean lingersAfterKill;
   private final boolean readsMediaFromStdin;
   private final OptionalInt stdinCapacity;
@@ -108,6 +109,7 @@ public final class ScriptedProcess extends Process {
       RuntimeException failReadWith,
       boolean resumesOnQuit,
       boolean ignoresTermination,
+      boolean keepsRunningWhenPaused,
       boolean lingersAfterKill,
       boolean readsMediaFromStdin,
       Integer stdinCapacity,
@@ -120,6 +122,7 @@ public final class ScriptedProcess extends Process {
     this.uncheckedReadFailure = Optional.ofNullable(failReadWith);
     this.resumesOnQuit = resumesOnQuit;
     this.ignoresTermination = ignoresTermination;
+    this.keepsRunningWhenPaused = keepsRunningWhenPaused;
     this.lingersAfterKill = lingersAfterKill;
     this.readsMediaFromStdin = readsMediaFromStdin;
     this.stdinCapacity = optionalOffset(stdinCapacity);
@@ -167,6 +170,11 @@ public final class ScriptedProcess extends Process {
     if (quit) {
       quit();
     }
+  }
+
+  /** Whether no pause reaches the process, as on a system where no pidfd names FFmpeg. */
+  public boolean keepsRunningWhenPaused() {
+    return keepsRunningWhenPaused;
   }
 
   public synchronized boolean isPausedBySignal() {

@@ -15,6 +15,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -77,6 +78,7 @@ public final class Producer {
   private final Duration stallTimeout;
   private final StallWatchdog watchdog;
   private final ProductionTimer productionTimer;
+  private final MonotonicClock clock;
   private final String threadName;
   private final SourceEndRule sourceEndRule;
   private final int startSequenceNumber;
@@ -94,6 +96,11 @@ public final class Producer {
   // Guarded by lock. Once the attempt is decided or its output has ended, FFmpeg stays running.
   private boolean ffmpegPaused;
   private boolean pausesEnded;
+  // Guarded by lock. After a resume, FFmpeg runs for as long as it was paused and until the sink
+  // accepts another media segment before it pauses again.
+  private long pausedAtNanos;
+  private OptionalLong restEndsAtNanos = OptionalLong.empty();
+  private boolean deliveredSinceResume = true;
   private List<PausedProcess> pausedProcesses = List.of();
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
@@ -102,6 +109,7 @@ public final class Producer {
     this.stallTimeout = settings.stallTimeout();
     this.watchdog = new StallWatchdog(stallTimeout);
     this.productionTimer = new ProductionTimer(settings.clock());
+    this.clock = settings.clock();
     this.reader =
         new FragmentedMp4Reader(
             watchdog.watch(ffmpeg.output()), MAXIMUM_SEGMENT_BYTES, this::tryAdmit);
@@ -261,20 +269,32 @@ public final class Producer {
 
   /**
    * Stops every FFmpeg process of the attempt until {@link #resumeFfmpeg}, so that another job
-   * attempt gets the CPU. The time FFmpeg spends paused counts neither as production time nor
-   * toward the stall timeout. Does nothing while FFmpeg is already paused, once the attempt has an
-   * outcome and once FFmpeg's output has ended.
+   * attempt gets the CPU, and answers whether it did. The time FFmpeg spends paused counts neither
+   * as production time nor toward the stall timeout. Does nothing while FFmpeg is already paused,
+   * once the attempt has an outcome, once FFmpeg's output has ended, and after a resume until
+   * FFmpeg has run for as long as it was paused and the sink has accepted another media segment, so
+   * that pauses take at most half of FFmpeg's time and at most one pause falls between two media
+   * segments.
    */
-  public void pauseFfmpeg() {
+  public boolean pauseFfmpeg() {
     synchronized (lock) {
-      if (ffmpegPaused || pausesEnded) {
-        return;
+      if (ffmpegPaused || pausesEnded || !deliveredSinceResume || isResting()) {
+        return false;
+      }
+
+      // One stopped process of a pipe holds the other back through the pipe between them.
+      var stopped =
+          ffmpeg.processes().stream().map(launcher::pause).flatMap(Optional::stream).toList();
+      if (stopped.isEmpty()) {
+        return false;
       }
 
       ffmpegPaused = true;
+      pausedAtNanos = clock.nanoTime();
       productionTimer.pause();
       watchdog.pause();
-      pausedProcesses = ffmpeg.processes().stream().map(launcher::pause).toList();
+      pausedProcesses = stopped;
+      return true;
     }
   }
 
@@ -292,10 +312,18 @@ public final class Producer {
     }
 
     ffmpegPaused = false;
+    var resumedAt = clock.nanoTime();
+    restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
+    deliveredSinceResume = false;
     pausedProcesses.forEach(PausedProcess::resume);
     pausedProcesses = List.of();
     watchdog.resume();
     productionTimer.resume();
+  }
+
+  // Guarded by lock.
+  private boolean isResting() {
+    return restEndsAtNanos.isPresent() && clock.nanoTime() - restEndsAtNanos.getAsLong() < 0;
   }
 
   // FFmpeg must run to quit, to exit after its output ends and to be terminated.
@@ -839,6 +867,7 @@ public final class Producer {
       deliveryInFlight = Optional.empty();
       if (acceptedMediaSegment.isPresent()) {
         lastDeliveredMediaSegment = acceptedMediaSegment;
+        deliveredSinceResume = true;
       }
 
       lock.notifyAll();

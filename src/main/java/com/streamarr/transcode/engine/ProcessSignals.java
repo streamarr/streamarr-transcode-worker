@@ -7,6 +7,7 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.invoke.MethodHandle;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -41,16 +42,14 @@ final class ProcessSignals {
           FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG),
           Linker.Option.firstVariadicArg(1));
 
-  private static final PausedProcess NOTHING_TO_RESUME = () -> {};
-
   private ProcessSignals() {}
 
   /**
    * Stops the process unless it has exited or no pidfd names it; the returned pause continues it.
    */
-  static PausedProcess stop(Process process) {
+  static Optional<PausedProcess> stop(Process process) {
     if (!LINUX) {
-      return NOTHING_TO_RESUME;
+      return Optional.empty();
     }
 
     return invoke(() -> stopThroughPidfd(process));
@@ -58,19 +57,19 @@ final class ProcessSignals {
 
   // A child whose handle is alive after the pidfd opened still held its pid then, so the pidfd
   // names the child. The handle compares the process's start time, which Process.isAlive does not.
-  private static PausedProcess stopThroughPidfd(Process process) throws Throwable {
+  private static Optional<PausedProcess> stopThroughPidfd(Process process) throws Throwable {
     var pidfd = (long) PIDFD_OPEN.invokeExact(SYS_PIDFD_OPEN, process.pid(), 0L);
     if (pidfd < 0) {
-      return NOTHING_TO_RESUME;
+      return Optional.empty();
     }
 
     if (!process.toHandle().isAlive()) {
       close(pidfd);
-      return NOTHING_TO_RESUME;
+      return Optional.empty();
     }
 
     sendThroughPidfd(pidfd, SIGSTOP);
-    return new PidfdPause(pidfd);
+    return Optional.of(new PidfdPause(pidfd));
   }
 
   // pidfd_send_signal(2) fails only for a child that has exited, which needs no signal.
@@ -83,7 +82,7 @@ final class ProcessSignals {
   }
 
   @SuppressWarnings("java:S1181") // MethodHandle.invokeExact declares Throwable.
-  private static PausedProcess invoke(NativeCall call) {
+  private static Optional<PausedProcess> invoke(NativeCall call) {
     try {
       return call.run();
     } catch (RuntimeException | Error e) {
@@ -95,7 +94,7 @@ final class ProcessSignals {
 
   @FunctionalInterface
   private interface NativeCall {
-    PausedProcess run() throws Throwable;
+    Optional<PausedProcess> run() throws Throwable;
   }
 
   // Resumes once, and closes the pidfd with that resume.
@@ -122,7 +121,7 @@ final class ProcessSignals {
               close(pidfd);
             }
 
-            return NOTHING_TO_RESUME;
+            return Optional.empty();
           });
     }
   }

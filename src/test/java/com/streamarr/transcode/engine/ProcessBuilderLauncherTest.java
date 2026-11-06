@@ -77,7 +77,7 @@ class ProcessBuilderLauncherTest {
       var output = process.getInputStream();
       await().atMost(OUTCOME_LIMIT).until(() -> output.available() > 0);
 
-      var paused = launcher.pause(process);
+      var paused = launcher.pause(process).orElseThrow();
       var lastSeen = new AtomicInteger(-1);
       await()
           .pollInterval(Duration.ofMillis(100))
@@ -109,9 +109,10 @@ class ProcessBuilderLauncherTest {
             List.of("bash", "-c", "while :; do printf x; sleep 0.01; done"), UUID.randomUUID());
     try {
       var output = process.getInputStream();
-      launcher.pause(process);
+      var paused = launcher.pause(process);
       var before = output.available();
 
+      assertThat(paused).isEmpty();
       await().atMost(OUTCOME_LIMIT).until(() -> output.available() > before);
     } finally {
       process.destroyForcibly();
@@ -119,13 +120,14 @@ class ProcessBuilderLauncherTest {
   }
 
   @Test
-  @DisplayName("Should leave a process that has exited alone when pausing and resuming it")
-  void shouldLeaveAProcessThatHasExitedAloneWhenPausingAndResumingIt() throws Exception {
+  @DisplayName("Should leave a process that has exited alone when pausing it")
+  void shouldLeaveAProcessThatHasExitedAloneWhenPausingIt() throws Exception {
     var process = launcher.launch(List.of("bash", "-c", "exit 0"), UUID.randomUUID());
     assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
 
-    launcher.pause(process).resume();
+    var paused = launcher.pause(process);
 
+    assertThat(paused).isEmpty();
     assertThat(process.exitValue()).isZero();
   }
 
@@ -138,7 +140,7 @@ class ProcessBuilderLauncherTest {
     var running = launcher.launch(List.of("sleep", "60"), UUID.randomUUID());
     var observed = new LivenessTurnsUnreadable(running, exited);
     try {
-      var paused = launcher.pause(observed);
+      var paused = launcher.pause(observed).orElseThrow();
       await().atMost(OUTCOME_LIMIT).until(() -> linuxProcessState(running.pid()) == 'T');
       observed.makeLivenessUnreadable();
 
@@ -161,8 +163,9 @@ class ProcessBuilderLauncherTest {
     assertThat(child.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
     var successor = launcher.launch(List.of("sleep", "60"), UUID.randomUUID());
     try {
-      launcher.pause(new ReapedChildWhosePidWasTaken(child, successor.pid()));
+      var paused = launcher.pause(new ReapedChildWhosePidWasTaken(child, successor.pid()));
 
+      assertThat(paused).isEmpty();
       await()
           .during(Duration.ofMillis(500))
           .atMost(OUTCOME_LIMIT)

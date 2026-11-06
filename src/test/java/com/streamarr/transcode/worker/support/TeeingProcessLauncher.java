@@ -11,6 +11,7 @@ import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,7 +44,7 @@ public final class TeeingProcessLauncher implements ProcessLauncher {
   }
 
   @Override
-  public PausedProcess pause(Process process) {
+  public Optional<PausedProcess> pause(Process process) {
     return launcher.pause(((TeedProcess) process).process);
   }
 
