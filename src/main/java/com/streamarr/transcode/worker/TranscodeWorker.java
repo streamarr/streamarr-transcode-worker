@@ -323,7 +323,7 @@ public final class TranscodeWorker implements AutoCloseable {
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
   private void startVariant(StartVariantCommand command) {
     if (WorkerVariantJobMapper.namesAudioLayout(command.getJob())) {
-      startReadingAudio(command);
+      startReading(command);
       return;
     }
 
@@ -340,17 +340,17 @@ public final class TranscodeWorker implements AutoCloseable {
   // A job that names its audio's output layout needs the source layout and sample facts (ADR 0050).
   // ffprobe reads them on the attempt's own thread, so the control stream keeps delivering
   // commands while it reads: a stop for the attempt or the session's end interrupts the read.
-  private synchronized void startReadingAudio(StartVariantCommand command) {
+  private synchronized void startReading(StartVariantCommand command) {
     var jobAttemptId = fromProto(command.getJob().getJobAttemptId());
     var reading =
         Thread.ofVirtual()
             .name("read-audio-" + jobAttemptId)
-            .unstarted(() -> readAudioAndStart(command));
+            .unstarted(() -> readAndStart(command));
     pendingReads.put(jobAttemptId, new PendingRead(command.getJob(), reading));
     reading.start();
   }
 
-  private void readAudioAndStart(StartVariantCommand command) {
+  private void readAndStart(StartVariantCommand command) {
     var chosenAudio = readChosenAudio(command.getJob());
     if (startAfterRead(command, chosenAudio) instanceof Orphaned(var producer)) {
       producer.stop();
