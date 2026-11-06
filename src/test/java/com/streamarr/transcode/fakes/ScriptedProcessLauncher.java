@@ -64,6 +64,16 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
     return process;
   }
 
+  @Override
+  public void pause(Process process) {
+    ((ScriptedProcess) process).pauseBySignal();
+  }
+
+  @Override
+  public void resume(Process process) {
+    ((ScriptedProcess) process).resumeBySignal();
+  }
+
   public boolean hasLaunched(UUID jobAttemptId) {
     return launches.containsKey(jobAttemptId);
   }

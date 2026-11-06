@@ -23,6 +23,7 @@ import com.streamarr.transcode.engine.SourceEnd.EndedEarly;
 import com.streamarr.transcode.engine.SourceEnd.StreamEnd;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.AudioInterval;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
@@ -1041,6 +1042,79 @@ class ProducerTest {
         .hasSize(recording.segments().size())
         .extracting(ProductionTiming::productionTime)
         .containsOnly(Duration.ZERO);
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the time the worker pauses FFmpeg for a seek out of a media segment's"
+          + " production time")
+  void shouldLeaveTheTimeTheWorkerPausesFfmpegForASeekOutOfAMediaSegmentsProductionTime() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(offsetOfMediaSegment(recording, 0))
+            .build();
+    var clock = new SteppedClock();
+    var producer = producerFor(process, recording).clock(clock).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+
+    producer.pauseFfmpeg();
+    var pausedBySignal = process.isPausedBySignal();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(2));
+    process.resume();
+
+    assertThat(pausedBySignal).isTrue();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(sink.mediaTimings())
+        .extracting(ProductionTiming::productionTime)
+        .startsWith(Duration.ofSeconds(2))
+        .containsOnly(Duration.ofSeconds(2), Duration.ZERO);
+    assertThat(process.isPausedBySignal()).isFalse();
+  }
+
+  @Test
+  @DisplayName("Should not fail the attempt as an encoder stall while the worker pauses FFmpeg")
+  void shouldNotFailTheAttemptAsAnEncoderStallWhileTheWorkerPausesFfmpeg() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(100)).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+
+    producer.pauseFfmpeg();
+
+    await()
+        .during(Duration.ofMillis(500))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
+    producer.resumeFfmpeg();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName("Should leave FFmpeg running when the worker pauses an attempt that has an outcome")
+  void shouldLeaveFfmpegRunningWhenTheWorkerPausesAnAttemptThatHasAnOutcome() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var producer = producerFor(process, recording).start();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+
+    producer.pauseFfmpeg();
+
+    assertThat(process.isPausedBySignal()).isFalse();
   }
 
   @Test
@@ -3985,7 +4059,7 @@ class ProducerTest {
   // A producer of this process's output, with its own budget and generous bounds, to adjust.
   private Producer.ProducerBuilder producerLaunching(ScriptedProcess process) {
     return Producer.builder()
-        .launcher((command, jobAttemptId) -> process)
+        .launcher(new ScriptedProcessLauncher(_ -> process))
         .pipeline(new FfmpegPipeline.SingleProcess(List.of("ffmpeg")))
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))

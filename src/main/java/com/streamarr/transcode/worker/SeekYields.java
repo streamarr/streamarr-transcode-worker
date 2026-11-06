@@ -1,0 +1,86 @@
+package com.streamarr.transcode.worker;
+
+import com.streamarr.transcode.engine.Producer;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import lombok.NonNull;
+
+/**
+ * The job attempts that a worker session pauses while a seek's first media segment is pending on
+ * the worker (ADR 0044, seek priority). Each yield replaces the previous one's attempts, and each
+ * paused attempt resumes at the latest once the yield's hold limit has passed.
+ */
+final class SeekYields {
+
+  private final ScheduledExecutorService timers;
+
+  // Guarded by this monitor.
+  private final Map<UUID, PausedAttempt> paused = new HashMap<>();
+  private long holds;
+
+  SeekYields(@NonNull ScheduledExecutorService timers) {
+    this.timers = timers;
+  }
+
+  /**
+   * Pauses each listed attempt that runs, resumes each paused attempt that is not listed, and
+   * starts every listed attempt's hold limit afresh. A hold limit that is not positive pauses
+   * nothing.
+   */
+  synchronized void yieldTo(
+      @NonNull Set<UUID> attemptIds,
+      @NonNull Duration holdLimit,
+      @NonNull Function<UUID, Optional<Producer>> runningProducers) {
+    var listed = holdLimit.isPositive() ? attemptIds : Set.<UUID>of();
+    var resumed = paused.entrySet().iterator();
+    while (resumed.hasNext()) {
+      var entry = resumed.next();
+      if (!listed.contains(entry.getKey())) {
+        entry.getValue().release().cancel(false);
+        entry.getValue().producer().resumeFfmpeg();
+        resumed.remove();
+      }
+    }
+
+    listed.forEach(
+        attemptId ->
+            runningProducers
+                .apply(attemptId)
+                .ifPresent(producer -> hold(attemptId, producer, holdLimit)));
+  }
+
+  // Guarded by this monitor.
+  private void hold(UUID attemptId, Producer producer, Duration holdLimit) {
+    var previous = paused.remove(attemptId);
+    if (previous != null) {
+      previous.release().cancel(false);
+    }
+
+    producer.pauseFfmpeg();
+    var hold = ++holds;
+    var release =
+        timers.schedule(() -> release(attemptId, hold), holdLimit.toNanos(), TimeUnit.NANOSECONDS);
+    paused.put(attemptId, new PausedAttempt(producer, hold, release));
+  }
+
+  // A release that a later yield replaced finds the later hold and leaves it.
+  private synchronized void release(UUID attemptId, long hold) {
+    var held = paused.get(attemptId);
+    if (held == null || held.hold() != hold) {
+      return;
+    }
+
+    paused.remove(attemptId);
+    held.producer().resumeFfmpeg();
+  }
+
+  private record PausedAttempt(Producer producer, long hold, ScheduledFuture<?> release) {}
+}

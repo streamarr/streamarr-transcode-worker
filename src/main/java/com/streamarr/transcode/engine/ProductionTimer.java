@@ -6,9 +6,11 @@ import lombok.NonNull;
 /**
  * Measures how long a producer takes to produce each media segment. The first lap starts when
  * FFmpeg starts, and each lap ends when the producer writes a media segment. The timer leaves out
- * each pause, in which the producer holds FFmpeg back until an earlier segment's delivery is
- * accepted or until the worker's segment memory, which other job attempts' uploads also hold, has
- * room. The producer pauses and laps only from its reader, and never laps during a pause.
+ * each pause: the producer holds FFmpeg back until an earlier segment's delivery is accepted or
+ * until the worker's segment memory, which other job attempts' uploads also hold, has room, and the
+ * worker pauses FFmpeg for another job attempt's seek. Pauses may overlap, and the timer leaves out
+ * the time in which any pause lasts once. The producer laps only from its reader, which may lap
+ * during the worker's pause on output that FFmpeg wrote before it.
  */
 final class ProductionTimer {
 
@@ -16,6 +18,7 @@ final class ProductionTimer {
 
   // Guarded by this monitor.
   private long lapStartNanos;
+  private int pauses;
   private long pausedAtNanos;
   private Duration pausedInLap = Duration.ZERO;
 
@@ -25,17 +28,30 @@ final class ProductionTimer {
   }
 
   synchronized void pause() {
-    pausedAtNanos = clock.nanoTime();
+    pauses++;
+    if (pauses == 1) {
+      pausedAtNanos = clock.nanoTime();
+    }
   }
 
   synchronized void resume() {
-    pausedInLap = pausedInLap.plus(clock.since(pausedAtNanos));
+    pauses--;
+    if (pauses == 0) {
+      pausedInLap = pausedInLap.plus(clock.since(pausedAtNanos));
+    }
   }
 
   /** The production time since the previous lap, which starts the next lap. */
   synchronized Duration lap() {
-    var production = clock.since(lapStartNanos).minus(pausedInLap);
-    lapStartNanos = clock.nanoTime();
+    var now = clock.nanoTime();
+    var paused = pausedInLap;
+    if (pauses > 0) {
+      paused = paused.plusNanos(now - pausedAtNanos);
+      pausedAtNanos = now;
+    }
+
+    var production = Duration.ofNanos(now - lapStartNanos).minus(paused);
+    lapStartNanos = now;
     pausedInLap = Duration.ZERO;
     return production;
   }

@@ -66,6 +66,7 @@ public final class Producer {
   private static final Duration BEFORE_ANY_SAMPLE = Duration.ofSeconds(Long.MIN_VALUE);
 
   private final FfmpegProcess ffmpeg;
+  private final ProcessLauncher launcher;
   private final FragmentedMp4Reader reader;
 
   // Guarded by lock, because a decision discards the fragments it holds.
@@ -90,9 +91,13 @@ public final class Producer {
   private Optional<Delivery> deliveryInFlight = Optional.empty();
   private long readerHeldBytes;
   private OptionalInt lastDeliveredMediaSegment = OptionalInt.empty();
+  // Guarded by lock. Once the attempt is decided or its output has ended, FFmpeg stays running.
+  private boolean ffmpegPaused;
+  private boolean pausesEnded;
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
     this.ffmpeg = ffmpeg;
+    this.launcher = settings.launcher();
     this.stallTimeout = settings.stallTimeout();
     this.watchdog = new StallWatchdog(stallTimeout);
     this.productionTimer = new ProductionTimer(settings.clock());
@@ -155,6 +160,7 @@ public final class Producer {
     var settings =
         Settings.builder()
             .jobAttemptId(jobAttemptId)
+            .launcher(launcher)
             .assembler(
                 SegmentAssembler.builder()
                     .intervals(intervals)
@@ -252,6 +258,52 @@ public final class Producer {
         Math.floorMod(ticks, timescale) * NANOSECONDS_PER_SECOND / timescale);
   }
 
+  /**
+   * Stops every FFmpeg process of the attempt until {@link #resumeFfmpeg}, so that another job
+   * attempt gets the CPU. The time FFmpeg spends paused counts neither as production time nor
+   * toward the stall timeout. Does nothing while FFmpeg is already paused, once the attempt has an
+   * outcome and once FFmpeg's output has ended.
+   */
+  public void pauseFfmpeg() {
+    synchronized (lock) {
+      if (ffmpegPaused || pausesEnded) {
+        return;
+      }
+
+      ffmpegPaused = true;
+      productionTimer.pause();
+      watchdog.pause();
+      ffmpeg.processes().forEach(launcher::pause);
+    }
+  }
+
+  /** Continues FFmpeg after {@link #pauseFfmpeg}; does nothing while FFmpeg is not paused. */
+  public void resumeFfmpeg() {
+    synchronized (lock) {
+      resumePausedFfmpeg();
+    }
+  }
+
+  // Guarded by lock.
+  private void resumePausedFfmpeg() {
+    if (!ffmpegPaused) {
+      return;
+    }
+
+    ffmpegPaused = false;
+    ffmpeg.processes().forEach(launcher::resume);
+    watchdog.resume();
+    productionTimer.resume();
+  }
+
+  // FFmpeg must run to quit, to exit after its output ends and to be terminated.
+  private void endPauses() {
+    synchronized (lock) {
+      pausesEnded = true;
+      resumePausedFfmpeg();
+    }
+  }
+
   /** Completes once with the attempt's outcome, after FFmpeg has exited. */
   public CompletableFuture<AttemptOutcome> outcome() {
     return outcome.copy();
@@ -304,6 +356,8 @@ public final class Producer {
       }
 
       decision = Optional.of(decided);
+      pausesEnded = true;
+      resumePausedFfmpeg();
       assembler.discardHeldFragments();
       readerReleasedBytes = readerHeldBytes;
       readerHeldBytes = 0;
@@ -407,6 +461,7 @@ public final class Producer {
   private void produce() {
     try {
       var ending = readAndDeliver();
+      endPauses();
       watchdog.end();
       discardHeldFragments();
       holdOnlyTheAssemblingSegment();
@@ -856,6 +911,7 @@ public final class Producer {
   @Builder
   private record Settings(
       UUID jobAttemptId,
+      ProcessLauncher launcher,
       SegmentAssembler assembler,
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,

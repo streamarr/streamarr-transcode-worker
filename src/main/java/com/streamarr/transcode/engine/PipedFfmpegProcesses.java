@@ -197,6 +197,11 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   }
 
   @Override
+  public List<Process> processes() {
+    return List.of(copy, encode);
+  }
+
+  @Override
   public Duration gracePeriod() {
     return gracePeriod;
   }

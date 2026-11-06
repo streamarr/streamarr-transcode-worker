@@ -41,6 +41,16 @@ public final class TeeingProcessLauncher implements ProcessLauncher {
     return new TeedProcess(launcher.launch(command, jobAttemptId), copy, gate);
   }
 
+  @Override
+  public void pause(Process process) {
+    launcher.pause(((TeedProcess) process).process);
+  }
+
+  @Override
+  public void resume(Process process) {
+    launcher.resume(((TeedProcess) process).process);
+  }
+
   /**
    * Withholds the next attempt's output past this many bytes from the worker until the release
    * completes or the limit passes, and then reads on.

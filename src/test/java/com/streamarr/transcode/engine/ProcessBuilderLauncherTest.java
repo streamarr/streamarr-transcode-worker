@@ -6,6 +6,7 @@ import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesThe
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
@@ -21,6 +22,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -55,6 +57,53 @@ class ProcessBuilderLauncherTest {
     assertThat(new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8))
         .isEqualTo(jobAttemptId.toString());
     assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should stop a launched process's output while it is paused and continue it once resumed")
+  void shouldStopALaunchedProcesssOutputWhileItIsPausedAndContinueItOnceResumed()
+      throws IOException {
+    var process =
+        launcher.launch(
+            List.of("bash", "-c", "while :; do printf x; sleep 0.01; done"), UUID.randomUUID());
+    try {
+      var output = process.getInputStream();
+      await().atMost(OUTCOME_LIMIT).until(() -> output.available() > 0);
+
+      launcher.pause(process);
+      var lastSeen = new AtomicInteger(-1);
+      await()
+          .pollInterval(Duration.ofMillis(100))
+          .atMost(OUTCOME_LIMIT)
+          .until(
+              () -> {
+                var available = output.available();
+                return available == lastSeen.getAndSet(available);
+              });
+      var settled = output.available();
+
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(OUTCOME_LIMIT)
+          .until(() -> output.available() == settled);
+      launcher.resume(process);
+      await().atMost(OUTCOME_LIMIT).until(() -> output.available() > settled);
+    } finally {
+      process.destroyForcibly();
+    }
+  }
+
+  @Test
+  @DisplayName("Should leave a process that has exited alone when pausing and resuming it")
+  void shouldLeaveAProcessThatHasExitedAloneWhenPausingAndResumingIt() throws Exception {
+    var process = launcher.launch(List.of("bash", "-c", "exit 0"), UUID.randomUUID());
+    assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+    launcher.pause(process);
+    launcher.resume(process);
+
+    assertThat(process.exitValue()).isZero();
   }
 
   @Test

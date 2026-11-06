@@ -9,7 +9,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * Detects an encoder stall: FFmpeg writing nothing to its standard output for the stall timeout
  * while the producer reads it. The producer pauses the watchdog while its reader waits for the
- * producer rather than for FFmpeg, and ends it once the attempt no longer needs watching.
+ * producer rather than for FFmpeg and while the worker pauses FFmpeg, and ends it once the attempt
+ * no longer needs watching. Pauses may overlap, and watching resumes once every pause has ended.
  */
 final class StallWatchdog {
 
@@ -19,7 +20,7 @@ final class StallWatchdog {
   private volatile long lastOutputNanos = System.nanoTime();
 
   // Guarded by this monitor.
-  private boolean paused;
+  private int pauses;
   private boolean ended;
 
   StallWatchdog(Duration stallTimeout) {
@@ -32,14 +33,16 @@ final class StallWatchdog {
   }
 
   synchronized void pause() {
-    paused = true;
+    pauses++;
   }
 
-  /** Resumes watching, counting the stall timeout afresh. */
+  /** Ends one pause, and resumes watching once none lasts, counting the stall timeout afresh. */
   synchronized void resume() {
-    paused = false;
-    lastOutputNanos = System.nanoTime();
-    notifyAll();
+    pauses--;
+    if (pauses == 0) {
+      lastOutputNanos = System.nanoTime();
+      notifyAll();
+    }
   }
 
   synchronized void end() {
@@ -55,7 +58,7 @@ final class StallWatchdog {
   synchronized boolean awaitStall() {
     while (!ended) {
       var silence = System.nanoTime() - lastOutputNanos;
-      if (!paused && silence >= stallTimeout.toNanos()) {
+      if (pauses == 0 && silence >= stallTimeout.toNanos()) {
         return true;
       }
 
@@ -71,7 +74,7 @@ final class StallWatchdog {
   @SuppressWarnings({"java:S2273", "java:S2274"}) // Called in awaitStall's loop.
   private boolean tryAwaitWake(long silence) {
     try {
-      if (paused) {
+      if (pauses > 0) {
         wait();
         return true;
       }

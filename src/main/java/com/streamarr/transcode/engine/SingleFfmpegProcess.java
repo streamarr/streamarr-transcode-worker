@@ -27,6 +27,11 @@ final class SingleFfmpegProcess implements FfmpegProcess {
   }
 
   @Override
+  public List<Process> processes() {
+    return List.of(process);
+  }
+
+  @Override
   public Duration gracePeriod() {
     return gracePeriod;
   }
