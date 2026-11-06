@@ -21,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.ByteBuffer;
 import java.nio.channels.ServerSocketChannel;
@@ -54,32 +55,10 @@ class TranscodeWorkerApplicationIT {
   @Test
   @DisplayName("Should serve Actuator liveness when the worker application starts")
   void shouldServeActuatorLivenessWhenTheWorkerApplicationStarts() throws Exception {
-    var portFile = tempDir.resolve("http.port");
-    try (var controlPlane = WorkerApplicationControlPlane.builder().build();
-        var client = HttpClient.newHttpClient()) {
-      var fixture =
-          ApplicationFixture.builder()
-              .port(controlPlane.port())
-              .ffprobe(versionOnlyFfprobe())
-              .mainClass(PortReportingStartup.class)
-              .build();
-      var processBuilder = applicationProcess(fixture);
-      processBuilder.environment().put("WORKER_HTTP_PORT_FILE", portFile.toString());
-      try (var worker = start(processBuilder)) {
-        worker.awaitRegistration(controlPlane);
-        var httpPort = Integer.parseInt(Files.readString(portFile).strip());
-        var response =
-            client.send(
-                HttpRequest.newBuilder(
-                        URI.create("http://localhost:" + httpPort + "/actuator/health/liveness"))
-                    .GET()
-                    .build(),
-                BodyHandlers.ofString());
+    var response = getFromRegisteredWorker("/actuator/health/liveness", Map.of());
 
-        assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(response.body()).contains("\"status\":\"UP\"");
-      }
-    }
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(response.body()).contains("\"status\":\"UP\"");
   }
 
   @Test
@@ -281,6 +260,32 @@ class TranscodeWorkerApplicationIT {
         assertThat(registration.getCapabilities().getVideoEncodersList())
             .extracting(encoder -> encoder.getBackend().getEncoder())
             .containsExactlyInAnyOrder("libx264", "libx265", "libsvtav1");
+      }
+    }
+  }
+
+  // Starts the worker application with the extra environment, waits for its registration and
+  // sends one GET to its HTTP server.
+  private HttpResponse<String> getFromRegisteredWorker(String path, Map<String, String> environment)
+      throws Exception {
+    var portFile = tempDir.resolve("http.port");
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build();
+        var client = HttpClient.newHttpClient()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .mainClass(PortReportingStartup.class)
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      processBuilder.environment().putAll(environment);
+      processBuilder.environment().put("WORKER_HTTP_PORT_FILE", portFile.toString());
+      try (var worker = start(processBuilder)) {
+        worker.awaitRegistration(controlPlane);
+        var httpPort = Integer.parseInt(Files.readString(portFile).strip());
+        return client.send(
+            HttpRequest.newBuilder(URI.create("http://localhost:" + httpPort + path)).GET().build(),
+            BodyHandlers.ofString());
       }
     }
   }
