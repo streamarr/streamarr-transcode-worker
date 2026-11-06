@@ -234,6 +234,12 @@ final class SyntheticRpus {
       return this;
     }
 
+    /** That many zero bytes between the alignment after the metadata and the CRC32. */
+    Builder zeroBytesBeforeCrc32(int count) {
+      bytesBeforeCrc32 = new byte[count];
+      return this;
+    }
+
     Builder nlq(Nlq nlq) {
       this.nlq = List.of(nlq, nlq, nlq);
       return this;
@@ -303,6 +309,14 @@ final class SyntheticRpus {
 
     /** The RPU's payload after its NAL unit header, with emulation prevention. */
     byte[] escaped() {
+      return HevcEmulationPrevention.escaped(withoutEmulationPrevention());
+    }
+
+    /**
+     * The payload as a source that skipped emulation prevention carries it: the parser reads it as
+     * it is, and the write escapes it, so a run of zeros grows the converted RPU.
+     */
+    byte[] withoutEmulationPrevention() {
       var sink = new BitSink();
       sink.u(RPU_NAL_PREFIX, 8);
       writeHeader(sink);
@@ -326,11 +340,15 @@ final class SyntheticRpus {
       out.writeBytes(ByteBuffer.allocate(4).putInt(crc).array());
       out.write(FINAL_BYTE);
       out.writeBytes(new byte[trailingZeroBytes]);
-      return HevcEmulationPrevention.escaped(out.toByteArray());
+      return out.toByteArray();
     }
 
     byte[] nalUnit() {
       return SyntheticRpus.nalUnit(escaped());
+    }
+
+    byte[] nalUnitWithoutEmulationPrevention() {
+      return SyntheticRpus.nalUnit(withoutEmulationPrevention());
     }
 
     private void writeHeader(BitSink sink) {

@@ -24,21 +24,31 @@ import java.util.stream.Collectors;
  */
 final class VideoSampleRewrite {
 
-  private final SampleRewrite sampleRewrite;
+  // A copy of the fragment's array is at least this share longer than the array it replaces, so
+  // the copies over one fragment stay a bounded multiple of its final length however many samples
+  // grow.
+  private static final int GROWTH_DIVISOR = 4;
 
-  private VideoSampleRewrite(SampleRewrite sampleRewrite) {
+  private final SampleRewrite sampleRewrite;
+  private final int maximumMediaDataBytes;
+
+  private VideoSampleRewrite(SampleRewrite sampleRewrite, long maximumSegmentBytes) {
     this.sampleRewrite = sampleRewrite;
+    this.maximumMediaDataBytes = (int) Math.min(maximumSegmentBytes, Integer.MAX_VALUE);
   }
 
   /**
    * The rewrite of the copy's samples; empty when the decision lists no bitstream rewrite of
    * samples.
    *
+   * @param maximumSegmentBytes the segment cap, which the media data of a rewritten fragment may
+   *     not exceed either
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the copy lists a
    *     rewrite for video that is neither HEVC nor AV1, other than an HDR10+ strip of H.264; with
    *     {@link Reason#MALFORMED_BOX} when the HEVC or AVC record declares no usable NAL unit length
    */
-  static Optional<VideoSampleRewrite> of(VideoDecision decision, InitializationSegment segment) {
+  static Optional<VideoSampleRewrite> of(
+      VideoDecision decision, InitializationSegment segment, long maximumSegmentBytes) {
     if (!(decision instanceof VideoDecision.Copy copy)) {
       return Optional.empty();
     }
@@ -64,7 +74,7 @@ final class VideoSampleRewrite {
           case "avc1", "avc3" -> avcRewrite(sampleEntry, sampleRewrites);
           default -> throw noSuchContent(sampleEntry, sampleRewrites);
         };
-    return Optional.of(new VideoSampleRewrite(rewrite));
+    return Optional.of(new VideoSampleRewrite(rewrite, maximumSegmentBytes));
   }
 
   // H.264 carries HDR10+ in SEI messages; its Dolby Vision is profile 9, which no copy strips.
@@ -96,7 +106,8 @@ final class VideoSampleRewrite {
    * @throws FragmentedMp4Exception with {@link Reason#MALFORMED_BOX} when a video sample cannot be
    *     read, or two samples share bytes of the {@code mdat}; with {@link
    *     Reason#DOLBY_VISION_CONVERSION_FAILED} when a copy that converts profile 7 meets a sample
-   *     without exactly one RPU that converts
+   *     without exactly one RPU that converts; with {@link Reason#EXCEEDS_SEGMENT_CAP} when the
+   *     rewritten samples would take more media data than the segment cap
    */
   Fragment rewrite(Fragment fragment) {
     var mdat = fragment.mediaDataBox();
@@ -117,8 +128,7 @@ final class VideoSampleRewrite {
         write = each.sample().mediaDataPosition();
       }
 
-      target =
-          withRoomAt(target, mdat, write, bytes.remaining(), placed.subList(index, placed.size()));
+      target = withRoomAt(target, mdat, write, bytes.remaining(), each.sample());
       copy(bytes, target, write);
       var moved = withPlacement(each.sample(), write, bytes.remaining());
       (each.video() ? video : audio).set(each.index(), moved);
@@ -168,14 +178,12 @@ final class VideoSampleRewrite {
   // A sample that shrinks moves down inside the fragment's own array, onto bytes at or before its
   // own, and ends before the next sample's bytes, which are still to move. A sample that grows past
   // its own end would overwrite them, so from the first such sample on, the samples move into a
-  // copy of the array with room for every remaining sample to grow as much, which grows again when
-  // a later sample grows more.
-  private static byte[] withRoomAt(
-      byte[] target, byte[] mdat, int write, int length, List<Placed> remaining) {
-    var sample = remaining.getFirst().sample();
-    var end = write + length;
-    var ownEnd = Math.toIntExact(sample.mediaDataPosition() + sample.size());
-    if (target == mdat && end <= ownEnd) {
+  // copy of the array: a quarter longer than the array it replaces, or as long as the sample needs,
+  // and never longer than the segment cap. A copy sized by one sample's growth times the remaining
+  // samples, audio included, ran to hundreds of megabytes for a fragment of three.
+  private byte[] withRoomAt(byte[] target, byte[] mdat, int write, int length, Sample sample) {
+    var end = (long) write + length;
+    if (target == mdat && end <= sample.mediaDataPosition() + sample.size()) {
       return target;
     }
 
@@ -183,8 +191,17 @@ final class VideoSampleRewrite {
       return target;
     }
 
-    var growth = Math.max(0, end - Math.max(ownEnd, target.length));
-    return Arrays.copyOf(target, end + growth * (remaining.size() - 1));
+    if (end > maximumMediaDataBytes) {
+      throw new FragmentedMp4Exception(
+          Reason.EXCEEDS_SEGMENT_CAP,
+          "the rewritten samples take "
+              + end
+              + " bytes of media data, over the segment cap of "
+              + maximumMediaDataBytes);
+    }
+
+    var room = Math.max(end, target.length + (long) target.length / GROWTH_DIVISOR);
+    return Arrays.copyOf(target, (int) Math.min(room, maximumMediaDataBytes));
   }
 
   private static List<byte[]> withMediaDataBox(List<byte[]> boxes, byte[] mediaDataBox) {
