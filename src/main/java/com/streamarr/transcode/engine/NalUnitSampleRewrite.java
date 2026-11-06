@@ -99,7 +99,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   // conversion removes the RPU here and writes its converted form last.
   private Optional<ByteBuffer> rewrittenUnit(ByteBuffer unit) {
     if (unit.remaining() < syntax.headerBytes()) {
-      return Optional.of(unit);
+      return keptWithoutAHeader(unit);
     }
 
     var type = syntax.typeOf(unit.get(0));
@@ -115,6 +115,17 @@ final class NalUnitSampleRewrite implements SampleRewrite {
       throw new FragmentedMp4Exception(
           Reason.OUTPUT_MISMATCH,
           "an enhancement-layer NAL unit wraps HDR10+, which the copy cannot strip");
+    }
+
+    return Optional.of(unit);
+  }
+
+  // A unit shorter than its header names no type, so the conversion cannot tell whether it is the
+  // picture's RPU; the other rewrites pass it through as the source wrote it.
+  private Optional<ByteBuffer> keptWithoutAHeader(ByteBuffer unit) {
+    if (convertsProfile7) {
+      throw conversionFailed(
+          "a NAL unit of " + unit.remaining() + " bytes is shorter than its header");
     }
 
     return Optional.of(unit);

@@ -99,7 +99,7 @@ record DolbyVisionRpu(
     header.write(writer);
     mapping.ifPresent(data -> data.write(writer, header));
     dmData.ifPresent(data -> data.write(writer));
-    writer.bytes(trailingBytes).alignToByte();
+    writer.alignToByte().bytes(trailingBytes);
     var data = writer.toByteArray();
     writer.bits(RpuCrc32.of(data, 1, data.length), 32).bits(FINAL_BYTE, 8);
     return HevcEmulationPrevention.escaped(writer.toByteArray());
