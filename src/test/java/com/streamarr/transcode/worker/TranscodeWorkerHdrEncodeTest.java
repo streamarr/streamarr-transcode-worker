@@ -44,6 +44,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
@@ -197,6 +198,27 @@ class TranscodeWorkerHdrEncodeTest {
     var command = commandOf(job);
 
     assertThat(valueOf(command, "-vf")).contains("format=yuv420p,");
+  }
+
+  // swscale converts a full-range source only when told to, and the filters then describe every
+  // frame as limited range, so a full-range source's levels would play clipped.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = CompatibleBase.class,
+      names = {"COMPATIBLE_BASE_PQ", "COMPATIBLE_BASE_HLG"})
+  @DisplayName(
+      "Should scale the source into limited range before describing its frames as limited when an"
+          + " HDR source keeps its transfer")
+  void shouldScaleTheSourceIntoLimitedRangeWhenAnHdrSourceKeepsItsTransfer(CompatibleBase base)
+      throws Exception {
+    var job =
+        base == CompatibleBase.COMPATIBLE_BASE_PQ
+            ? hdr10Encode(hevcMain10(), base)
+            : tenBitEncode(hevcMain10(), base);
+
+    var command = commandOf(job);
+
+    assertThat(valueOf(command, "-vf")).containsPattern("scale=-2:\\d+:out_range=tv,");
   }
 
   @ParameterizedTest(name = "{0}")

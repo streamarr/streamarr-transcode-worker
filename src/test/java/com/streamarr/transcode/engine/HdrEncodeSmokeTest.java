@@ -65,6 +65,7 @@ class HdrEncodeSmokeTest {
   private static Path hdr10;
   private static Path hlg;
   private static Path sdr10;
+  private static Path fullRangeHdr10;
 
   @BeforeAll
   static void writeTheSources() throws Exception {
@@ -76,6 +77,11 @@ class HdrEncodeSmokeTest {
                 + "L(10000000,50):max-cll=1000,400");
     hlg = encoded("hlg", "colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc");
     sdr10 = encoded("sdr10", "colorprim=bt709:transfer=bt709:colormatrix=bt709");
+    fullRangeHdr10 =
+        encoded(
+            "full-range-hdr10",
+            List.of("-vf", "lutyuv=y=maxval,format=yuv420p10le", "-color_range", "pc"),
+            "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:range=full");
   }
 
   @Test
@@ -205,6 +211,21 @@ class HdrEncodeSmokeTest {
             "max_content=0",
             "max_average=0")
         .doesNotContain("Dolby Vision", "DOVI");
+  }
+
+  // The source's luma is all white: 1023 in full range and 940 in limited range at 10 bits (ITU-R
+  // BT.2100).
+  @Test
+  @DisplayName("Should deliver limited-range samples when a full-range PQ source encodes to PQ")
+  void shouldDeliverLimitedRangeSamplesWhenAFullRangePqSourceEncodesToPq() throws Exception {
+    assertThat(peakLuma(Files.readAllBytes(fullRangeHdr10)))
+        .as("the full-range source's white")
+        .isGreaterThan(1000);
+
+    var delivered =
+        encoded(fullRangeHdr10, hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ)).build(), 0);
+
+    assertThat(peakLuma(delivered.acceptedBytes())).isBetween(900, 950);
   }
 
   @Test
@@ -363,18 +384,28 @@ class HdrEncodeSmokeTest {
   }
 
   private static Path encoded(String name, String colourParameters) throws Exception {
+    return encoded(name, List.of(), colourParameters);
+  }
+
+  // A synthetic HEVC source of testsrc2, with the picture arguments and the colour parameters.
+  private static Path encoded(String name, List<String> pictureArguments, String colourParameters)
+      throws Exception {
     var elementary = root.resolve(name + ".hevc");
-    runToCompletion(
+    var command =
+        new ArrayList<>(
+            List.of(
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=" + SOURCE_SECONDS));
+    command.addAll(pictureArguments);
+    command.addAll(
         List.of(
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=64x36:rate=24:duration=" + SOURCE_SECONDS,
             "-c:v",
             "libx265",
             "-preset",
@@ -386,6 +417,7 @@ class HdrEncodeSmokeTest {
             "-f",
             "hevc",
             elementary.toString()));
+    runToCompletion(command);
     var muxed = root.resolve(name + ".mp4");
     runToCompletion(
         List.of(
@@ -428,6 +460,32 @@ class HdrEncodeSmokeTest {
             "-of",
             "default=nw=1",
             media.toString()));
+  }
+
+  // The largest luma sample of any decoded frame, in the stream's bit depth. The metadata key is
+  // FFmpeg's literal signalstats key.
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static int peakLuma(byte[] media) throws Exception {
+    var file = Files.createTempFile(root, "peak", ".mp4");
+    Files.write(file, media);
+    return runToCompletion(
+            List.of(
+                "ffmpeg",
+                "-hide_banner",
+                "-v",
+                "error",
+                "-i",
+                file.toString(),
+                "-vf",
+                "signalstats,metadata=mode=print:key=lavfi.signalstats.YMAX:file=-",
+                "-f",
+                "null",
+                "-"))
+        .lines()
+        .filter(line -> line.startsWith("lavfi.signalstats.YMAX="))
+        .mapToInt(line -> Integer.parseInt(line.substring(line.indexOf('=') + 1)))
+        .max()
+        .orElseThrow();
   }
 
   private static String runToCompletion(List<String> command)
