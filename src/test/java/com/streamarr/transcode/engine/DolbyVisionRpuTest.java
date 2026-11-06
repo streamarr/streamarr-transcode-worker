@@ -295,6 +295,9 @@ class DolbyVisionRpuTest {
             "a signal bit depth of 17, above the 16 that the decoder reads",
             SyntheticRpus.profile7().signalBitDepth(17).escaped()),
         Arguments.of(
+            "floating-point coefficients, whose identity curve the conversion does not write",
+            SyntheticRpus.profile7().floatingPointCoefficients().escaped()),
+        Arguments.of(
             "a previous RPU id of 4294967295, above the largest value a ue(v) codes",
             SyntheticRpus.profile7().previousRpu(4_294_967_295L).escaped()),
         Arguments.of(

@@ -36,7 +36,6 @@ record RpuDataHeader(
   // rpu_format bits that, when set, leave the bit depths and layer flags out of the header.
   private static final int FORMAT_WITHOUT_BIT_DEPTHS = 0x700;
   private static final int FIXED_POINT_COEFFICIENTS = 0;
-  private static final int FLOATING_POINT_COEFFICIENTS = 1;
   private static final int FLOATING_POINT_COEFFICIENT_BITS = 32;
   // The decoder reads a denominator of 13 to 32; 23 is the one every real RPU carries, and it sizes
   // every fixed-point coefficient fraction.
@@ -56,8 +55,8 @@ record RpuDataHeader(
   private static final long PROFILE_7_VDR_BIT_DEPTH_MINUS8 = 4;
 
   /**
-   * @throws DolbyVisionRpuException when the RPU is not of type 2 or codes its coefficients in
-   *     neither fixed nor floating point
+   * @throws DolbyVisionRpuException when the RPU is not of type 2, codes its coefficients in
+   *     anything but fixed point, or holds a field outside the range the conversion accepts
    */
   static RpuDataHeader parse(RpuBitReader reader) {
     if (reader.bits(6) != RPU_TYPE) {
@@ -98,11 +97,15 @@ record RpuDataHeader(
   private static void parseSequenceInformation(
       RpuBitReader reader, RpuDataHeaderBuilder header, int rpuFormat) {
     header.chromaResamplingExplicitFilter(reader.flag());
+    // Real RPUs code their coefficients in fixed point, and so do the identity curves that the
+    // conversion writes in place of a full enhancement layer's; a floating-point RPU would get
+    // curves of 0 and 0 instead of 0 and 1, so the conversion refuses it.
     var coefficientDataType = (int) reader.bits(2);
-    if (coefficientDataType != FIXED_POINT_COEFFICIENTS
-        && coefficientDataType != FLOATING_POINT_COEFFICIENTS) {
+    if (coefficientDataType != FIXED_POINT_COEFFICIENTS) {
       throw new DolbyVisionRpuException(
-          "coefficient_data_type " + coefficientDataType + " is not 0 or 1");
+          "coefficient_data_type "
+              + coefficientDataType
+              + " where the conversion handles fixed-point coefficients only");
     }
 
     header.coefficientDataType(coefficientDataType);

@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -55,6 +56,11 @@ class SegmentAssemblerBitstreamRewriteTest {
   // A rewrite that drops most of a sample's units allocates the fragment's own copy, the kept
   // units' buffer and the output; a sample's bytes bound each of them, its unit count none.
   private static final int MOST_ALLOCATED_BYTES_PER_SAMPLE_BYTE = 4;
+  // An SEI rewrite unescapes, parses and escapes each unit again, a few copies of its bytes, and
+  // the room for the kept units doubles as they outgrow the sample; a sample's bytes bound each of
+  // them, its unit count none. The sample below allocates about 21 times its bytes; one copy of
+  // the output per growing unit allocated about 340 times.
+  private static final int MOST_ALLOCATED_BYTES_PER_REWRITTEN_SEI_SAMPLE_BYTE = 64;
   private static final String H264_SEGMENT = "libx264-1080p30.mp4";
   private static final String H264_CODEC_STRING = "avc1.640028";
   // H.264 NAL unit headers (ITU-T H.264 table 7-1): an SEI NAL unit, and an IDR slice with
@@ -556,12 +562,24 @@ class SegmentAssemblerBitstreamRewriteTest {
             "an SEI message that ends inside its payload size",
             stripHdr10Plus,
             nalUnit(PREFIX_SEI, HexFormat.of().parseHex("04FF80"))),
+        hevcCase(
+            "an SEI message size coded by 8421505 bytes of 0xFF, past what an int holds, under a"
+                + " conversion that strips HDR10+",
+            profile7ConversionCopy(BitstreamRewrite.STRIP_HDR10_PLUS),
+            nalUnit(PREFIX_SEI, seiMessageWithSizeCodedBy(8_421_505))),
         av1Case("an OBU header with its forbidden bit", stripAv1, "92" + "00"),
         av1Case("an OBU size past the sample", stripAv1, "2A0904B5"),
         av1Case("an OBU size field past the sample", stripAv1, "2A80"),
         av1Case("an OBU size field of 9 bytes", stripAv1, "2A" + "80".repeat(8) + "01"),
         av1Case("an OBU extension byte past the sample", stripAv1, "2C"),
         av1Case("a sized OBU's extension byte past the sample", stripAv1, "2E"));
+  }
+
+  // An HDR10+ message whose size takes that many 0xFF bytes and a final 0, then the stop byte.
+  private static byte[] seiMessageWithSizeCodedBy(int bytesOf0xFF) {
+    var size = new byte[bytesOf0xFF];
+    Arrays.fill(size, (byte) 0xFF);
+    return concat(new byte[] {0x04}, size, HexFormat.of().parseHex("00" + RBSP_STOP));
   }
 
   private static Arguments hevcCase(String description, VideoDecision.Copy copy, byte[] sample) {
@@ -730,6 +748,10 @@ class SegmentAssemblerBitstreamRewriteTest {
             "an RPU with a block list of 32 extension blocks of no bytes",
             sample(aud(), slice(0), SyntheticRpus.profile7().emptyBlocks(32).nalUnit())),
         Arguments.of(
+            "an RPU with floating-point coefficients",
+            sample(
+                aud(), slice(0), SyntheticRpus.profile7().floatingPointCoefficients().nalUnit())),
+        Arguments.of(
             "an RPU that names previous RPU 16, above the 15 that the decoder reads",
             sample(aud(), slice(0), SyntheticRpus.profile7().previousRpu(16).nalUnit())),
         Arguments.of(
@@ -779,6 +801,57 @@ class SegmentAssemblerBitstreamRewriteTest {
     assertThat(allocated).isLessThan((long) MOST_ALLOCATED_BYTES_PER_SAMPLE_BYTE * sample.length);
     assertThat(videoSamplesOf(initialization, closed))
         .containsExactly(hex(sample(aud(), slice(0), converted)));
+  }
+
+  // An SEI NAL unit grows when the rewrite escapes a run of zeros that the source left unescaped
+  // behind the HDR10+ message it strips, so the kept units can outgrow the sample; the room for
+  // them must grow geometrically, or every growing unit copies the whole output so far.
+  @Test
+  @DisplayName(
+      "Should allocate no more than a few times the sample's bytes when every SEI NAL unit grows as"
+          + " the copy strips HDR10+ from it")
+  void
+      shouldAllocateNoMoreThanAFewTimesTheSamplesBytesWhenEverySeiNalUnitGrowsAsTheCopyStripsHdr10PlusFromIt()
+          throws IOException {
+    var unregistered = "05" + "FFFFFFFF00" + "00".repeat(1_020);
+    var sei = seiOf(HDR10_PLUS_MESSAGE + unregistered);
+    var rpu = SyntheticRpus.profile7().nalUnit();
+    var sample = concat(aud(), slice(0), repeated(sei, 800), rpu);
+    var initialization = bytesOfInitializationSegment(HEVC_SEGMENT);
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                concat(
+                    initialization,
+                    fragmentBuilder().startsWithKeyframe(true).video(0, sample).build())));
+    var assembler = assemblerFor(profile7ConversionCopy(BitstreamRewrite.STRIP_HDR10_PLUS));
+    var closed = new ArrayList<>(assembler.accept(output.initializationSegment()).closedSegments());
+    var fragment = output.fragments().getFirst();
+    var thread = (ThreadMXBean) ManagementFactory.getThreadMXBean();
+
+    var before = thread.getCurrentThreadAllocatedBytes();
+    closed.addAll(assembler.accept(fragment).closedSegments());
+    var allocated = thread.getCurrentThreadAllocatedBytes() - before;
+
+    closed.addAll(assembler.finish());
+    var keptSei =
+        nalUnit(
+            PREFIX_SEI,
+            HevcEmulationPrevention.escaped(HexFormat.of().parseHex(unregistered + RBSP_STOP)));
+    var converted = SyntheticRpus.nalUnit(SyntheticRpus.convertedProfile7());
+    assertThat(allocated)
+        .isLessThan((long) MOST_ALLOCATED_BYTES_PER_REWRITTEN_SEI_SAMPLE_BYTE * sample.length);
+    assertThat(videoSamplesOf(initialization, closed))
+        .containsExactly(hex(concat(aud(), slice(0), repeated(keptSei, 800), converted)));
+  }
+
+  private static byte[] repeated(byte[] unit, int count) {
+    var repeated = ByteBuffer.allocate(count * unit.length);
+    for (var index = 0; index < count; index++) {
+      repeated.put(unit);
+    }
+
+    return repeated.array();
   }
 
   // The AUD, the slice, that many enhancement-layer units and the picture's RPU.

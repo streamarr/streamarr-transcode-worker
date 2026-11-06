@@ -31,6 +31,9 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   private static final int REGISTERED_USER_DATA = 4;
   private static final byte[] HDR10_PLUS_PREFIX = {(byte) 0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04};
   private static final int RBSP_STOP_BYTE = 0x80;
+  // A payload type or size past this would overflow with its next 0xFF byte; no SEI message inside
+  // a segment comes near it.
+  private static final int LARGEST_CODED_VALUE = Integer.MAX_VALUE - 0xFF;
   // An HEVC NAL unit header of type 62 in layer 0 at temporal id 0.
   private static final byte[] BASE_LAYER_RPU_HEADER = {0x7C, 0x01};
 
@@ -186,11 +189,13 @@ final class NalUnitSampleRewrite implements SampleRewrite {
       kept.put(unit.duplicate());
     }
 
-    // The kept units never outgrow the sample, so the room is there; the check keeps that a fact of
-    // the copy rather than a claim about the SEI rewrite.
+    // The kept units outgrow the sample when an SEI rewrite escapes a run of zeros that the source
+    // left unescaped, so the room doubles: the output so far is then copied a bounded number of
+    // times over the whole sample, not once per growing unit.
     private ByteBuffer withRoomFor(int bytes) {
       if (kept.remaining() < bytes) {
-        kept = ByteBuffer.allocate(kept.position() + bytes).put(kept.flip());
+        var room = Math.max((long) kept.position() + bytes, 2L * kept.capacity());
+        kept = ByteBuffer.allocate((int) Math.min(room, Integer.MAX_VALUE)).put(kept.flip());
       }
 
       return kept;
@@ -312,6 +317,11 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     while (reading.hasRemaining()) {
       var octet = Byte.toUnsignedInt(reading.get());
       value += octet;
+      if (value > LARGEST_CODED_VALUE) {
+        throw FragmentedMp4Exception.malformed(
+            "an SEI message codes a payload type or size past " + LARGEST_CODED_VALUE);
+      }
+
       if (octet != 0xFF) {
         return value;
       }
