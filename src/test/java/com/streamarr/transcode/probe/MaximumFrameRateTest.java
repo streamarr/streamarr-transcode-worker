@@ -7,7 +7,7 @@ import build.buf.gen.streamarr.transcode.v1.FrameRateRuleResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
-import java.util.Optional;
+import com.streamarr.transcode.probe.MaximumFrameRate.MeasuredFrameRate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -34,7 +34,7 @@ class MaximumFrameRateTest {
     // 25 fps in 90 kHz ticks, with one frame that lasts 20 ms.
     var measured = MaximumFrameRate.measured(new long[] {0, 3_600, 5_400, 9_000}, 90_000);
 
-    assertThat(measured).contains(ExactFraction.of(50, 1));
+    assertThat(measured.map(MeasuredFrameRate::reported)).contains(ExactFraction.of(50, 1));
   }
 
   @Test
@@ -50,7 +50,7 @@ class MaximumFrameRateTest {
 
     var measured = MaximumFrameRate.measured(times, 1_000);
 
-    assertThat(measured).contains(ExactFraction.of(23_000, 191));
+    assertThat(measured.map(MeasuredFrameRate::reported)).contains(ExactFraction.of(23_000, 191));
   }
 
   @Test
@@ -59,7 +59,7 @@ class MaximumFrameRateTest {
     // 30 fps with one frame of a single tick: that interval allows any rate from 30 fps up.
     var measured = MaximumFrameRate.measured(new long[] {0, 2, 3, 5}, 60);
 
-    assertThat(measured).contains(ExactFraction.of(60, 1));
+    assertThat(measured.map(MeasuredFrameRate::reported)).contains(ExactFraction.of(60, 1));
   }
 
   @Test
@@ -73,7 +73,7 @@ class MaximumFrameRateTest {
 
     var measured = MaximumFrameRate.measured(times, 1_000);
 
-    assertThat(measured).contains(ExactFraction.of(50, 1));
+    assertThat(measured.map(MeasuredFrameRate::reported)).contains(ExactFraction.of(50, 1));
   }
 
   @Test
@@ -82,7 +82,7 @@ class MaximumFrameRateTest {
     // An I-frame, a P-frame and two B-frames that present between them, every 20 ms.
     var measured = MaximumFrameRate.measured(new long[] {0, 60, 20, 40, 80}, 1_000);
 
-    assertThat(measured).contains(ExactFraction.of(50, 1));
+    assertThat(measured.map(MeasuredFrameRate::reported)).contains(ExactFraction.of(50, 1));
   }
 
   @Test
@@ -99,8 +99,9 @@ class MaximumFrameRateTest {
   @Test
   @DisplayName("Should report the measured rate when the chosen stream has no declared maximum")
   void shouldReportTheMeasuredRateWhenTheChosenStreamHasNoDeclaredMaximum() {
-    var result =
-        MaximumFrameRate.withMeasuredRate(probedVideo(), Optional.of(ExactFraction.of(60, 1)));
+    var measured = MaximumFrameRate.measured(new long[] {0, 1_500, 3_000}, 90_000);
+
+    var result = MaximumFrameRate.withMeasuredRate(probedVideo(), measured);
 
     assertThat(result.getMedia().getStreams(0).getMaximumFrameRate())
         .isEqualTo(Fraction.newBuilder().setNumerator(60).setDenominator(1).build());

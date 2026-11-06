@@ -55,16 +55,27 @@ final class MaximumFrameRate {
   }
 
   /**
-   * The result with the measured maximum, unless the chosen stream already has one from its
-   * declared rates.
+   * The result with the measured maximum, unless the chosen stream's declared base rate is at least
+   * the rate that the presentation times prove.
    */
   static ProbeAttemptResult withMeasuredRate(
-      ProbeAttemptResult result, Optional<ExactFraction> measured) {
-    if (measured.isEmpty() || chosenStream(result.getMedia()).hasMaximumFrameRate()) {
+      ProbeAttemptResult result, Optional<MeasuredFrameRate> measured) {
+    if (measured.isEmpty() || isAtLeastDeclared(result.getMedia(), measured.get().proven())) {
       return result;
     }
 
-    return withMaximum(result, measured.get());
+    return withMaximum(result, measured.get().reported());
+  }
+
+  private static boolean isAtLeastDeclared(ProbeMediaInfo media, ExactFraction proven) {
+    var stream = chosenStream(media);
+    if (!stream.hasMaximumFrameRate()) {
+      return false;
+    }
+
+    var declared = stream.getMaximumFrameRate();
+    return !proven.isGreaterThan(
+        ExactFraction.of(declared.getNumerator(), declared.getDenominator()));
   }
 
   /**
@@ -75,15 +86,21 @@ final class MaximumFrameRate {
    * 1) frames per tick, the listed rate nearest k / s is the maximum, else k / s is. Empty for
    * fewer than two frames or frames that all present at once.
    */
-  static Optional<ExactFraction> measured(long[] presentationTimes, long timescale) {
+  static Optional<MeasuredFrameRate> measured(long[] presentationTimes, long timescale) {
     var sorted = presentationTimes.clone();
     Arrays.sort(sorted);
     return IntStream.rangeClosed(1, Math.min(WINDOW_INTERVALS, sorted.length - 1))
         .mapToObj(intervals -> shortestRun(sorted, intervals))
         .flatMap(Optional::stream)
         .max(Comparator.comparing(Run::provenRate))
-        .map(run -> run.rate(timescale));
+        .map(run -> new MeasuredFrameRate(run.rate(timescale), run.lowestRate(timescale)));
   }
+
+  /**
+   * The rate that the measurement reports, and the lowest rate that the presentation times prove,
+   * which a declared base rate must reach to stand.
+   */
+  record MeasuredFrameRate(ExactFraction reported, ExactFraction proven) {}
 
   private static Optional<Run> shortestRun(long[] sorted, int intervals) {
     var shortestSpan = Long.MAX_VALUE;

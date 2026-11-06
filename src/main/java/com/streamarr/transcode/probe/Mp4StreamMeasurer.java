@@ -10,6 +10,7 @@ import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
 import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import com.streamarr.transcode.probe.CopiedSampleSizes.SourceMovie;
+import com.streamarr.transcode.probe.MaximumFrameRate.MeasuredFrameRate;
 import com.streamarr.transcode.probe.Mp4SampleTables.Edit;
 import com.streamarr.transcode.probe.Mp4SampleTables.Run;
 import com.streamarr.transcode.probe.Mp4SampleTables.RunCursor;
@@ -139,7 +140,7 @@ final class Mp4StreamMeasurer {
     private final long measuredDuration;
     private final int[] intervalBytes;
     private final int[] intervalPacketCounts;
-    private final ExactFraction maximumFrameRate;
+    private final MeasuredFrameRate maximumFrameRate;
 
     @Builder
     private TrackMeasurement(
@@ -150,7 +151,7 @@ final class Mp4StreamMeasurer {
         long measuredDuration,
         int[] intervalBytes,
         int[] intervalPacketCounts,
-        ExactFraction maximumFrameRate) {
+        MeasuredFrameRate maximumFrameRate) {
       this.streamIndex = streamIndex;
       this.measuredBytes = measuredBytes;
       this.packetCount = packetCount;
@@ -190,7 +191,7 @@ final class Mp4StreamMeasurer {
      * The chosen video track's {@link MaximumFrameRate#measured} rate over the samples that a
      * stream copy keeps; empty for every other track and when the times give none.
      */
-    Optional<ExactFraction> maximumFrameRate() {
+    Optional<MeasuredFrameRate> maximumFrameRate() {
       return Optional.ofNullable(maximumFrameRate);
     }
 

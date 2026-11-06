@@ -1455,6 +1455,22 @@ class FfprobeExecutorKeyframeTest {
     }
 
     @Test
+    @DisplayName(
+        "Should report the measured rate when the presentation times of a stream whose declared"
+            + " rates agree on 24 fps prove a faster interval")
+    void shouldReportTheMeasuredRateWhenTheTimesOfAStreamDeclaredAt24FpsProveAFasterInterval(
+        @TempDir Path directory) throws Exception {
+      // 24 fps in 1/12288 s ticks, with one frame that lasts half as long: at least 47.8 fps.
+      var video =
+          probedVideo(
+              directory,
+              "\"r_frame_rate\":\"24/1\",\"avg_frame_rate\":\"24/1\"",
+              new SampleTimes(12_288, List.of(512, 512, 256, 512, 512)));
+
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(48, 1));
+    }
+
+    @Test
     @DisplayName("Should report no maximum for a second video track that the probe does not choose")
     void shouldReportNoMaximumForASecondVideoTrackThatTheProbeDoesNotChoose(@TempDir Path directory)
         throws Exception {
