@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * The prefix SEI NAL units that carry a copy's planned static HDR metadata, each message in a NAL
@@ -25,9 +26,16 @@ final class HevcStaticMetadataSei {
 
   /** The NAL units, without length prefixes; empty when the output plans neither message. */
   static List<byte[]> nalUnitsOf(PlannedCopyOutput output) {
+    return nalUnitsOf(output.masteringDisplay(), output.contentLightLevel());
+  }
+
+  /** The NAL units of each value present, without length prefixes, in that order. */
+  static List<byte[]> nalUnitsOf(
+      Optional<PlannedCopyOutput.MasteringDisplay> display,
+      Optional<PlannedCopyOutput.ContentLightLevel> level) {
     var units = new ArrayList<byte[]>();
-    output.masteringDisplay().map(HevcStaticMetadataSei::masteringDisplay).ifPresent(units::add);
-    output.contentLightLevel().map(HevcStaticMetadataSei::contentLightLevel).ifPresent(units::add);
+    display.map(HevcStaticMetadataSei::masteringDisplay).ifPresent(units::add);
+    level.map(HevcStaticMetadataSei::contentLightLevel).ifPresent(units::add);
     return List.copyOf(units);
   }
 

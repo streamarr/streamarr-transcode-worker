@@ -11,6 +11,9 @@ import com.streamarr.transcode.engine.VideoCodecProfile;
 import com.streamarr.transcode.engine.VideoCodecTier;
 import com.streamarr.transcode.engine.VideoDecision;
 import com.streamarr.transcode.engine.VideoDynamicRange;
+import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
+import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVision;
+import com.streamarr.transcode.engine.VideoDynamicRange.Presence;
 import java.util.Optional;
 
 // Translates the contract's video decision into the engine's, and refuses one that contradicts the
@@ -119,7 +122,7 @@ final class VideoDecisions {
       throw new InvalidJobSpecificationException("The encode carries no level");
     }
 
-    if (PlannedCopies.carriesPlannedValues(video)) {
+    if (PlannedCopies.carriesCopyOnlyValues(video)) {
       throw new InvalidJobSpecificationException("An encode carries values that only a copy plans");
     }
 
@@ -128,10 +131,16 @@ final class VideoDecisions {
           "An encode requires source and output dynamic range");
     }
 
-    var outputDynamicRange = VideoDynamicRanges.of(video.getOutputDynamicRange());
-    if (!outputDynamicRange.equals(VideoDynamicRange.sdr())) {
+    var sourceDynamicRange = VideoDynamicRanges.of(video.getSourceDynamicRange());
+    var outputDynamicRange = encodedRange(VideoDynamicRanges.of(video.getOutputDynamicRange()));
+    requireTransferTheEncodeCanWrite(sourceDynamicRange, outputDynamicRange);
+    var pictureFormat = EncodedPictureFormats.of(video, outputDynamicRange);
+    var staticHdrMetadata = PlannedCopies.staticHdrMetadataOf(video);
+    var outputsPq = outputDynamicRange.compatibleBase() == CompatibleBase.PQ;
+    if (outputsPq != staticHdrMetadata.isPresent()) {
       throw new InvalidJobSpecificationException(
-          "Only fully specified SDR video output without HDR enhancements is supported");
+          "An encode carries static HDR metadata exactly when its output is PQ, and this one plans "
+              + outputDynamicRange.compatibleBase());
     }
 
     var profile = codecProfile(video.getCodecProfile());
@@ -140,6 +149,7 @@ final class VideoDecisions {
           "Codec profile " + profile + " does not belong to " + video.getCodecFamily());
     }
 
+    EncodedPictureFormats.requireProfileThatHolds(profile, pictureFormat);
     var tier = tier(video.getTier());
     if (tier.isPresent() != hasTiers(profile)) {
       throw new InvalidJobSpecificationException(
@@ -156,13 +166,49 @@ final class VideoDecisions {
         .tier(tier)
         .level(video.getLevel())
         .codecString(video.getCodecString())
-        .sourceDynamicRange(VideoDynamicRanges.of(video.getSourceDynamicRange()))
+        .sourceDynamicRange(sourceDynamicRange)
         .outputDynamicRange(outputDynamicRange)
         .sourcePacketsCarryPresentationTimes(video.getSourcePacketsCarryPresentationTimes())
         .deinterlace(deinterlace(video))
         .holdsLastFrameToAdvertisedEnd(video.getHoldLastFrameToAdvertisedEnd())
         .softwareEncoder(video.getSoftwareEncoder())
+        .outputPictureFormat(pictureFormat)
+        .staticHdrMetadata(staticHdrMetadata)
         .build();
+  }
+
+  // An encode writes SDR, PQ or HLG without HDR10+ or Dolby Vision (ADR 0036).
+  private static VideoDynamicRange encodedRange(VideoDynamicRange range) {
+    var base = range.compatibleBase();
+    if ((base == CompatibleBase.SDR || base == CompatibleBase.PQ || base == CompatibleBase.HLG)
+        && range.hdr10Plus() == Presence.ABSENT
+        && range.dolbyVision() instanceof DolbyVision.Absent) {
+      return range;
+    }
+
+    throw new InvalidJobSpecificationException(
+        "An encode writes SDR, PQ or HLG without HDR10+ or Dolby Vision, not " + range);
+  }
+
+  // An HDR encode keeps the source's transfer, or reshapes Dolby Vision without a compatible base
+  // into PQ; no filter converts between PQ and HLG, or from SDR into HDR.
+  private static void requireTransferTheEncodeCanWrite(
+      VideoDynamicRange source, VideoDynamicRange output) {
+    var sourceBase = source.compatibleBase();
+    var writable =
+        switch (output.compatibleBase()) {
+          case PQ -> sourceBase == CompatibleBase.PQ || sourceBase == CompatibleBase.NONE;
+          case HLG -> sourceBase == CompatibleBase.HLG;
+          case UNSPECIFIED, NONE, SDR -> true;
+        };
+    if (!writable) {
+      throw new InvalidJobSpecificationException(
+          "An encode cannot write "
+              + output.compatibleBase()
+              + " from a "
+              + sourceBase
+              + " source");
+    }
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -205,6 +251,7 @@ final class VideoDecisions {
     return switch (profile) {
       case VIDEO_CODEC_PROFILE_H264_HIGH -> VideoCodecProfile.H264_HIGH;
       case VIDEO_CODEC_PROFILE_HEVC_MAIN -> VideoCodecProfile.HEVC_MAIN;
+      case VIDEO_CODEC_PROFILE_HEVC_MAIN_10 -> VideoCodecProfile.HEVC_MAIN_10;
       case VIDEO_CODEC_PROFILE_AV1_MAIN -> VideoCodecProfile.AV1_MAIN;
       case VIDEO_CODEC_PROFILE_UNSPECIFIED, UNRECOGNIZED ->
           throw new InvalidJobSpecificationException("The encode carries no codec profile");
@@ -215,20 +262,19 @@ final class VideoDecisions {
           VIDEO_CODEC_PROFILE_H264_HIGH_10,
           VIDEO_CODEC_PROFILE_H264_HIGH_422,
           VIDEO_CODEC_PROFILE_H264_HIGH_444_PREDICTIVE,
-          VIDEO_CODEC_PROFILE_HEVC_MAIN_10,
           VIDEO_CODEC_PROFILE_HEVC_MAIN_STILL_PICTURE,
           VIDEO_CODEC_PROFILE_HEVC_FORMAT_RANGE_EXTENSIONS,
           VIDEO_CODEC_PROFILE_AV1_HIGH,
           VIDEO_CODEC_PROFILE_AV1_PROFESSIONAL ->
           throw new InvalidJobSpecificationException(
-              "An encode forces only a Main or High profile, and carries " + profile);
+              "An encode forces only a Main, Main 10 or High profile, and carries " + profile);
     };
   }
 
   private static VideoCodecFamily familyOf(VideoCodecProfile profile) {
     return switch (profile) {
       case H264_HIGH -> VideoCodecFamily.VIDEO_CODEC_FAMILY_H264;
-      case HEVC_MAIN -> VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC;
+      case HEVC_MAIN, HEVC_MAIN_10 -> VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC;
       case AV1_MAIN -> VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1;
     };
   }
@@ -237,7 +283,7 @@ final class VideoDecisions {
   private static boolean hasTiers(VideoCodecProfile profile) {
     return switch (profile) {
       case H264_HIGH -> false;
-      case HEVC_MAIN, AV1_MAIN -> true;
+      case HEVC_MAIN, HEVC_MAIN_10, AV1_MAIN -> true;
     };
   }
 

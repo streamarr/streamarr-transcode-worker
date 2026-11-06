@@ -2,9 +2,11 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.EncoderKind;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
+import build.buf.gen.streamarr.transcode.v1.VideoEncodeFeature;
 import build.buf.gen.streamarr.transcode.v1.VideoEncoderBackend;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.streamarr.transcode.engine.CodecFamily;
+import com.streamarr.transcode.engine.EncodeFeature;
 import com.streamarr.transcode.engine.EncoderBackend;
 import com.streamarr.transcode.engine.WorkerVerifiedEncoder;
 
@@ -17,6 +19,11 @@ final class WorkerVideoEncoders {
     return WorkerVerifiedVideoEncoder.newBuilder()
         .setBackend(toProto(encoder.backend()))
         .setKeyframeVerified(encoder.keyframeVerified())
+        .addAllEncodeFeatures(
+            encoder.encodeFeatures().stream()
+                .sorted()
+                .map(WorkerVideoEncoders::encodeFeature)
+                .toList())
         .build();
   }
 
@@ -29,6 +36,15 @@ final class WorkerVideoEncoders {
                 ? EncoderKind.ENCODER_KIND_HARDWARE
                 : EncoderKind.ENCODER_KIND_SOFTWARE)
         .build();
+  }
+
+  private static VideoEncodeFeature encodeFeature(EncodeFeature feature) {
+    return switch (feature) {
+      case TEN_BIT -> VideoEncodeFeature.VIDEO_ENCODE_FEATURE_TEN_BIT;
+      case PQ -> VideoEncodeFeature.VIDEO_ENCODE_FEATURE_PQ;
+      case HLG -> VideoEncodeFeature.VIDEO_ENCODE_FEATURE_HLG;
+      case DOLBY_VISION_TO_PQ -> VideoEncodeFeature.VIDEO_ENCODE_FEATURE_DOLBY_VISION_TO_PQ;
+    };
   }
 
   private static VideoCodecFamily codecFamily(CodecFamily family) {
