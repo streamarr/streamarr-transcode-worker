@@ -6942,6 +6942,59 @@ class WorkerMediaSmokeTest {
     assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
   }
 
+  // Segment 3 starts at 2,700,012/90,000 s, 30.0001333... s, which falls between two samples of the
+  // 48 kHz source: sample 1,440,006.4. The replacement's audio must open on sample 1,440,007, the
+  // first at or after that start, as a lower variant that starts beside a copy does. A trim at the
+  // start rounded to a microsecond, 30.000134 s, rounds to sample 1,440,006, before the start.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"aac", "ac3", "libopus", "flac"})
+  @DisplayName(
+      "Should open the replacement's audio on the first sample at or after its first segment's"
+          + " exact start and leave no gap after the start attempt's audio")
+  void shouldOpenTheReplacementsAudioOnTheFirstSampleAtOrAfterItsFirstSegmentsExactStart(
+      String codec) throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            exactStartGapAudioJob(source, codec).build());
+    var replacementJob = exactStartGapAudioJob(source, codec);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(3))));
+    var sample = new BigFraction(1, replaced.audioTrack().timescale());
+    var firstSampleAtOrAfterTheStart =
+        sample.ticksIn(new BigFraction(2_700_012, MPEG_TS_TICKS_PER_SECOND).ceilingIn(sample));
+    assertThat(replaced.audioTrack().timescale()).isEqualTo(48_000);
+    assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
+        .as("the replacement's audio opens on the first sample at or after the exact start")
+        .isEqualTo(firstSampleAtOrAfterTheStart);
+    var before = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(2))));
+    var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
+    assertThat(lastAudioBefore.end())
+        .as("the start attempt's segment 2 audio reaches the replacement's, by less than a frame")
+        .isGreaterThanOrEqualTo(firstSampleAtOrAfterTheStart)
+        .isLessThan(firstSampleAtOrAfterTheStart + lastAudioBefore.duration());
+  }
+
+  // The gap source's job on exact starts in place of slots 0, 3, 6 and 10: segment 3 starts 12
+  // ticks of 1/90,000 s after 30 s.
+  private static VariantJob.Builder exactStartGapAudioJob(Path source, String codec) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartTicks(List.of(0L, 810_000L, 1_620_000L, 2_700_012L))
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder().setNumerator(1).setDenominator(MPEG_TS_TICKS_PER_SECOND));
+    return job;
+  }
+
   // FLAC and ALAC are lossless, so the replacement's audio decodes to the start attempt's samples
   // only when its frames carry the source's samples from the listed start on, at the times that
   // the start attempt gives them. Timestamps alone would also pass audio taken from a frame

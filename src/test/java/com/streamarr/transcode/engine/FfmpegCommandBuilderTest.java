@@ -1597,6 +1597,47 @@ class FfmpegCommandBuilderTest {
             encoder.codec());
   }
 
+  // Segment 2 starts at 852,852/90,000 s, 9.4761333... s, between two samples at any common rate.
+  // A trim at that time in seconds rounds to the nearest sample, which can fall before the start,
+  // so the encoder's first frame would join segment 1. The trim cuts at the next whole second,
+  // 10 s, and the shift moves by the samples from the start's first sample, ceil(42,852 × SR /
+  // 90,000) past 9 s, up to 10 s, so that the first frame starts on the start's first sample.
+  @Test
+  @DisplayName(
+      "Should start the encoder's first frame on the first sample at or after the first segment's"
+          + " exact start when an encoded attempt from a later segment encodes its audio")
+  void shouldStartTheEncodersFirstFrameOnTheFirstSampleAtOrAfterTheFirstSegmentsExactStart() {
+    var request =
+        request(
+                decision(TranscodeMode.FULL_TRANSCODE)
+                    .audioDecision(
+                        AudioDecision.builder()
+                            .mode(AudioMode.TRANSCODE)
+                            .codec("aac")
+                            .channels(2)
+                            .bitrate(128_000L)
+                            .build())
+                    .build())
+            .exactSegmentStarts(
+                Optional.of(new ExactSegmentStarts(List.of(0L, 312_312L, 852_852L), 1, 90_000)))
+            .mediaSegmentCount(3)
+            .startSequenceNumber(2)
+            .build();
+
+    var cmd = command(request, "libx264");
+
+    var shift = "round((0+floor(6*SR/(1024))*(1024)+SR-ceil(42852*SR/90000))/SR/TB)";
+    assertThat(cmd)
+        .containsSequence(
+            "-af",
+            AAC_STEREO_INPUT
+                + "asetpts='PTS+"
+                + shift
+                + "',atrim=start=10,asetpts='PTS-"
+                + shift
+                + "'");
+  }
+
   // Each encoder's frame and the lead of its first input sample over its first frame without
   // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them. The input is the
   // stereo conversion each encoder takes; FFmpeg chooses ALAC's. A FLAC frame is the longest FLAC

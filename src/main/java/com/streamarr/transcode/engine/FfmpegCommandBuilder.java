@@ -789,9 +789,12 @@ public class FfmpegCommandBuilder {
   private static Optional<String> timingFilter(
       AudioDecision audio, TranscodeRequest request, Optional<AudioFrames> frames) {
     var trimStart = audioTrimStart(frames, request);
-    var start = seekArgument(trimStart.orElseGet(() -> inputSeekPosition(request)));
     var shift =
         firstSegmentStartOfAnEncode(request).flatMap(_ -> frameAlignedShift(frames, request));
+    var start =
+        shift
+            .map(_ -> alignedTrimSeconds(request))
+            .orElseGet(() -> seekArgument(trimStart.orElseGet(() -> inputSeekPosition(request))));
     var shiftForward = shift.map(samples -> "asetpts='PTS+" + samples + "',").orElse("");
     var shiftBack = shift.map(samples -> ",asetpts='PTS-" + samples + "'").orElse("");
     if (audio.padsWithSilenceToAdvertisedEnd()) {
@@ -837,6 +840,7 @@ public class FfmpegCommandBuilder {
   private static Optional<String> frameAlignedShift(
       Optional<AudioFrames> frames, TranscodeRequest request) {
     var seconds = seekArgument(audioReach(request));
+    var toTheTrim = samplesFromTheStartToTheTrim(request);
     return frames.map(
         encoderFrames ->
             "round(("
@@ -847,7 +851,38 @@ public class FfmpegCommandBuilder {
                 + encoderFrames.samples()
                 + "))*("
                 + encoderFrames.samples()
-                + "))/SR/TB)");
+                + ")"
+                + toTheTrim
+                + ")/SR/TB)");
+  }
+
+  // atrim rounds a start in seconds to the nearest sample, which for an exact start between two
+  // samples can fall before it, and the encoder's first frame would then join the segment before.
+  // So the trim cuts at the first whole second at or after the first segment's start, and the shift
+  // grows by the samples from the start's first sample up to that second, as an expression of SR:
+  // the encoder's first frame without priming then starts on the first sample at or after the
+  // start, at any sample rate. Each operand is a whole number below 2^53, so the expression keeps
+  // them exact.
+  private static String alignedTrimSeconds(TranscodeRequest request) {
+    var start = exactFirstSegmentStart(request);
+    if (start.remainder() == 0) {
+      return String.valueOf(start.seconds());
+    }
+
+    return String.valueOf(start.seconds() + 1);
+  }
+
+  private static String samplesFromTheStartToTheTrim(TranscodeRequest request) {
+    var start = exactFirstSegmentStart(request);
+    if (start.remainder() == 0) {
+      return "";
+    }
+
+    return "+SR-ceil(" + start.remainder() + "*SR/" + start.denominator() + ")";
+  }
+
+  private static MediaTime.WholeSeconds exactFirstSegmentStart(TranscodeRequest request) {
+    return request.segmentIntervals().startTimeOf(request.startSequenceNumber()).wholeSeconds();
   }
 
   private static Optional<AudioFrames> framesOf(String encoder) {

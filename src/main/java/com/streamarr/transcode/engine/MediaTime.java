@@ -43,6 +43,19 @@ record MediaTime(long ticks, TimeBase timeBase) implements Comparable<MediaTime>
     return Duration.ofNanos(nanoseconds.longValueExact());
   }
 
+  /**
+   * This non-negative time split into its whole seconds and what lies past them, in ticks of the
+   * time base's denominator.
+   */
+  WholeSeconds wholeSeconds() {
+    var parts = seconds().divideAndRemainder(denominator());
+    return new WholeSeconds(
+        parts[0].longValueExact(), parts[1].longValueExact(), timeBase.denominator());
+  }
+
+  /** Whole seconds plus {@code remainder / denominator} of a second. */
+  record WholeSeconds(long seconds, long remainder, long denominator) {}
+
   /** This time in ticks of the other time base, rounded down. */
   long floorIn(TimeBase other) {
     var parts = dividedBy(other);
