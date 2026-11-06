@@ -109,8 +109,8 @@ public final class Producer {
   private long resumes;
   private List<PausedProcess> pausedProcesses = List.of();
   // Guarded by lock. Whether the tally counts this producer's FFmpeg as stopped: from a stop until
-  // FFmpeg continues or one of its processes exits, which a killed stopped FFmpeg does while the
-  // reader still waits on a delivery.
+  // FFmpeg continues or every one of its processes has exited, as a killed stopped FFmpeg does
+  // while the reader still waits on a delivery.
   private boolean countedStopped;
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
@@ -216,7 +216,9 @@ public final class Producer {
             .gracePeriod(gracePeriod)
             .start();
     var producer = new Producer(ffmpeg, settings);
-    ffmpeg.processes().forEach(process -> process.onExit().thenRun(producer::uncountStoppedFfmpeg));
+    CompletableFuture.allOf(
+            ffmpeg.processes().stream().map(Process::onExit).toArray(CompletableFuture<?>[]::new))
+        .thenRun(producer::uncountStoppedFfmpeg);
     Thread.ofVirtual()
         .name(producer.threadName)
         .uncaughtExceptionHandler(producer::failReaderUnexpectedly)

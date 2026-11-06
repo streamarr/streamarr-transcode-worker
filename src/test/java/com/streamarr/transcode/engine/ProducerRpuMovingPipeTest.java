@@ -22,6 +22,7 @@ import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.SourceEnd.StreamEnd;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.UnixDomainSocketAddress;
@@ -241,6 +242,43 @@ class ProducerRpuMovingPipeTest {
 
   // The encoding FFmpeg reads the source's audio itself, so the end of its input from the copy
   // would not end it before the end of the source's audio.
+  @Test
+  @DisplayName(
+      "Should keep counting a held producer as stopped when one of its FFmpegs exits while the"
+          + " other survives")
+  void shouldKeepCountingAHeldProducerAsStoppedWhenOneOfItsFfmpegsExitsWhileTheOtherSurvives() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(COPIED_SOURCE)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var encode = encodingFfmpeg().pauseAfter(0).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (command, _) -> {
+              if (!isCopying(command)) {
+                return encode;
+              }
+
+              writeTimingAndAwaitHangUp(command, RpuMovingCopies.copiedTiming());
+              return copy;
+            });
+    var pauses = new ProducerPauses();
+    var producer = producer(launcher).pauses(pauses).start();
+    assertThat(encode.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+
+    encode.exit();
+
+    assertThat(pauses.stoppedProducers()).isOne();
+    copy.exit();
+    assertThat(pauses.stoppedProducers()).isZero();
+    producer.releaseHeldFfmpeg();
+    encode.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(pauses.stoppedProducers()).isZero();
+  }
+
   @Test
   @DisplayName(
       "Should ask the copying FFmpeg to quit, and the encoding FFmpeg to terminate, when the attempt"
