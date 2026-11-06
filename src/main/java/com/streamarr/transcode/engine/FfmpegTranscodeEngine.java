@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.LongConsumer;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -80,6 +81,44 @@ public class FfmpegTranscodeEngine {
         job.videoEncoder(),
         producer.pid());
     return producer;
+  }
+
+  /**
+   * Where a held encode that starts after segment 0 reads from, so that it decodes the video's last
+   * picture even when its seek position lies after the video's last keyframe (ADR 0037, early
+   * ends). Empty when the attempt keeps its own seek position: a keyframe presents between that
+   * position and the first segment's start, or the attempt is no held encode with a seek position.
+   *
+   * @param bytesRead takes the bytes of each packet that the search reads, as it reads them
+   * @throws NoKeyframeBeforeReadBackException when the video has no keyframe before the seek
+   *     position
+   * @throws TranscodeException when a scan's FFmpeg cannot start or exits with an error
+   */
+  public Optional<Duration> heldPictureReadPosition(
+      TranscodeRequest request, LongConsumer bytesRead) throws InterruptedException {
+    var seekPosition = request.seekPosition();
+    if (seekPosition.isEmpty() || request.startSequenceNumber() == 0 || !holdsLastFrame(request)) {
+      return Optional.empty();
+    }
+
+    var firstSegmentStart =
+        Duration.ofNanos(
+            request
+                .segmentIntervals()
+                .startOf(request.startSequenceNumber(), Duration.ofSeconds(1).toNanos()));
+    var scan =
+        KeyframeScan.builder()
+            .commandBuilder(commandBuilder)
+            .launcher(launcher)
+            .request(request)
+            .bytesRead(bytesRead)
+            .build();
+    return LastKeyframeSearch.readPosition(seekPosition.get(), firstSegmentStart, scan);
+  }
+
+  private static boolean holdsLastFrame(TranscodeRequest request) {
+    return request.transcodeDecision().videoDecision() instanceof VideoDecision.Encode encode
+        && encode.holdsLastFrameToAdvertisedEnd();
   }
 
   private void requireAvailableFfmpeg() {

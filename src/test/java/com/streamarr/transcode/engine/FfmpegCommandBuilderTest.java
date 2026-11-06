@@ -1944,6 +1944,56 @@ class FfmpegCommandBuilderTest {
             "pcm_f32le");
   }
 
+  @Test
+  @DisplayName(
+      "Should copy the chosen video stream's packets and the audio's, from the position for the"
+          + " length and on the attempt's timeline, to a framecrc on standard output when building a"
+          + " keyframe scan")
+  void shouldCopyTheVideosAndAudiosPacketsFromThePositionForTheLengthWhenBuildingAKeyframeScan() {
+    var cmd =
+        builder.buildKeyframeScanCommand(
+            Path.of("/media/source.ts"), 2, Duration.ofMillis(4_500), Duration.ofSeconds(10));
+
+    assertThat(cmd)
+        .containsExactly(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "quiet",
+            "-copyts",
+            "-start_at_zero",
+            "-ss",
+            "4.5",
+            "-t",
+            "10",
+            "-i",
+            "/media/source.ts",
+            "-map",
+            "0:2",
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+            "-copyinkf",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "pipe:1");
+  }
+
+  @Test
+  @DisplayName("Should seek nowhere when building a keyframe scan from the start of the timeline")
+  void shouldSeekNowhereWhenBuildingAKeyframeScanFromTheStartOfTheTimeline() {
+    var cmd =
+        builder.buildKeyframeScanCommand(
+            Path.of("/media/source.ts"), 0, Duration.ZERO, Duration.ofSeconds(4));
+
+    assertThat(cmd).doesNotContain("-ss").containsSequence("-t", "4", "-i", "/media/source.ts");
+  }
+
   // FFmpeg writes each output's metadata to its error output, where the worker reads the framecrc.
   @ParameterizedTest(name = "{0}")
   @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})

@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -314,6 +315,39 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-map", audioMap, "-map", audioMap));
     addNamedAudioStreamExclusions(cmd, audio, source);
     cmd.addAll(List.of("-c", "copy", "-copypriorss", "1", "-c:a:1", "pcm_f32le"));
+  }
+
+  /**
+   * The command of a keyframe scan in a held encode's search for the video's last keyframe (ADR
+   * 0037, early ends): it copies the chosen video stream's packets and the audio's, without
+   * decoding them, from the position for the length, to a framecrc on standard output. Its times
+   * lie on the attempt's zero-based timeline, as the job attempt's own command places them.
+   */
+  List<String> buildKeyframeScanCommand(
+      Path source, int videoStreamIndex, Duration from, Duration length) {
+    var cmd =
+        new ArrayList<>(
+            List.of(ffmpegPath, "-nostdin", "-v", "quiet", "-copyts", "-start_at_zero"));
+    if (from.isPositive()) {
+      cmd.addAll(List.of("-ss", seekArgument(from)));
+    }
+
+    cmd.addAll(
+        List.of(
+            "-t",
+            seekArgument(length),
+            "-i",
+            source.toString(),
+            "-map",
+            "0:" + videoStreamIndex,
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+            "-copyinkf"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(List.of("-f", "framecrc", "pipe:1"));
+    return List.copyOf(cmd);
   }
 
   // The copy's muxer replaces each video packet's duration with the gap to the next packet's
