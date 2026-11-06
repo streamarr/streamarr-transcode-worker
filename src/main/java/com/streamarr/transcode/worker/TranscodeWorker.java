@@ -322,7 +322,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
-  private void startVariant(StartVariantCommand command) {
+  private void startVariant(StartVariantCommand command, WorkerProbeSession session) {
     var job = command.getJob();
     if (!isRunnableHere(command)) {
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
@@ -331,7 +331,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
     if (WorkerVariantJobMapper.namesAudioLayout(job)
         || WorkerVariantJobMapper.holdsTheLastFrameFromASeek(job)) {
-      startReading(command);
+      startReading(command, session);
       return;
     }
 
@@ -351,9 +351,15 @@ public final class TranscodeWorker implements AutoCloseable {
   // Both read on the attempt's own thread, so the control stream keeps delivering commands while
   // they read: a stop for the attempt or the session's end interrupts the read. The attempt counts
   // against the probe capacities from the read's start, since the read loads the host as the
-  // encode does.
-  private synchronized void startReading(StartVariantCommand command) {
+  // encode does. A start that its session's stream delivers after the session ended starts no
+  // read: no cleanup of that session would end it.
+  private synchronized void startReading(StartVariantCommand command, WorkerProbeSession session) {
     var jobAttemptId = fromProto(command.getJob().getJobAttemptId());
+    if (probeSession != session || requests == null) {
+      log.debug("Ignoring job attempt {}: its worker session has ended", jobAttemptId);
+      return;
+    }
+
     var searchProgress = new KeyframeSearchProgress();
     var reading =
         Thread.ofVirtual()
@@ -1131,7 +1137,7 @@ public final class TranscodeWorker implements AutoCloseable {
       }
 
       if (response.hasStartVariant()) {
-        startVariant(response.getStartVariant());
+        startVariant(response.getStartVariant(), sessionProbes);
         return;
       }
 

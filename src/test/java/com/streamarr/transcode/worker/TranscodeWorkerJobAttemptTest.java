@@ -2375,6 +2375,40 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // A start that the ended session's stream still delivers arrives after that session's cleanup,
+  // which nothing repeats: a failed stream's cleanup runs once, and close() ends the worker's
+  // reads before the session's start.
+  @ParameterizedTest(name = "the session {0}")
+  @ValueSource(strings = {"closed", "failed"})
+  @DisplayName(
+      "Should launch no search and hold no probe capacity when a held encode's start arrives after"
+          + " its session ended")
+  void shouldLaunchNoSearchAndHoldNoCapacityWhenAHeldEncodesStartArrivesAfterItsSessionEnded(
+      String ending) throws Exception {
+    var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var endedSession = runtime.connection();
+      endedSession.registration();
+      if (ending.equals("failed")) {
+        endedSession.fail("the server went away");
+      } else {
+        worker.close();
+      }
+
+      startVariant(endedSession, job);
+      worker.close();
+      worker.start("localhost", 1);
+
+      assertThat(runtime.connection().registration().getKeyframePacketScanCapacity())
+          .as("the idle keyframe packet scan capacity")
+          .isEqualTo(1);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
   private static List<Integer> keyframePacketScanCapacitiesSentTo(
       ScriptedWorkerRuntime.Connection connection) {
     return connection.events().stream()
