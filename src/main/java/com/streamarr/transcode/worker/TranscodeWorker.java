@@ -241,7 +241,7 @@ public final class TranscodeWorker implements AutoCloseable {
     sessionTimers =
         Executors.newSingleThreadScheduledExecutor(
             Thread.ofVirtual().name("session-timers").factory());
-    seekYields = new SeekYields(sessionTimers);
+    seekYields = new SeekYields();
     sessionTimers.scheduleAtFixedRate(
         this::logProbeSummary,
         PROBE_SUMMARY_INTERVAL.toMillis(),
@@ -1308,6 +1308,7 @@ public final class TranscodeWorker implements AutoCloseable {
     probeSession.shutdown();
     sessionTimers.shutdownNow();
     sessionTimers = null;
+    seekYields.close();
     seekYields = null;
     var attempts = claimActiveAttempts();
     try {

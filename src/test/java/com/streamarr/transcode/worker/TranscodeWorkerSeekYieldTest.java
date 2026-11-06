@@ -21,12 +21,15 @@ import build.buf.gen.streamarr.transcode.v1.YieldToSeekCommand;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,10 +50,13 @@ class TranscodeWorkerSeekYieldTest {
   @TempDir Path tempDir;
 
   private final ScriptedWorkerRuntime runtime = new ScriptedWorkerRuntime();
-  private final ScriptedProcessLauncher launcher = ScriptedProcessLauncher.running();
   private final VariantJob steady = variantJobBuilder().build();
   private final VariantJob otherSteady = variantJobBuilder().build();
   private final VariantJob seek = variantJobBuilder().build();
+  private final VariantJob slowStart = variantJobBuilder().build();
+  private final CountDownLatch slowLaunchEntered = new CountDownLatch(1);
+  private final CountDownLatch slowLaunchReleased = new CountDownLatch(1);
+  private final ScriptedProcessLauncher launcher = new ScriptedProcessLauncher(this::launch);
 
   @BeforeEach
   void setUp() throws Exception {
@@ -185,11 +191,57 @@ class TranscodeWorkerSeekYieldTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should resume a paused job attempt once the hold limit passes when another job attempt's"
+          + " start holds the worker")
+  void
+      shouldResumeAPausedJobAttemptOnceTheHoldLimitPassesWhenAnotherJobAttemptsStartHoldsTheWorker()
+          throws Exception {
+    try (var worker = worker()) {
+      var connection = startThreeAttempts(worker);
+      yieldToSeek(connection, Duration.ofSeconds(2), steady);
+      promptly().until(() -> pausedAttempts().equals(List.of(steady)));
+      var starting = Thread.ofVirtual().start(() -> startVariant(connection, slowStart));
+      try {
+        assertThat(slowLaunchEntered.await(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+        promptly().until(() -> pausedAttempts().isEmpty());
+
+        assertThat(starting.isAlive()).as("the slow start still holds the worker").isTrue();
+      } finally {
+        slowLaunchReleased.countDown();
+        starting.join();
+      }
+
+      processOf(slowStart).exit();
+      exitAll();
+    }
+  }
+
+  private ScriptedProcess launch(UUID jobAttemptId) throws IOException {
+    if (jobAttemptId.equals(fromProto(slowStart.getJobAttemptId()))) {
+      slowLaunchEntered.countDown();
+      awaitSlowLaunchRelease();
+    }
+
+    return ScriptedProcessLauncher.runningProcessBuilder().build();
+  }
+
+  private void awaitSlowLaunchRelease() throws InterruptedIOException {
+    try {
+      slowLaunchReleased.await();
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+      throw new InterruptedIOException("the slow launch was interrupted");
+    }
+  }
+
   private TranscodeWorker worker() {
     return workerBuilder(tempDir)
         .configuration(
             workerConfigurationBuilder()
-                .availableSlots(3)
+                .availableSlots(4)
                 .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
                 .build())
         .runtime(runtime)

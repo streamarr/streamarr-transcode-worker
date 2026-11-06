@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -18,17 +19,16 @@ import lombok.NonNull;
  * the worker (ADR 0044, seek priority). Each yield replaces the previous one's attempts, and each
  * paused attempt resumes at the latest once the yield's hold limit has passed.
  */
-final class SeekYields {
+final class SeekYields implements AutoCloseable {
 
-  private final ScheduledExecutorService timers;
+  // Its own thread, so that no task that waits for the worker's monitor delays a release.
+  private final ScheduledExecutorService releases =
+      Executors.newSingleThreadScheduledExecutor(
+          Thread.ofVirtual().name("seek-yield-releases").factory());
 
   // Guarded by this monitor.
   private final Map<UUID, PausedAttempt> paused = new HashMap<>();
   private long holds;
-
-  SeekYields(@NonNull ScheduledExecutorService timers) {
-    this.timers = timers;
-  }
 
   /**
    * Pauses each listed attempt that runs, resumes each paused attempt that is not listed, and
@@ -67,7 +67,8 @@ final class SeekYields {
     producer.pauseFfmpeg();
     var hold = ++holds;
     var release =
-        timers.schedule(() -> release(attemptId, hold), holdLimit.toNanos(), TimeUnit.NANOSECONDS);
+        releases.schedule(
+            () -> release(attemptId, hold), holdLimit.toNanos(), TimeUnit.NANOSECONDS);
     paused.put(attemptId, new PausedAttempt(producer, hold, release));
   }
 
@@ -80,6 +81,12 @@ final class SeekYields {
 
     paused.remove(attemptId);
     held.producer().resumeFfmpeg();
+  }
+
+  /** Cancels every pending release; the worker stops the attempts that the session ran. */
+  @Override
+  public void close() {
+    releases.shutdownNow();
   }
 
   private record PausedAttempt(Producer producer, long hold, ScheduledFuture<?> release) {}
