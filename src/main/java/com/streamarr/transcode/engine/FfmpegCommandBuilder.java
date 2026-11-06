@@ -1083,9 +1083,24 @@ public class FfmpegCommandBuilder {
               + PLANAR_TEN_BIT_PIXEL_FORMAT
               + ",tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format="
               + PLANAR_TEN_BIT_PIXEL_FORMAT
-              + encoderFormatAfterThePlanarOne(job);
-      case CONVERT_TO_BT709, KEEP_THE_SOURCES_RANGE -> "format=" + encoderPixelFormat(job);
+              + encoderFormatAfterThePlanarOne(job)
+              + hdrColourParameters(job);
+      case KEEP_THE_SOURCES_RANGE -> "format=" + encoderPixelFormat(job) + hdrColourParameters(job);
+      case CONVERT_TO_BT709 -> "format=" + encoderPixelFormat(job);
     };
+  }
+
+  // The encoder and the mp4 muxer take the colour description from the frames, so the filters
+  // describe every frame as the job's output whatever the source's own tags say: without it,
+  // FFmpeg writes no colr box for an untagged source.
+  private static String hdrColourParameters(TranscodeJob job) {
+    return hdrTransferOf(job)
+        .map(
+            transfer ->
+                ",setparams=color_primaries=bt2020:color_trc="
+                    + transfer.ffmpegName()
+                    + ":colorspace=bt2020nc:range=tv")
+        .orElse("");
   }
 
   private static String planarFormat(TranscodeJob job) {

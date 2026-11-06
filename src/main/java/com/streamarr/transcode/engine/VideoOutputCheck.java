@@ -9,18 +9,23 @@ import java.util.stream.IntStream;
 
 /**
  * Compares the video that an initialization segment declares with the job's video decision: the
- * codec string always, for an encode the 8-bit 4:2:0 picture format and progressive video too, for
- * a copy that strips Dolby Vision the absence of a Dolby Vision configuration record, and for a
- * copy with a planned output a colour description that does not contradict the planned range and an
- * {@code hvc1} record that holds exactly the static HDR metadata messages that it plans. It also
- * requires the decoder configuration record to hold the parameter sets that its sample entry
- * promises. Audio codec strings are not compared, because the job carries none.
+ * codec string always, for an encode the job's picture format and progressive video too, and for a
+ * PQ or HLG encode its BT.2020 colour description and an {@code hvc1} record that holds exactly a
+ * PQ encode's static HDR metadata messages, for a copy that strips Dolby Vision the absence of a
+ * Dolby Vision configuration record, and for a copy with a planned output a colour description that
+ * does not contradict the planned range and an {@code hvc1} record that holds exactly the static
+ * HDR metadata messages that it plans. It also requires the decoder configuration record to hold
+ * the parameter sets that its sample entry promises. Audio codec strings are not compared, because
+ * the job carries none.
  */
 final class VideoOutputCheck {
 
   // The transfer characteristics of BT.2100 PQ and HLG (ITU-T H.273 table 3).
   private static final int PQ_TRANSFER = 16;
   private static final int HLG_TRANSFER = 18;
+  // BT.2020 colour primaries and its non-constant luminance matrix (ITU-T H.273 tables 2 and 4).
+  private static final int BT2020_PRIMARIES = 9;
+  private static final int BT2020_NON_CONSTANT_MATRIX = 9;
 
   private VideoOutputCheck() {}
 
@@ -48,12 +53,8 @@ final class VideoOutputCheck {
               + decision.codecString());
     }
 
-    if (decision instanceof VideoDecision.Encode
-        && !video.pictureFormat().equals(Optional.of(PictureFormat.EIGHT_BIT_420))) {
-      throw mismatch(
-          "the encode declares "
-              + video.pictureFormat().map(VideoOutputCheck::describe).orElse("no picture format")
-              + " where every encode is 8-bit 4:2:0");
+    if (decision instanceof VideoDecision.Encode encode) {
+      requireEncodedOutput(encode, video, sampleEntry);
     }
 
     if (encodeDeclaresInterlacedVideo(decision, sampleEntry)) {
@@ -80,6 +81,43 @@ final class VideoOutputCheck {
               + sampleEntry.type()
               + " sample entry promises parameter sets that its decoder configuration record does"
               + " not hold");
+    }
+  }
+
+  // An encode writes the job's picture format, and a PQ or HLG encode the BT.2020 colour
+  // description of its range, which the filters put on every frame so that the muxer writes it.
+  // An hvc1 record of a PQ encode holds exactly the job's static HDR metadata messages.
+  private static void requireEncodedOutput(
+      VideoDecision.Encode encode, TrackCodec.Video video, BoxView sampleEntry) {
+    if (!video.pictureFormat().equals(Optional.of(encode.outputPictureFormat()))) {
+      throw mismatch(
+          "the encode declares "
+              + video.pictureFormat().map(VideoOutputCheck::describe).orElse("no picture format")
+              + " where the job asks for "
+              + describe(encode.outputPictureFormat()));
+    }
+
+    var transfer = HdrTransfer.of(encode.outputDynamicRange());
+    if (transfer.isEmpty()) {
+      return;
+    }
+
+    var expected =
+        new CodecConfigurationReader.ColourDescription(
+            BT2020_PRIMARIES, transfer.get().transferCharacteristics(), BT2020_NON_CONSTANT_MATRIX);
+    var declared = readable(() -> CodecConfigurationReader.colourDescriptionOf(sampleEntry));
+    if (!declared.equals(Optional.of(expected))) {
+      throw mismatch(
+          "the encode declares "
+              + declared.map(Object::toString).orElse("no nclx colr box")
+              + " where its "
+              + transfer.get()
+              + " output takes "
+              + expected);
+    }
+
+    if (sampleEntry.type().equals("hvc1") && encode.staticHdrMetadata().isPresent()) {
+      requirePlannedStaticMetadata(encode, sampleEntry);
     }
   }
 
@@ -171,8 +209,7 @@ final class VideoOutputCheck {
 
   // The rewrite writes exactly the planned messages, each on its own, so the record must hold those
   // NAL units and no other SEI message.
-  private static void requirePlannedStaticMetadata(
-      VideoDecision.Copy decision, BoxView sampleEntry) {
+  private static void requirePlannedStaticMetadata(VideoDecision decision, BoxView sampleEntry) {
     var held = readable(() -> CodecConfigurationReader.seiNalUnitsOf(sampleEntry));
     var planned = InitializationSegmentRewrite.plannedSeiUnitsOf(decision);
     if (held.size() != planned.size()
@@ -181,7 +218,7 @@ final class VideoOutputCheck {
       throw mismatch(
           "the hvcC holds "
               + held.size()
-              + " SEI NAL units where the copy plans exactly "
+              + " SEI NAL units where the job plans exactly "
               + planned.size()
               + " static HDR metadata messages");
     }

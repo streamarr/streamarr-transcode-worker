@@ -134,6 +134,23 @@ final class CodecConfigurationReader {
   }
 
   /**
+   * The colour primaries, transfer characteristics and matrix coefficients (ITU-T H.273) that a
+   * visual sample entry's {@code nclx} colr box declares; empty when it holds no such box.
+   *
+   * @throws FragmentedMp4Exception when the colr box ends before its matrix does
+   */
+  static Optional<ColourDescription> colourDescriptionOf(BoxView sampleEntry) {
+    return sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).children("colr").stream()
+        .map(BoxView::fields)
+        .filter(colr -> colr.fourcc().equals("nclx"))
+        .map(colr -> new ColourDescription(colr.u16(), colr.u16(), colr.u16()))
+        .findFirst();
+  }
+
+  /** The code points of an nclx colr box (ITU-T H.273 tables 2, 3 and 4). */
+  record ColourDescription(int primaries, int transfer, int matrix) {}
+
+  /**
    * The SEI NAL units of an HEVC sample entry's hvcC, prefix and suffix alike, in the order of its
    * arrays, each without a length.
    *

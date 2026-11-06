@@ -92,7 +92,11 @@ class TranscodeWorkerHdrEncodeTest {
       throws Exception {
     var command = commandOf(hdr10Encode(hevcMain10(), CompatibleBase.COMPATIBLE_BASE_PQ));
 
-    assertThat(valueOf(command, "-vf")).contains("format=yuv420p10le").doesNotContain("tonemapx");
+    assertThat(valueOf(command, "-vf"))
+        .contains(
+            "format=yuv420p10le,"
+                + "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv")
+        .doesNotContain("tonemapx");
     assertThat(valueOf(command, "-profile:v")).isEqualTo("main10");
     assertThat(List.of(valueOf(command, "-x265-params").split(":")))
         .contains(
@@ -138,7 +142,11 @@ class TranscodeWorkerHdrEncodeTest {
 
     var command = commandOf(job);
 
-    assertThat(valueOf(command, "-vf")).contains("format=yuv420p10le").doesNotContain("tonemapx");
+    assertThat(valueOf(command, "-vf"))
+        .contains(
+            "format=yuv420p10le,"
+                + "setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc:range=tv")
+        .doesNotContain("tonemapx");
     assertThat(List.of(valueOf(command, "-x265-params").split(":")))
         .contains("transfer=arib-std-b67", "colorprim=bt2020")
         .noneMatch(

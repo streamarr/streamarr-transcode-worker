@@ -145,13 +145,25 @@ final class InitializationSegmentRewrite {
     return copy.plannedOutput().flatMap(PlannedCopyOutput::dolbyVision);
   }
 
-  /** The static HDR metadata SEI NAL units that the decision plans for an hvc1 record, in order. */
+  /**
+   * The static HDR metadata SEI NAL units that the decision plans for an hvc1 record, in order: a
+   * copy's planned values, or a PQ encode's static HDR metadata, which Apple's HLS Authoring
+   * Specification item 1.8 asks for in the record.
+   */
   static List<byte[]> plannedSeiUnitsOf(VideoDecision decision) {
-    if (!(decision instanceof VideoDecision.Copy copy)) {
-      return List.of();
-    }
-
-    return copy.plannedOutput().map(HevcStaticMetadataSei::nalUnitsOf).orElse(List.of());
+    return switch (decision) {
+      case VideoDecision.Copy copy ->
+          copy.plannedOutput().map(HevcStaticMetadataSei::nalUnitsOf).orElse(List.of());
+      case VideoDecision.Encode encode ->
+          encode
+              .staticHdrMetadata()
+              .map(
+                  metadata ->
+                      HevcStaticMetadataSei.nalUnitsOf(
+                          Optional.of(metadata.masteringDisplay()),
+                          Optional.of(metadata.contentLightLevel())))
+              .orElse(List.of());
+    };
   }
 
   // Every child box, rebuilt, apart from those of the dropped types.

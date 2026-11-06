@@ -17,6 +17,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -31,6 +32,14 @@ class VideoOutputCheckTest {
   private static final String HVCC_PARAMETER_SET_ARRAYS =
       "A0000100024001" + "A1000100024201" + "A2000100024401";
   private static final String HVCC = HVCC_FIELDS + "03" + HVCC_PARAMETER_SET_ARRAYS;
+  // Main 10 at level 3.0, 10-bit 4:2:0: general_profile_idc 2 with its compatibility flag.
+  private static final String MAIN_10_CODEC_STRING = "hvc1.2.4.L90.90";
+  private static final String MAIN_10_HVCC_FIELDS = "0102200000009000000000005AF000FCFDFAFA00000F";
+  // The messages of the encode's static HDR metadata, as the record holds them.
+  private static final List<byte[]> PQ_SEI_UNITS =
+      HevcStaticMetadataSei.nalUnitsOf(
+          Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY),
+          Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL));
 
   @Test
   @DisplayName(
@@ -302,6 +311,113 @@ class VideoOutputCheckTest {
   }
 
   // Profile 8 at level 6 on a PQ base, under hvc1.
+  @Test
+  @DisplayName(
+      "Should accept a PQ encode when its sample entry declares 10-bit 4:2:0, the BT.2020 PQ"
+          + " colour description and exactly its static HDR messages")
+  void shouldAcceptAPqEncodeWhenItsSampleEntryDeclaresItsPictureFormatColourAndStaticMessages() {
+    var segment = mainTenSegment(PQ_SEI_UNITS, colr(9, 16, 9));
+
+    assertThatNoException()
+        .isThrownBy(() -> VideoOutputCheck.requireMatch(mainTenPqEncode(), segment));
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the encode as an output mismatch when its record declares another bit depth"
+          + " than the encode writes")
+  void shouldRefuseTheEncodeWhenItsRecordDeclaresAnotherBitDepthThanTheEncodeWrites() {
+    var tenBitSdr =
+        VideoDecisionFixtures.encodeBuilder()
+            .codecString(SYNTHETIC_HEVC_CODEC_STRING)
+            .outputPictureFormat(new PictureFormat(10, ChromaSubsampling.CHROMA_420))
+            .build();
+
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(tenBitSdr, hevcSegmentWith(new byte[0])))
+        .isInstanceOf(FragmentedMp4Exception.class)
+        .extracting("reason")
+        .isEqualTo(Reason.OUTPUT_MISMATCH);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("contradictoryColourDescriptions")
+  @DisplayName(
+      "Should refuse the PQ encode as an output mismatch when its colr box is missing or declares"
+          + " another colour description")
+  void shouldRefuseThePqEncodeWhenItsColrBoxIsMissingOrDeclaresAnotherColourDescription(
+      String colour, byte[] boxesAfterTheRecord) {
+    var segment = mainTenSegment(PQ_SEI_UNITS, boxesAfterTheRecord);
+
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(mainTenPqEncode(), segment))
+        .isInstanceOf(FragmentedMp4Exception.class)
+        .extracting("reason")
+        .isEqualTo(Reason.OUTPUT_MISMATCH);
+  }
+
+  static Stream<Arguments> contradictoryColourDescriptions() {
+    return Stream.of(
+        Arguments.of("no colr box", new byte[0]),
+        Arguments.of("the BT.709 transfer", colr(9, 1, 9)),
+        Arguments.of("the HLG transfer", colr(9, 18, 9)),
+        Arguments.of("BT.709 primaries", colr(1, 16, 9)),
+        Arguments.of("the BT.709 matrix", colr(9, 16, 1)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the PQ encode as an output mismatch when its hvc1 record holds none of its"
+          + " static HDR messages")
+  void shouldRefuseThePqEncodeWhenItsRecordHoldsNoneOfItsStaticHdrMessages() {
+    var segment = mainTenSegment(List.of(), colr(9, 16, 9));
+
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(mainTenPqEncode(), segment))
+        .isInstanceOf(FragmentedMp4Exception.class)
+        .extracting("reason")
+        .isEqualTo(Reason.OUTPUT_MISMATCH);
+  }
+
+  private static VideoDecision.Encode mainTenPqEncode() {
+    var pq =
+        new VideoDynamicRange(
+            VideoDynamicRange.CompatibleBase.PQ,
+            VideoDynamicRange.Presence.ABSENT,
+            new VideoDynamicRange.DolbyVision.Absent());
+    return VideoDecisionFixtures.encodeBuilder()
+        .codecProfile(VideoCodecProfile.HEVC_MAIN_10)
+        .tier(Optional.of(VideoCodecTier.MAIN))
+        .level(90)
+        .codecString(MAIN_10_CODEC_STRING)
+        .sourceDynamicRange(pq)
+        .outputDynamicRange(pq)
+        .outputPictureFormat(new PictureFormat(10, ChromaSubsampling.CHROMA_420))
+        .staticHdrMetadata(
+            Optional.of(
+                new StaticHdrMetadata(
+                    PlannedCopyOutputs.MASTERING_DISPLAY, PlannedCopyOutputs.CONTENT_LIGHT_LEVEL)))
+        .build();
+  }
+
+  // A Main 10 record at level 3.0, 10-bit 4:2:0, with its parameter sets and the SEI units in one
+  // prefix SEI array, followed by the given boxes.
+  private static InitializationSegment mainTenSegment(
+      List<byte[]> seiUnits, byte[] boxesAfterTheRecord) {
+    var array = new ByteArrayOutputStream();
+    array.write(39);
+    array.writeBytes(IsoBoxes.u16(seiUnits.size()));
+    for (var unit : seiUnits) {
+      array.writeBytes(IsoBoxes.u16(unit.length));
+      array.writeBytes(unit);
+    }
+
+    var arrays = seiUnits.isEmpty() ? "03" : "04";
+    var hvcC =
+        IsoBoxes.concat(
+            HexFormat.of().parseHex(MAIN_10_HVCC_FIELDS + arrays + HVCC_PARAMETER_SET_ARRAYS),
+            seiUnits.isEmpty() ? new byte[0] : array.toByteArray());
+    var sampleEntry = box("hvc1", new byte[78], box("hvcC", hvcC), boxesAfterTheRecord);
+    return new InitializationSegment(HevcCopies.initializationSegment(sampleEntry));
+  }
+
   private static PlannedCopyOutput.DolbyVisionOutput profile8Level6() {
     return PlannedCopyOutput.DolbyVisionOutput.builder()
         .profile(8)
@@ -345,12 +461,17 @@ class VideoOutputCheckTest {
 
   // An nclx colr box: BT.2020 primaries and matrix, the transfer, and limited range.
   private static byte[] colr(int transfer) {
+    return colr(9, transfer, 9);
+  }
+
+  // An nclx colr box with the primaries, transfer and matrix, and limited range.
+  private static byte[] colr(int primaries, int transfer, int matrix) {
     return box(
         "colr",
         IsoBoxes.fourcc("nclx"),
-        IsoBoxes.u16(9),
+        IsoBoxes.u16(primaries),
         IsoBoxes.u16(transfer),
-        IsoBoxes.u16(9),
+        IsoBoxes.u16(matrix),
         new byte[] {0});
   }
 
