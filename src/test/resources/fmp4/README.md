@@ -140,10 +140,13 @@ The producer removes the SEI messages from every `hvc1` record before it deliver
 initialization segment. FFmpeg builds the record from the first sample when the source's record
 holds no parameter sets, and then copies that sample's SEI messages into it. Attempts that start at
 different keyframes would deliver different initialization segments, which ADR 0037 forbids. The
-samples keep their SEI messages. `deliveredInitializationSegment` in `expected.json` gives the
-length and SHA-256 of the initialization segment that the producer delivers. It differs from the
-recorded one only for the libx265 recordings, whose record holds libx265's settings as an SEI
-message: 1,443 bytes instead of 3,870.
+samples keep their SEI messages. An AV1 encode's `av1C` takes the sequence header of the first
+video sample in place of the one FFmpeg wrote: SVT-AV1 writes that one before it chooses its
+coding tools, and every keyframe of the recordings carries another, with five more tools enabled.
+`deliveredInitializationSegment` in `expected.json` gives the length and SHA-256 of the
+initialization segment that the producer delivers. It differs from the recorded one for the
+libx265 recordings, whose record holds libx265's settings as an SEI message (1,443 bytes instead of
+3,870), and for the SVT-AV1 recordings, whose sequence header keeps its length.
 
 An encode forces its keyframes with FFmpeg's list mode: every segment boundary k × 6 in whole
 seconds, for each k from the attempt's start sequence number K up to, not including, the media

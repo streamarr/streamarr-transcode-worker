@@ -113,7 +113,7 @@ jobs:
           cache: maven
       - uses: ./.github/actions/setup-ffmpeg
       - name: Exercise the worker with real media processes
-        run: ./mvnw -B test -Dtest=WorkerMediaSmokeTest,WorkerBitrateScanSmokeTest,DownmixLimiterSmokeTest,NamedLayoutPaddingSmokeTest,BitstreamRewriteSmokeTest,HdrCopySmokeTest -Dsurefire.excludedGroups=
+        run: ./mvnw -B test -Dtest=WorkerMediaSmokeTest,WorkerBitrateScanSmokeTest,DownmixLimiterSmokeTest,NamedLayoutPaddingSmokeTest,BitstreamRewriteSmokeTest,HdrCopySmokeTest,Av1SequenceHeaderSmokeTest -Dsurefire.excludedGroups=
 
   image:
     name: Verify ${{ matrix.architecture }} worker image

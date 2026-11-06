@@ -85,6 +85,7 @@ class ProducerTest {
   private static final SourceEnd NOTHING_READ_FROM_THE_SOURCE =
       new SourceEnd(List.of(), Optional.empty());
   private static final String REPLACEMENT_COPY_RECORDING = "07-copy-seek30.fmp4";
+  private static final String AV1_RECORDING = "09-svtav1-vfr.fmp4";
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
   private static final Duration POLL_INTERVAL = Duration.ofMillis(5);
@@ -2865,19 +2866,24 @@ class ProducerTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("outputsWithoutAMediaSegment")
-  @DisplayName("Should fail the attempt when FFmpeg exits cleanly without a media segment")
+  @DisplayName(
+      "Should fail the attempt and release every byte it reserved when FFmpeg exits cleanly"
+          + " without a media segment")
   void shouldFailTheAttemptWhenFfmpegExitsCleanlyWithoutAMediaSegment(
       String description, byte[] output, Recording recording) {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
     var process = ScriptedProcess.builder().output(output).build();
 
-    var producer = producerFor(process, recording).start();
+    var producer = producerFor(process, recording).memoryBudget(workerBudget).start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.NO_MEDIA_SEGMENT);
     assertThat(sink.accepted()).noneMatch(accepted -> accepted.name().startsWith("segment"));
+    assertReleasesEveryReservedByte(workerBudget);
   }
 
   static Stream<Arguments> outputsWithoutAMediaSegment() {
     var encoded = recording(ENCODED_RECORDING);
+    var av1 = recording(AV1_RECORDING);
     var replacementAttempt = recording(REPLACEMENT_COPY_RECORDING);
     return Stream.of(
         Arguments.of("no output", new byte[0], encoded),
@@ -2885,6 +2891,10 @@ class ProducerTest {
             "an initialization segment alone",
             Arrays.copyOf(bytesOf(ENCODED_RECORDING), encoded.initializationSegment().byteLength()),
             encoded),
+        Arguments.of(
+            "an AV1 encode's initialization segment alone",
+            Arrays.copyOf(bytesOf(AV1_RECORDING), av1.initializationSegment().byteLength()),
+            av1),
         Arguments.of("preroll alone", prerollAloneOf(replacementAttempt), replacementAttempt));
   }
 

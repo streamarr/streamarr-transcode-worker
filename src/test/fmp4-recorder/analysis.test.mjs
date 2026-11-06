@@ -9,6 +9,7 @@ import {
   compareHlsRun,
   group,
   hlsencCuts,
+  inBandSequenceHeaderOf,
   initializationSegmentPair,
   loadSource,
   mismatches,
@@ -674,6 +675,14 @@ describe('recording facts of the committed recordings', () => {
       initializationSegmentPair('encode or copy', ['01-encode-cfr', read('01-encode-cfr')], ['07-copy-start0', read('07-copy-start0')]).identical,
       false,
     );
+  });
+
+  it("Should read the first sample's sequence header when SVT-AV1 wrote a different one into av1C", () => {
+    const stream = read('09-svtav1-vfr');
+
+    assert.equal(inBandSequenceHeaderOf(stream).toString('hex'), '0a0e02000005157f8c4af91010101040');
+    assert.equal(stream.initializationSegmentBytes.includes(inBandSequenceHeaderOf(stream)), false);
+    assert.equal(inBandSequenceHeaderOf(read('01-encode-cfr')), null);
   });
 
   it('Should group the 10 s-GOP copy until the keyframe at 20.02 s when that keyframe skips segment 2', () => {

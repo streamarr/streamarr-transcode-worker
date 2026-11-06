@@ -455,30 +455,46 @@ function useBufferOffsets(moof) {
 }
 
 /** Reads several files as one concatenated stream. */
-// The fields before the child boxes of each box on the way to an hvc1 record, the hvcC fields
-// before its array count (ISO/IEC 14496-15 8.3.2.1.2), and the NAL unit types of prefix and suffix
-// SEI messages (ITU-T H.265 table 7-1).
-const FIELDS_BEFORE_CHILDREN = { moov: 0, trak: 0, mdia: 0, minf: 0, stbl: 0, stsd: 8, hvc1: VISUAL_SAMPLE_ENTRY_BYTES };
+// The fields before the child boxes of each box on the way to an hvc1 or av1C record, the hvcC
+// fields before its array count (ISO/IEC 14496-15 8.3.2.1.2), the NAL unit types of prefix and
+// suffix SEI messages (ITU-T H.265 table 7-1), and the av1C fields before its configOBUs (AV1
+// ISOBMFF binding 2.3.3).
+const FIELDS_BEFORE_CHILDREN = {
+  moov: 0,
+  trak: 0,
+  mdia: 0,
+  minf: 0,
+  stbl: 0,
+  stsd: 8,
+  hvc1: VISUAL_SAMPLE_ENTRY_BYTES,
+  av01: VISUAL_SAMPLE_ENTRY_BYTES,
+};
 const HVCC_FIELDS_BEFORE_ARRAYS = 22;
 const HEVC_SEI_NAL_UNIT_TYPES = new Set([39, 40]);
+const AV1C_FIELDS_BEFORE_CONFIGURATION_OBUS = 4;
 
 /**
  * The initialization segment as the worker delivers it: each hvc1 record without its arrays of SEI
- * messages, and each box that holds such a record resized to fit. Every other byte is kept.
+ * messages, each av1C record holding the in-band sequence header OBU, when one is given, in place
+ * of the sequence header that FFmpeg wrote and ahead of its other configOBUs, and each box that
+ * holds such a record resized to fit. Every other byte is kept.
  */
-export function deliveredInitializationSegment(initializationSegment) {
-  return rebuiltBoxes(initializationSegment, 0, initializationSegment.length);
+export function deliveredInitializationSegment(initializationSegment, inBandSequenceHeader = null) {
+  return rebuiltBoxes(initializationSegment, 0, initializationSegment.length, inBandSequenceHeader);
 }
 
-function rebuiltBoxes(data, start, end) {
+function rebuiltBoxes(data, start, end, inBandSequenceHeader) {
   const rebuilt = [];
   for (const [type, boxStart, body, stop] of boxes(data, start, end)) {
     const header = data.subarray(boxStart, body);
     if (type === 'hvcC') {
       rebuilt.push(resized(header, hvcCWithoutSei(data, body, stop)));
+    } else if (type === 'av1C' && inBandSequenceHeader !== null) {
+      rebuilt.push(resized(header, av1CWithSequenceHeader(data, body, stop, inBandSequenceHeader)));
     } else if (Object.hasOwn(FIELDS_BEFORE_CHILDREN, type)) {
       const children = new Fields(data, [body, stop], type).skip(FIELDS_BEFORE_CHILDREN[type]).position;
-      rebuilt.push(resized(header, Buffer.concat([data.subarray(body, children), rebuiltBoxes(data, children, stop)])));
+      const rebuiltChildren = rebuiltBoxes(data, children, stop, inBandSequenceHeader);
+      rebuilt.push(resized(header, Buffer.concat([data.subarray(body, children), rebuiltChildren])));
     } else {
       rebuilt.push(data.subarray(boxStart, stop));
     }
@@ -517,6 +533,52 @@ function hvcCWithoutSei(data, body, stop) {
     ...kept,
     data.subarray(fields.position, stop),
   ]);
+}
+
+function av1CWithSequenceHeader(data, body, stop, inBandSequenceHeader) {
+  const configurationObus = new Fields(data, [body, stop], 'av1C').skip(AV1C_FIELDS_BEFORE_CONFIGURATION_OBUS).position;
+  const kept = obusOf(data, { offset: configurationObus, size: stop - configurationObus })
+    .filter((obu) => obu.type !== OBU_SEQUENCE_HEADER)
+    .map((obu) => data.subarray(obu.start, obu.payload + obu.size));
+  return Buffer.concat([data.subarray(body, configurationObus), inBandSequenceHeader, ...kept]);
+}
+
+export const OBU_SEQUENCE_HEADER = 1;
+
+/** A LEB128 value and its byte count; an AV1 size field holds at most 8 bytes. */
+function leb128(data, at, end) {
+  let value = 0;
+  for (let index = 0; index < 8 && at + index < end; index++) {
+    const byte = data[at + index];
+    value += (byte & 0x7f) * 2 ** (7 * index);
+    if ((byte & 0x80) === 0) {
+      return [value, index + 1];
+    }
+  }
+  throw new Mp4FormatError(`an OBU size at ${at} does not end inside its sample`);
+}
+
+/** Each OBU of one AV1 sample, in order: its type, where it starts and where its payload lies. */
+export function obusOf(data, sample) {
+  const obus = [];
+  const end = sample.offset + sample.size;
+  let position = sample.offset;
+  while (position < end) {
+    const header = data[position];
+    let payload = position + 1 + ((header >> 2) & 1);
+    let size = end - payload;
+    if ((header >> 1) & 1) {
+      const [value, bytes] = leb128(data, payload, end);
+      payload += bytes;
+      size = value;
+    }
+    if (size > end - payload) {
+      throw new Mp4FormatError(`an OBU at ${position} runs past its sample`);
+    }
+    obus.push({ type: (header >> 3) & 0xf, start: position, payload, size });
+    position = payload + size;
+  }
+  return obus;
 }
 
 export function readFiles(paths) {

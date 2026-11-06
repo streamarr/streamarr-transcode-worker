@@ -17,7 +17,6 @@ final class Av1SampleRewrite implements SampleRewrite {
 
   private static final int OBU_METADATA = 5;
   private static final int METADATA_TYPE_ITUT_T35 = 4;
-  private static final int MAXIMUM_LEB128_BYTES = 8;
   private static final byte[] DOLBY_VISION_PREFIX = {
     (byte) 0xB5, 0x00, 0x3B, 0x00, 0x00, 0x08, 0x00
   };
@@ -41,8 +40,8 @@ final class Av1SampleRewrite implements SampleRewrite {
     var changed = false;
     var position = sample.position();
     while (position < sample.limit()) {
-      var obu = obuAt(sample, position);
-      var bytes = sample.slice(position, obu.end() - position);
+      var obu = Av1Obu.at(sample, position);
+      var bytes = sample.slice(obu.start(), obu.end() - obu.start());
       if (isStripped(sample, obu)) {
         changed = true;
       } else {
@@ -61,60 +60,15 @@ final class Av1SampleRewrite implements SampleRewrite {
     return joined.flip();
   }
 
-  // The OBU header (AV1 5.3.2), its optional extension byte, and its optional leb128 size.
-  private static Obu obuAt(ByteBuffer sample, int position) {
-    var header = Byte.toUnsignedInt(sample.get(position));
-    if ((header & 0x80) != 0) {
-      throw FragmentedMp4Exception.malformed("an AV1 OBU header sets its forbidden bit");
-    }
-
-    var type = (header >> 3) & 0x0F;
-    var payloadStart = position + 1 + ((header >> 2) & 0x01);
-    requireWithin(sample, payloadStart);
-    if ((header & 0x02) == 0) {
-      return new Obu(type, payloadStart, sample.limit());
-    }
-
-    var reading = sample.duplicate().position(payloadStart);
-    var size = leb128(reading);
-    if (size > reading.remaining()) {
-      throw FragmentedMp4Exception.malformed(
-          "an AV1 OBU declares " + size + " bytes where " + reading.remaining() + " remain");
-    }
-
-    return new Obu(type, reading.position(), reading.position() + (int) size);
-  }
-
-  // An unsigned value of up to 8 bytes, 7 bits each, least significant first (AV1 4.10.5), which
-  // ends within the buffer's limit.
-  private static long leb128(ByteBuffer reading) {
-    var value = 0L;
-    for (var index = 0; index < MAXIMUM_LEB128_BYTES && reading.hasRemaining(); index++) {
-      var octet = Byte.toUnsignedInt(reading.get());
-      value |= (long) (octet & 0x7F) << (7 * index);
-      if ((octet & 0x80) == 0) {
-        return value;
-      }
-    }
-
-    throw FragmentedMp4Exception.malformed("an AV1 OBU's leb128 value runs past its end");
-  }
-
-  private static void requireWithin(ByteBuffer sample, int position) {
-    if (position > sample.limit()) {
-      throw FragmentedMp4Exception.malformed("an AV1 OBU header runs past its sample");
-    }
-  }
-
   // A metadata OBU whose metadata_type, a leb128 (AV1 6.7.1), names ITU-T T.35 and is followed by
   // the country code, provider code and provider-oriented code of a stripped registration.
-  private boolean isStripped(ByteBuffer sample, Obu obu) {
+  private boolean isStripped(ByteBuffer sample, Av1Obu obu) {
     if (obu.type() != OBU_METADATA) {
       return false;
     }
 
     var reading = sample.duplicate().limit(obu.end()).position(obu.payloadStart());
-    if (leb128(reading) != METADATA_TYPE_ITUT_T35) {
+    if (Av1Obu.leb128(reading) != METADATA_TYPE_ITUT_T35) {
       return false;
     }
 
@@ -135,6 +89,4 @@ final class Av1SampleRewrite implements SampleRewrite {
 
     return true;
   }
-
-  private record Obu(int type, int payloadStart, int end) {}
 }

@@ -9,6 +9,8 @@ import {
   audioTrackOf,
   deliveredInitializationSegment,
   firstAudioTraf,
+  OBU_SEQUENCE_HEADER,
+  obusOf,
   readFiles,
   signed,
   videoSamples,
@@ -42,6 +44,23 @@ export function group(stream, period, startSequenceNumber) {
   return groupOnGrid(gridFragments(stream), { period, startSequenceNumber });
 }
 
+/**
+ * The sequence header OBU of an AV1 stream's first video sample, which the worker writes into av1C
+ * in place of the one FFmpeg wrote, because SVT-AV1 writes that one before it chooses its coding
+ * tools; null for other video, or a stream without a video sample. Every AV1 recording encodes.
+ */
+export function inBandSequenceHeaderOf(stream) {
+  const [first] = videoSamples(stream);
+  if (videoTrackOf(stream).sampleEntry !== 'av01' || first === undefined) {
+    return null;
+  }
+  const header = obusOf(stream.data, first).find((obu) => obu.type === OBU_SEQUENCE_HEADER);
+  if (header === undefined) {
+    throw new Mp4FormatError(`the first AV1 sample, at ${first.offset}, holds no sequence header`);
+  }
+  return stream.data.subarray(header.start, header.payload + header.size);
+}
+
 export function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -72,7 +91,9 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
         trexDefaultSampleDuration: track.trexDuration ?? null,
       })),
     },
-    deliveredInitializationSegment: digestOf(deliveredInitializationSegment(stream.initializationSegmentBytes)),
+    deliveredInitializationSegment: digestOf(
+      deliveredInitializationSegment(stream.initializationSegmentBytes, inBandSequenceHeaderOf(stream)),
+    ),
     segments: delivered.map((segment) => describeSegment(segment, stream)),
     discardedPreroll: preroll.map((segment) => describeSegment(segment, stream)),
     failure,
@@ -472,46 +493,9 @@ function nalKeyframes(stream, track) {
   });
 }
 
-const OBU_SEQUENCE_HEADER = 1;
 const OBU_FRAME_HEADER = 3;
 const OBU_FRAME = 6;
 const AV1_FRAME_TYPES = ['KEY_FRAME', 'INTER_FRAME', 'INTRA_ONLY_FRAME', 'SWITCH_FRAME'];
-
-/** A LEB128 value and its byte count; an AV1 size field holds at most 8 bytes. */
-function leb128(data, at, end) {
-  let value = 0;
-  for (let index = 0; index < 8 && at + index < end; index++) {
-    const byte = data[at + index];
-    value += (byte & 0x7f) * 2 ** (7 * index);
-    if ((byte & 0x80) === 0) {
-      return [value, index + 1];
-    }
-  }
-  throw new Mp4FormatError(`an OBU size at ${at} does not end inside its sample`);
-}
-
-/** Each OBU of one AV1 sample, in order: its type and where its payload lies. */
-function obusOf(data, sample) {
-  const obus = [];
-  const end = sample.offset + sample.size;
-  let position = sample.offset;
-  while (position < end) {
-    const header = data[position];
-    let payload = position + 1 + ((header >> 2) & 1);
-    let size = end - payload;
-    if ((header >> 1) & 1) {
-      const [value, bytes] = leb128(data, payload, end);
-      payload += bytes;
-      size = value;
-    }
-    if (size > end - payload) {
-      throw new Mp4FormatError(`an OBU at ${position} runs past its sample`);
-    }
-    obus.push({ type: (header >> 3) & 0xf, payload, size });
-    position = payload + size;
-  }
-  return obus;
-}
 
 /**
  * The first frame of an AV1 sample, from its first frame header: a shown key frame when the
