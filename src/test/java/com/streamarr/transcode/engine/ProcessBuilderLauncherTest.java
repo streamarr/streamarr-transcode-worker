@@ -13,6 +13,8 @@ import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.fixtures.RecordingFixtures;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,6 +29,8 @@ import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 @Tag("UnitTest")
@@ -104,6 +108,28 @@ class ProcessBuilderLauncherTest {
     launcher.resume(process);
 
     assertThat(process.exitValue()).isZero();
+  }
+
+  @Test
+  @EnabledOnOs(OS.LINUX)
+  @DisplayName(
+      "Should leave the process that took a child's pid alone when the child is reaped before it"
+          + " is paused")
+  void shouldLeaveTheProcessThatTookAChildsPidAloneWhenTheChildIsReapedBeforeItIsPaused()
+      throws Exception {
+    var child = launcher.launch(List.of("bash", "-c", "exit 0"), UUID.randomUUID());
+    assertThat(child.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+    var successor = launcher.launch(List.of("sleep", "60"), UUID.randomUUID());
+    try {
+      launcher.pause(new ReapedChildWhosePidWasTaken(child, successor.pid()));
+
+      await()
+          .during(Duration.ofMillis(500))
+          .atMost(OUTCOME_LIMIT)
+          .until(() -> linuxProcessState(successor.pid()) != 'T');
+    } finally {
+      successor.destroyForcibly();
+    }
   }
 
   @Test
@@ -250,6 +276,70 @@ class ProcessBuilderLauncherTest {
     assertThat(launched).hasSize(2);
     assertThat(launched.getFirst().isAlive()).as("the copying FFmpeg is alive").isFalse();
     assertThat(launched.getLast().isAlive()).as("the encoding FFmpeg is alive").isFalse();
+  }
+
+  // The state letter of /proc/<pid>/stat; T is stopped by a signal.
+  private static char linuxProcessState(long pid) throws IOException {
+    var stat = Files.readString(Path.of("/proc", Long.toString(pid), "stat"));
+    return stat.charAt(stat.lastIndexOf(')') + 2);
+  }
+
+  // A child that the kernel has reaped, whose pid another process took before the JDK recorded
+  // the exit: Process.isAlive still answers true, and the pid names the successor.
+  private static final class ReapedChildWhosePidWasTaken extends Process {
+
+    private final Process reaped;
+    private final long successorPid;
+
+    private ReapedChildWhosePidWasTaken(Process reaped, long successorPid) {
+      this.reaped = reaped;
+      this.successorPid = successorPid;
+    }
+
+    @Override
+    public long pid() {
+      return successorPid;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return true;
+    }
+
+    @Override
+    public ProcessHandle toHandle() {
+      return reaped.toHandle();
+    }
+
+    @Override
+    public OutputStream getOutputStream() {
+      return OutputStream.nullOutputStream();
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return InputStream.nullInputStream();
+    }
+
+    @Override
+    public InputStream getErrorStream() {
+      return InputStream.nullInputStream();
+    }
+
+    @Override
+    public int waitFor() {
+      return 0;
+    }
+
+    @Override
+    public int exitValue() {
+      return 0;
+    }
+
+    @Override
+    public void destroy() {
+      // The child has exited.
+    }
   }
 
   // A producer whose FFmpeg is this bash script, with $0 bound to the argument.
