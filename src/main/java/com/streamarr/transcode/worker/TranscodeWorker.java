@@ -118,7 +118,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private ManagedChannel channel;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
-  private volatile SegmentUploadLimit uploadLimit;
+  private final AtomicReference<SegmentUploadLimit> uploadLimit;
   private WorkerProbeSession probeSession;
   private ScheduledExecutorService sessionTimers;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
@@ -139,7 +139,7 @@ public final class TranscodeWorker implements AutoCloseable {
     this.ffprobe = ffprobe;
     this.runtime = runtime;
     this.clock = clock;
-    uploadLimit = new SegmentUploadLimit(0, clock);
+    uploadLimit = new AtomicReference<>(new SegmentUploadLimit(0, clock));
     this.probeSummary = probeSummary == null ? new ProbeSummary(clock) : probeSummary;
     this.probeCapacities =
         ProbeCapacities.builder()
@@ -192,7 +192,7 @@ public final class TranscodeWorker implements AutoCloseable {
    * once to end.
    */
   public int queuedSegmentUploads() {
-    return uploadLimit.queued();
+    return uploadLimit.get().queued();
   }
 
   /**
@@ -748,7 +748,7 @@ public final class TranscodeWorker implements AutoCloseable {
       VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation)
       throws InterruptedException, ExecutionException, TimeoutException {
     var upload = new AtomicReference<>(newSegmentUpload());
-    var turn = uploadLimit.turn();
+    var turn = uploadLimit.get().turn();
     cancellation.onCancel(
         () -> {
           turn.cancel();
@@ -1274,7 +1274,7 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onNext(EstablishWorkerSessionResponse response) {
       if (response.hasSessionAccepted()) {
         workerSession = response.getSessionAccepted();
-        uploadLimit = new SegmentUploadLimit(workerSession.getSegmentUploadLimit(), clock);
+        uploadLimit.set(new SegmentUploadLimit(workerSession.getSegmentUploadLimit(), clock));
         sessionAccepted = true;
         accepted.complete(workerSession);
         return;
