@@ -318,6 +318,40 @@ public class FfmpegCommandBuilder {
   }
 
   /**
+   * The command that checks where a seek lands in a held encode's search for the video's last
+   * keyframe: it copies the chosen video stream's first packet from where the job attempt's own
+   * seek to the position would start reading, to a framecrc on standard output, on the attempt's
+   * zero-based timeline.
+   */
+  List<String> buildSeekLandingCommand(Path source, int videoStreamIndex, Duration seekPosition) {
+    var cmd =
+        new ArrayList<>(
+            List.of(
+                ffmpegPath,
+                "-nostdin",
+                "-v",
+                "quiet",
+                "-copyts",
+                "-start_at_zero",
+                "-ss",
+                seekArgument(seekPosition),
+                "-i",
+                source.toString(),
+                "-map",
+                "0:" + videoStreamIndex,
+                "-c",
+                "copy",
+                "-copyinkf",
+                "-copypriorss",
+                "1",
+                "-frames:v",
+                "1"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(List.of("-f", "framecrc", "pipe:1"));
+    return List.copyOf(cmd);
+  }
+
+  /**
    * The command of a keyframe scan in a held encode's search for the video's last keyframe (ADR
    * 0037, early ends): it copies the chosen video stream's packets and the audio's, without
    * decoding them, from the position for the length, to a framecrc on standard output. Its times

@@ -21,8 +21,8 @@ import lombok.NonNull;
 /**
  * Reads the chosen video stream's keyframes in one interval of the source, without decoding: an
  * FFmpeg copies the video's packets and the audio's, from a seek to the interval's start for its
- * length, to a framecrc on its standard output. Each scan passes the bytes of every packet it read
- * to the consumer as it reads them.
+ * length, to a framecrc on its standard output. It also reads where a seek to a position lands.
+ * Each scan passes the bytes of every packet it read to the consumer as it reads them.
  */
 @Builder
 final class KeyframeScan {
@@ -49,7 +49,24 @@ final class KeyframeScan {
   /** The first keyframe that presents in the interval; FFmpeg stops reading once it finds one. */
   Optional<Keyframe> firstKeyframe(Duration from, Duration until) throws InterruptedException {
     var interval = new Interval(from, until);
-    return read(interval, interval::presents, 1).stream().findFirst();
+    return read(
+            scanCommand(interval), packet -> packet.isKeyframe() && interval.presents(packet), 1)
+        .stream()
+        .findFirst()
+        .map(VideoPacket::times);
+  }
+
+  /**
+   * The decode time of the first video packet that a seek to the position reads, where the job
+   * attempt's own seek there would start reading; empty when the seek reads no video packet.
+   */
+  Optional<Duration> landingDecodeTime(Duration seekPosition) throws InterruptedException {
+    var command =
+        commandBuilder.buildSeekLandingCommand(
+            request.sourcePath(),
+            request.transcodeDecision().videoDecision().streamIndex(),
+            seekPosition);
+    return read(command, _ -> true, 1).stream().findFirst().map(VideoPacket::decodeTime);
   }
 
   /**
@@ -60,19 +77,27 @@ final class KeyframeScan {
    */
   List<Keyframe> keyframes(Duration from, Duration until) throws InterruptedException {
     var interval = new Interval(from, until);
-    return read(interval, interval::decodes, Integer.MAX_VALUE);
+    return read(
+            scanCommand(interval),
+            packet -> packet.isKeyframe() && interval.decodes(packet),
+            Integer.MAX_VALUE)
+        .stream()
+        .map(VideoPacket::times)
+        .toList();
+  }
+
+  private List<String> scanCommand(Interval interval) {
+    return commandBuilder.buildKeyframeScanCommand(
+        request.sourcePath(),
+        request.transcodeDecision().videoDecision().streamIndex(),
+        interval.from(),
+        interval.until().minus(interval.from()));
   }
 
   // The scan runs on a thread of its own, so an interrupt ends the wait at once; the forcible end
   // of FFmpeg then ends the read.
-  private List<Keyframe> read(Interval interval, Predicate<Keyframe> inside, int limit)
+  private List<VideoPacket> read(List<String> command, Predicate<VideoPacket> wanted, int limit)
       throws InterruptedException {
-    var command =
-        commandBuilder.buildKeyframeScanCommand(
-            request.sourcePath(),
-            request.transcodeDecision().videoDecision().streamIndex(),
-            interval.from(),
-            interval.until().minus(interval.from()));
     Process process;
     try {
       process = launcher.launch(command, request.attemptId());
@@ -80,7 +105,7 @@ final class KeyframeScan {
       throw new TranscodeException("FFmpeg could not start a keyframe scan", e);
     }
 
-    var reading = new FutureTask<>(() -> readKeyframes(process, inside, limit));
+    var reading = new FutureTask<>(() -> readPackets(process, wanted, limit));
     Thread.ofVirtual().name("keyframe-scan-" + request.attemptId()).start(reading);
     try {
       return reading.get();
@@ -91,9 +116,9 @@ final class KeyframeScan {
     }
   }
 
-  private List<Keyframe> readKeyframes(Process process, Predicate<Keyframe> inside, int limit)
+  private List<VideoPacket> readPackets(Process process, Predicate<VideoPacket> wanted, int limit)
       throws IOException, InterruptedException {
-    var keyframes = new ArrayList<Keyframe>();
+    var packets = new ArrayList<VideoPacket>();
     var timeBase = Optional.<TimeBase>empty();
     try (var output =
         new BufferedReader(
@@ -109,10 +134,9 @@ final class KeyframeScan {
           continue;
         }
 
-        var keyframe = readRecord(line, timeBase).filter(inside);
-        keyframe.ifPresent(keyframes::add);
-        if (keyframes.size() == limit) {
-          return keyframes;
+        readRecord(line, timeBase).filter(wanted).ifPresent(packets::add);
+        if (packets.size() == limit) {
+          return packets;
         }
       }
     }
@@ -122,18 +146,18 @@ final class KeyframeScan {
       throw new TranscodeException("A keyframe scan's FFmpeg exited with " + exitCode);
     }
 
-    return keyframes;
+    return packets;
   }
 
   // A packet without a presentation time counts at its decode time, as a raw H.264 stream's does.
-  private Optional<Keyframe> readRecord(String line, Optional<TimeBase> timeBase) {
+  private Optional<VideoPacket> readRecord(String line, Optional<TimeBase> timeBase) {
     var record = RECORD.matcher(line);
     if (!record.find()) {
       return Optional.empty();
     }
 
     bytesRead.accept(Long.parseLong(record.group(4)));
-    if (!VIDEO_STREAM.equals(record.group(1)) || !isKeyframe(record)) {
+    if (!VIDEO_STREAM.equals(record.group(1))) {
       return Optional.empty();
     }
 
@@ -152,8 +176,10 @@ final class KeyframeScan {
     }
 
     return Optional.of(
-        new Keyframe(
-            durationOf(timeBase.get(), presentationTime), durationOf(timeBase.get(), decodeTime)));
+        new VideoPacket(
+            durationOf(timeBase.get(), presentationTime),
+            durationOf(timeBase.get(), decodeTime),
+            isKeyframe(record)));
   }
 
   private static boolean isKeyframe(Matcher record) {
@@ -173,15 +199,22 @@ final class KeyframeScan {
             .longValueExact());
   }
 
+  private record VideoPacket(Duration presentationTime, Duration decodeTime, boolean isKeyframe) {
+
+    Keyframe times() {
+      return new Keyframe(presentationTime, decodeTime);
+    }
+  }
+
   private record Interval(Duration from, Duration until) {
 
-    boolean presents(Keyframe keyframe) {
-      var time = keyframe.presentationTime();
+    boolean presents(VideoPacket packet) {
+      var time = packet.presentationTime();
       return time.compareTo(from) >= 0 && time.compareTo(until) < 0;
     }
 
-    boolean decodes(Keyframe keyframe) {
-      var time = keyframe.decodeTime();
+    boolean decodes(VideoPacket packet) {
+      var time = packet.decodeTime();
       return (from.isZero() || time.compareTo(from) >= 0) && time.compareTo(until) < 0;
     }
   }

@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -12,8 +13,9 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /** A held encode's search for the video's last keyframe, run by real FFmpeg. */
 @Tag("SmokeTest")
@@ -25,26 +27,30 @@ class KeyframeSearchSmokeTest {
   // At 4 fps with three B-frames in a pyramid, each picture decodes 0.5 s before it presents. The
   // attempt for the segment at 18 s reads back from 14 s, so the search reads from 10 s to 14 s and
   // then from 2 s to 10 s. The keyframe that presents at 10 s decodes at 9.5 s, so FFmpeg's scan of
-  // an MPEG-TS source reads it in the interval before the one it presents in.
-  @Test
+  // an MPEG-TS source reads it in the interval before the one it presents in. An MPEG-TS seek to
+  // the keyframe at 8 s lands on decode times, so the attempt reads from its decode time, 7.5 s; an
+  // MP4 seek lands on presentation times, so the attempt reads from 8 s, where a seek to 7.5 s
+  // would land on the keyframe at 6 s.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"mpegts, ts, 7.5", "mp4, mp4, 8"})
   @DisplayName(
-      "Should read from the decode time of the keyframe 0.5 s before the last when the last"
-          + " keyframe of an MPEG-TS source decodes in the interval before the one it presents in")
-  void shouldReadFromTheKeyframeBeforeTheLastWhenTheLastDecodesInTheIntervalBeforeItsOwn()
-      throws Exception {
-    var source = delayedPicturesWithKeyframesUpToTenSeconds();
+      "Should read from where a seek lands on the keyframe 0.5 s before the last when the last"
+          + " keyframe decodes in the interval before the one it presents in")
+  void shouldReadFromWhereASeekLandsOnTheKeyframeBeforeTheLastWhenTheLastDecodesBeforeItsInterval(
+      String format, String extension, BigDecimal expectedSeconds) throws Exception {
+    var source = delayedPicturesWithKeyframesUpToTenSeconds(format, extension);
 
     var readPosition = engine().heldPictureReadPosition(heldRequest(source), _ -> {}).orElseThrow();
 
     assertThat(readPosition)
-        .as("the decode time of the keyframe that presents at 8 s")
-        .isEqualTo(Duration.ofMillis(7_500));
+        .as("where a seek lands on the keyframe that presents at 8 s")
+        .isEqualTo(Duration.ofNanos(expectedSeconds.movePointRight(9).longValueExact()));
   }
 
-  // 20 s of H.264 at 128x72 and 4 fps with IDR keyframes at 0, 2, 4, 6, 8 and 10 s only, in
-  // MPEG-TS, which carries no index.
-  private Path delayedPicturesWithKeyframesUpToTenSeconds() throws Exception {
-    var source = root.resolve("delayed-pictures.ts");
+  // 20 s of H.264 at 128x72 and 4 fps with IDR keyframes at 0, 2, 4, 6, 8 and 10 s only.
+  private Path delayedPicturesWithKeyframesUpToTenSeconds(String format, String extension)
+      throws Exception {
+    var source = root.resolve("delayed-pictures." + extension);
     var command = new ArrayList<>(List.of("ffmpeg", "-nostdin", "-y", "-loglevel", "error"));
     command.addAll(
         List.of(
@@ -65,7 +71,7 @@ class KeyframeSearchSmokeTest {
             "-force_key_frames",
             "0,2,4,6,8,10",
             "-f",
-            "mpegts",
+            format,
             source.toString()));
     var errors = root.resolve("ffmpeg.log");
     var process =

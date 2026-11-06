@@ -61,8 +61,50 @@ class HeldPictureReadPositionTest {
     var readPosition = engine.heldPictureReadPosition(heldRequest(14, 24), bytesRead::addAndGet);
 
     assertThat(readPosition)
+        .as("an MPEG-TS seek to the keyframe's presentation time lands after its decode time")
         .contains(Duration.ofSeconds(8).minus(ScriptedKeyframeSource.REORDER_DELAY));
     assertThat(source.scannedIntervals()).containsExactly(interval(14, 24), interval(4, 14));
+    assertThat(source.landingChecks()).containsExactly(Duration.ofSeconds(8));
+  }
+
+  @Test
+  @DisplayName(
+      "Should read from the found keyframe's presentation time when a seek there lands on the"
+          + " keyframe, as an MP4 source's seek does")
+  void shouldReadFromTheFoundKeyframesPresentationTimeWhenASeekThereLandsOnTheKeyframe()
+      throws Exception {
+    var source =
+        ScriptedKeyframeSource.seekingByPresentationTime(
+            ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
+    var engine = engineReading(source);
+
+    var readPosition = engine.heldPictureReadPosition(heldRequest(14, 24), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(Duration.ofSeconds(8));
+    assertThat(source.landingChecks()).containsExactly(Duration.ofSeconds(8));
+  }
+
+  @Test
+  @DisplayName(
+      "Should read from the found keyframe's decode time when a seek to its presentation time"
+          + " reads no video packet")
+  void shouldReadFromTheFoundKeyframesDecodeTimeWhenASeekToItsPresentationTimeReadsNoPacket()
+      throws Exception {
+    var source =
+        ScriptedKeyframeSource.seekingByPresentationTime(
+            ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
+    var engine =
+        engine(
+            ScriptedProcessLauncher.forCommands(
+                (command, _) ->
+                    command.contains("-copypriorss")
+                        ? ScriptedProcess.builder().output(new byte[0]).build()
+                        : source.scan(command)));
+
+    var readPosition = engine.heldPictureReadPosition(heldRequest(14, 24), bytesRead::addAndGet);
+
+    assertThat(readPosition)
+        .contains(Duration.ofSeconds(8).minus(ScriptedKeyframeSource.REORDER_DELAY));
   }
 
   @Test

@@ -27,9 +27,9 @@ final class LastKeyframeSearch {
   private LastKeyframeSearch() {}
 
   /**
-   * Where the attempt reads from: the decode time of the keyframe that the search finds, never
-   * before zero; empty when a keyframe presents between the seek position and the first segment's
-   * start.
+   * Where the attempt reads from: a seek position that reads the keyframe that the search finds,
+   * never before zero; empty when a keyframe presents between the seek position and the first
+   * segment's start.
    *
    * @throws NoKeyframeBeforeReadBackException when no keyframe presents before the seek position
    */
@@ -53,18 +53,18 @@ final class LastKeyframeSearch {
       found.addAll(scan.keyframes(start, end));
       var history = historyBeforeTheLastKeyframe(found);
       if (history.isPresent()) {
-        return history.map(LastKeyframeSearch::readPositionOf);
+        return Optional.of(readPositionOf(history.get(), scan));
       }
 
       end = start;
       length = length.multipliedBy(2);
     }
 
-    return Optional.of(
+    var first =
         found.stream()
             .min(BY_PRESENTATION_TIME)
-            .map(LastKeyframeSearch::readPositionOf)
-            .orElseThrow(NoKeyframeBeforeReadBackException::new));
+            .orElseThrow(NoKeyframeBeforeReadBackException::new);
+    return Optional.of(readPositionOf(first, scan));
   }
 
   // The latest keyframe found is the video's last one: each interval lies before the one before it.
@@ -79,7 +79,22 @@ final class LastKeyframeSearch {
                     .max(BY_PRESENTATION_TIME));
   }
 
-  private static Duration readPositionOf(Keyframe keyframe) {
+  // An MP4 demuxer seeks by presentation time, so a seek to the keyframe's decode time reads from
+  // the keyframe before it, a whole GOP earlier. An MPEG-TS seek lands on decode times, so a seek
+  // to the keyframe's presentation time can read past it. The attempt reads from the presentation
+  // time when a seek there lands at or before the keyframe, and from its decode time otherwise.
+  private static Duration readPositionOf(Keyframe keyframe, KeyframeScan scan)
+      throws InterruptedException {
+    var presentationTime = keyframe.presentationTime();
+    if (!presentationTime.isPositive()) {
+      return Duration.ZERO;
+    }
+
+    var landing = scan.landingDecodeTime(presentationTime);
+    if (landing.isPresent() && landing.get().compareTo(keyframe.decodeTime()) <= 0) {
+      return presentationTime;
+    }
+
     if (keyframe.decodeTime().isNegative()) {
       return Duration.ZERO;
     }

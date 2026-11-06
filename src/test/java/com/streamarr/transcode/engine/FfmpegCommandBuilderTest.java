@@ -1994,6 +1994,45 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).doesNotContain("-ss").containsSequence("-t", "4", "-i", "/media/source.ts");
   }
 
+  @Test
+  @DisplayName(
+      "Should copy the chosen video stream's first packet from where a seek to the position lands,"
+          + " on the attempt's timeline, to a framecrc on standard output when building a seek"
+          + " landing check")
+  void shouldCopyTheVideosFirstPacketFromWhereASeekLandsWhenBuildingASeekLandingCheck() {
+    var cmd =
+        builder.buildSeekLandingCommand(Path.of("/media/source.mp4"), 2, Duration.ofMillis(8_000));
+
+    assertThat(cmd)
+        .containsExactly(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "quiet",
+            "-copyts",
+            "-start_at_zero",
+            "-ss",
+            "8",
+            "-i",
+            "/media/source.mp4",
+            "-map",
+            "0:2",
+            "-c",
+            "copy",
+            "-copyinkf",
+            "-copypriorss",
+            "1",
+            "-frames:v",
+            "1",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "pipe:1");
+  }
+
   // FFmpeg writes each output's metadata to its error output, where the worker reads the framecrc.
   @ParameterizedTest(name = "{0}")
   @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})

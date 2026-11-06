@@ -14,7 +14,10 @@ import java.util.stream.IntStream;
  * it presents, and an audio packet every 250 ms. Each scan writes the framecrc of the packets that
  * decode inside the interval that its command's seek and duration name, as FFmpeg's scan of an
  * MPEG-TS source does: the seek lands on the packets' decode times, and the duration ends at a
- * decode time. A scan without a seek reads every packet that decodes before its end.
+ * decode time. A scan without a seek reads every packet that decodes before its end. A source that
+ * seeks by presentation time, as an MP4 source does, lands on the last keyframe that presents at or
+ * before the seek and reads the packets that present from the seek on. A seek landing check writes
+ * the video packet where its seek lands.
  */
 public final class ScriptedKeyframeSource {
 
@@ -27,12 +30,26 @@ public final class ScriptedKeyframeSource {
 
   private final List<Duration> keyframes;
   private final int videoEndSeconds;
+  private final boolean seeksByPresentationTime;
   private final List<List<Duration>> scanned = new ArrayList<>();
+  private final List<Duration> landingChecks = new ArrayList<>();
   private long bytesWritten;
 
   public ScriptedKeyframeSource(List<Duration> keyframes, int videoEndSeconds) {
+    this(keyframes, videoEndSeconds, false);
+  }
+
+  private ScriptedKeyframeSource(
+      List<Duration> keyframes, int videoEndSeconds, boolean seeksByPresentationTime) {
     this.keyframes = List.copyOf(keyframes);
     this.videoEndSeconds = videoEndSeconds;
+    this.seeksByPresentationTime = seeksByPresentationTime;
+  }
+
+  /** A source whose seeks land on presentation times, as an MP4 source's do. */
+  public static ScriptedKeyframeSource seekingByPresentationTime(
+      List<Duration> keyframes, int videoEndSeconds) {
+    return new ScriptedKeyframeSource(keyframes, videoEndSeconds, true);
   }
 
   /** Keyframes every 2 s from 0 s up to and including the last. */
@@ -50,19 +67,16 @@ public final class ScriptedKeyframeSource {
   /** The framecrc that a scan with the command writes. */
   public synchronized byte[] framecrcOf(List<String> command) {
     var seek = argumentAfter(command, "-ss");
+    if (command.contains("-copypriorss")) {
+      return landingCheck(seek.orElseThrow());
+    }
+
     var from = seek.orElse(Duration.ZERO);
     var until = from.plus(argumentAfter(command, "-t").orElseThrow());
     scanned.add(List.of(from, until));
     var framecrc = new StringBuilder("#tb 0: 1/1000\n#tb 1: 1/1000\n");
-    var pictures = new ArrayList<>(keyframes);
-    for (var millis = 0L; millis < videoEndSeconds * 1_000L; millis += PACKET_MILLIS) {
-      pictures.add(Duration.ofMillis(millis));
-    }
-
-    pictures.stream()
-        .distinct()
-        .sorted()
-        .filter(time -> decodesInside(time.minus(REORDER_DELAY), seek, until))
+    pictures().stream()
+        .filter(time -> isRead(time, seek, until))
         .forEach(time -> framecrc.append(videoRecord(time)));
     for (var millis = from.toMillis(); millis < until.toMillis(); millis += PACKET_MILLIS) {
       framecrc.append(
@@ -72,6 +86,11 @@ public final class ScriptedKeyframeSource {
     }
 
     return framecrc.toString().getBytes(StandardCharsets.US_ASCII);
+  }
+
+  /** The seek of each seek landing check, in check order. */
+  public synchronized List<Duration> landingChecks() {
+    return List.copyOf(landingChecks);
   }
 
   /** Each scanned interval's start and end, in scan order. */
@@ -96,10 +115,44 @@ public final class ScriptedKeyframeSource {
             flags);
   }
 
-  private static boolean decodesInside(
-      Duration decodeTime, Optional<Duration> seek, Duration until) {
-    return decodeTime.compareTo(until) < 0
-        && seek.map(from -> decodeTime.compareTo(from) >= 0).orElse(true);
+  private byte[] landingCheck(Duration seek) {
+    landingChecks.add(seek);
+    var framecrc = new StringBuilder("#tb 0: 1/1000\n");
+    landing(seek).ifPresent(time -> framecrc.append(videoRecord(time)));
+    return framecrc.toString().getBytes(StandardCharsets.US_ASCII);
+  }
+
+  private Optional<Duration> landing(Duration seek) {
+    if (seeksByPresentationTime) {
+      return keyframes.stream().filter(time -> time.compareTo(seek) <= 0).max(Duration::compareTo);
+    }
+
+    return pictures().stream()
+        .filter(time -> time.minus(REORDER_DELAY).compareTo(seek) >= 0)
+        .findFirst();
+  }
+
+  private List<Duration> pictures() {
+    var pictures = new ArrayList<>(keyframes);
+    for (var millis = 0L; millis < videoEndSeconds * 1_000L; millis += PACKET_MILLIS) {
+      pictures.add(Duration.ofMillis(millis));
+    }
+
+    return pictures.stream().distinct().sorted().toList();
+  }
+
+  private boolean isRead(Duration presentationTime, Optional<Duration> seek, Duration until) {
+    var decodeTime = presentationTime.minus(REORDER_DELAY);
+    if (decodeTime.compareTo(until) >= 0) {
+      return false;
+    }
+
+    if (seek.isEmpty()) {
+      return true;
+    }
+
+    var readFrom = seeksByPresentationTime ? presentationTime : decodeTime;
+    return readFrom.compareTo(seek.get()) >= 0;
   }
 
   private static Optional<Duration> argumentAfter(List<String> command, String option) {
