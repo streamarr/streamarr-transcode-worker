@@ -54,94 +54,161 @@ final class NalUnitSampleRewrite implements SampleRewrite {
 
   @Override
   public ByteBuffer rewrite(ByteBuffer sample) {
-    var units = unitsOf(sample);
-    var kept = new ArrayList<ByteBuffer>();
-    var changed = false;
-    for (var unit : units.nalUnits()) {
-      var rewritten = rewrittenUnit(unit);
-      changed |= rewritten.filter(each -> each == unit).isEmpty();
-      rewritten.ifPresent(kept::add);
-    }
-
-    if (convertsProfile7) {
-      kept.add(convertedRpuOf(units.nalUnits()));
-      changed = true;
-    }
-
-    if (!changed) {
-      return sample;
-    }
-
-    return joined(kept, units.trailing());
+    return new Walk(sample).rewritten();
   }
 
-  // The sample's NAL units, each sliced after its length, and the bytes after the last one.
-  private Units unitsOf(ByteBuffer sample) {
-    var units = new ArrayList<ByteBuffer>();
-    var position = sample.position();
-    while (sample.limit() - position >= lengthSize) {
+  // One sample's walk: its units by position, each kept one copied straight into the output, so
+  // that the sample's bytes bound the walk's memory and its unit count allocates nothing. A sample
+  // of a million small units sits far below the segment cap and would otherwise hold an object per
+  // unit, outside the producer's budget.
+  private final class Walk {
+
+    private final ByteBuffer sample;
+    // Every kept unit is at most as long as in the sample, so the sample's size holds them all; the
+    // converted RPU, which can outgrow the sample's, joins them at the end.
+    private ByteBuffer kept;
+    private final List<ByteBuffer> rpus = new ArrayList<>(1);
+    private boolean changed;
+    private int position;
+
+    private Walk(ByteBuffer sample) {
+      this.sample = sample;
+      this.kept = ByteBuffer.allocate(sample.remaining());
+      this.position = sample.position();
+    }
+
+    private ByteBuffer rewritten() {
+      while (sample.limit() - position >= lengthSize) {
+        var length = lengthOfTheNextUnit();
+        var start = position + lengthSize;
+        position = start + length;
+        visit(start, length);
+      }
+
+      var trailing = sample.slice(position, sample.limit() - position);
+      if (convertsProfile7) {
+        return joinedWith(convertedRpuOf(rpus), trailing);
+      }
+
+      if (!changed) {
+        return sample;
+      }
+
+      return withRoomFor(trailing.remaining()).put(trailing).flip();
+    }
+
+    private int lengthOfTheNextUnit() {
       var length = lengthAt(sample, position);
-      var unitStart = position + lengthSize;
-      if (length == 0 || length > sample.limit() - unitStart) {
+      var remaining = sample.limit() - position - lengthSize;
+      if (length == 0 || length > remaining) {
         throw FragmentedMp4Exception.malformed(
             "a video sample declares a NAL unit of "
                 + length
                 + " bytes where "
-                + (sample.limit() - unitStart)
+                + remaining
                 + " remain");
       }
 
-      units.add(sample.slice(unitStart, (int) length));
-      position = unitStart + (int) length;
+      return (int) length;
     }
 
-    return new Units(units, sample.slice(position, sample.limit() - position));
+    // The unit as the copy keeps it: copied as it is, rewritten, or dropped. A conversion drops the
+    // RPU here and writes its converted form last.
+    private void visit(int start, int length) {
+      if (length < syntax.headerBytes()) {
+        visitWithoutAHeader(start, length);
+        return;
+      }
+
+      var type = syntax.typeOf(sample.get(start));
+      if ((stripsDolbyVision || convertsProfile7) && syntax.isDolbyVision(type)) {
+        dropDolbyVision(start, length, type);
+        return;
+      }
+
+      if (stripsHdr10Plus && syntax.isSei(type)) {
+        visitSei(sample.slice(start, length));
+        return;
+      }
+
+      if (stripsHdr10Plus
+          && syntax.wrapsNalUnits(type)
+          && wrapsHdr10Plus(sample.slice(start, length))) {
+        throw new FragmentedMp4Exception(
+            Reason.OUTPUT_MISMATCH,
+            "an enhancement-layer NAL unit wraps HDR10+, which the copy cannot strip");
+      }
+
+      copy(start, length);
+    }
+
+    // A Dolby Vision picture without an RPU can flash in a player, so the conversion neither drops
+    // a picture's RPU nor repeats an earlier one: it keeps the sample's one RPU and fails the
+    // attempt at a second, which also keeps a sample of many RPUs from holding them all.
+    private void dropDolbyVision(int start, int length, int type) {
+      changed = true;
+      if (!convertsProfile7 || !syntax.isRpu(type)) {
+        return;
+      }
+
+      rpus.add(sample.slice(start, length));
+      if (rpus.size() > 1) {
+        throw conversionFailed("a video sample holds a second RPU where the conversion needs one");
+      }
+    }
+
+    // A unit shorter than its header names no type, so the conversion cannot tell whether it is
+    // the picture's RPU; the other rewrites pass it through as the source wrote it.
+    private void visitWithoutAHeader(int start, int length) {
+      if (convertsProfile7) {
+        throw conversionFailed("a NAL unit of " + length + " bytes is shorter than its header");
+      }
+
+      copy(start, length);
+    }
+
+    private void visitSei(ByteBuffer unit) {
+      var rewritten = withoutHdr10Plus(unit);
+      changed |= rewritten.filter(each -> each == unit).isEmpty();
+      rewritten.ifPresent(this::put);
+    }
+
+    private void copy(int start, int length) {
+      withRoomFor(lengthSize + length);
+      putLength(kept, length);
+      kept.put(kept.position(), sample, start, length);
+      kept.position(kept.position() + length);
+    }
+
+    private void put(ByteBuffer unit) {
+      withRoomFor(lengthSize + unit.remaining());
+      putLength(kept, unit.remaining());
+      kept.put(unit.duplicate());
+    }
+
+    // The kept units never outgrow the sample, so the room is there; the check keeps that a fact of
+    // the copy rather than a claim about the SEI rewrite.
+    private ByteBuffer withRoomFor(int bytes) {
+      if (kept.remaining() < bytes) {
+        kept = ByteBuffer.allocate(kept.position() + bytes).put(kept.flip());
+      }
+
+      return kept;
+    }
+
+    private ByteBuffer joinedWith(ByteBuffer converted, ByteBuffer trailing) {
+      var joined =
+          ByteBuffer.allocate(
+              kept.position() + lengthSize + converted.remaining() + trailing.remaining());
+      joined.put(kept.flip());
+      putLength(joined, converted.remaining());
+      return joined.put(converted).put(trailing).flip();
+    }
   }
 
-  // The NAL unit as the copy keeps it: the same buffer, a rewritten SEI NAL unit, or nothing. A
-  // conversion removes the RPU here and writes its converted form last.
-  private Optional<ByteBuffer> rewrittenUnit(ByteBuffer unit) {
-    if (unit.remaining() < syntax.headerBytes()) {
-      return keptWithoutAHeader(unit);
-    }
-
-    var type = syntax.typeOf(unit.get(0));
-    if ((stripsDolbyVision || convertsProfile7) && syntax.isDolbyVision(type)) {
-      return Optional.empty();
-    }
-
-    if (stripsHdr10Plus && syntax.isSei(type)) {
-      return withoutHdr10Plus(unit);
-    }
-
-    if (stripsHdr10Plus && syntax.wrapsNalUnits(type) && wrapsHdr10Plus(unit)) {
-      throw new FragmentedMp4Exception(
-          Reason.OUTPUT_MISMATCH,
-          "an enhancement-layer NAL unit wraps HDR10+, which the copy cannot strip");
-    }
-
-    return Optional.of(unit);
-  }
-
-  // A unit shorter than its header names no type, so the conversion cannot tell whether it is the
-  // picture's RPU; the other rewrites pass it through as the source wrote it.
-  private Optional<ByteBuffer> keptWithoutAHeader(ByteBuffer unit) {
-    if (convertsProfile7) {
-      throw conversionFailed(
-          "a NAL unit of " + unit.remaining() + " bytes is shorter than its header");
-    }
-
-    return Optional.of(unit);
-  }
-
-  // A Dolby Vision picture without an RPU can flash in a player, so the conversion neither drops a
-  // picture's RPU nor repeats an earlier one: a sample without exactly one RPU that converts fails
-  // the attempt.
-  private ByteBuffer convertedRpuOf(List<ByteBuffer> units) {
-    var rpus = units.stream().filter(this::isRpu).toList();
-    if (rpus.size() != 1) {
-      throw conversionFailed(
-          "a video sample holds " + rpus.size() + " RPUs where the conversion needs one");
+  private ByteBuffer convertedRpuOf(List<ByteBuffer> rpus) {
+    if (rpus.isEmpty()) {
+      throw conversionFailed("a video sample holds no RPU where the conversion needs one");
     }
 
     var rpu = rpus.getFirst();
@@ -170,10 +237,6 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     } catch (DolbyVisionRpuException exception) {
       throw conversionFailed(exception.getMessage());
     }
-  }
-
-  private boolean isRpu(ByteBuffer unit) {
-    return unit.remaining() >= syntax.headerBytes() && syntax.isRpu(syntax.typeOf(unit.get(0)));
   }
 
   private Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
@@ -297,18 +360,6 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     return Arrays.equals(rbsp, start, start + expected.length, expected, 0, expected.length);
   }
 
-  private ByteBuffer joined(List<ByteBuffer> units, ByteBuffer trailing) {
-    var bytes = units.stream().mapToInt(unit -> lengthSize + unit.remaining()).sum();
-    var joined = ByteBuffer.allocate(bytes + trailing.remaining());
-    for (var unit : units) {
-      putLength(joined, unit.remaining());
-      joined.put(unit.duplicate());
-    }
-
-    joined.put(trailing.duplicate());
-    return joined.flip();
-  }
-
   private void putLength(ByteBuffer target, int length) {
     if (lengthSize < Integer.BYTES && length >>> (8 * lengthSize) != 0) {
       throw FragmentedMp4Exception.malformed(
@@ -336,9 +387,6 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   private static FragmentedMp4Exception conversionFailed(String detail) {
     return new FragmentedMp4Exception(Reason.DOLBY_VISION_CONVERSION_FAILED, detail);
   }
-
-  // The NAL units of a sample and the bytes after the last one too few to hold a length.
-  private record Units(List<ByteBuffer> nalUnits, ByteBuffer trailing) {}
 
   // An SEI message's bytes in the RBSP, from its payload type to the end of its payload.
   private record Message(int start, int type, int payloadStart, int end) {}

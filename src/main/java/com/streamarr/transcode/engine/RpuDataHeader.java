@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.RpuBitReader.AcceptedRange;
 import lombok.Builder;
 
 /**
@@ -37,7 +38,19 @@ record RpuDataHeader(
   private static final int FIXED_POINT_COEFFICIENTS = 0;
   private static final int FLOATING_POINT_COEFFICIENTS = 1;
   private static final int FLOATING_POINT_COEFFICIENT_BITS = 32;
-  private static final long LARGEST_COEFFICIENT_LOG2_DENOM = 23;
+  // The decoder reads a denominator of 13 to 32; 23 is the one every real RPU carries, and it sizes
+  // every fixed-point coefficient fraction.
+  private static final AcceptedRange COEFFICIENT_LOG2_DENOM =
+      new AcceptedRange("coefficient_log2_denom", 13, 23);
+  private static final AcceptedRange BASE_LAYER_BIT_DEPTH_MINUS8 =
+      AcceptedRange.bitDepthMinus8("bl_bit_depth_minus8");
+  private static final AcceptedRange ENHANCEMENT_LAYER_BIT_DEPTH_MINUS8 =
+      AcceptedRange.bitDepthMinus8("el_bit_depth_minus8");
+  private static final AcceptedRange EXT_MAPPING_IDC =
+      new AcceptedRange("ext_mapping_idc", 0, 0xFF);
+  private static final AcceptedRange VDR_BIT_DEPTH_MINUS8 =
+      AcceptedRange.bitDepthMinus8("vdr_bit_depth_minus8");
+  private static final AcceptedRange PREVIOUS_VDR_RPU_ID = AcceptedRange.id("prev_vdr_rpu_id");
   private static final int COMPRESSED_DM_METADATA = 1;
   // The VDR bit depth that tells profile 7 from profile 4, both of which carry a residual.
   private static final long PROFILE_7_VDR_BIT_DEPTH_MINUS8 = 4;
@@ -67,26 +80,19 @@ record RpuDataHeader(
     var usePreviousVdrRpu = reader.flag();
     header.usePreviousVdrRpu(usePreviousVdrRpu);
     if (usePreviousVdrRpu) {
-      header.previousVdrRpuId(reader.unsignedExpGolomb());
+      header.previousVdrRpuId(reader.unsignedExpGolomb(PREVIOUS_VDR_RPU_ID));
     }
 
     return header.build();
   }
 
-  // The denominator sizes every fixed-point coefficient fraction, so a value past the syntax's
-  // bound
-  // would size them as no field of the RPU can be.
-  private static long coefficientLog2Denom(RpuBitReader reader) {
-    var denominator = reader.unsignedExpGolomb();
-    if (denominator > LARGEST_COEFFICIENT_LOG2_DENOM) {
-      throw new DolbyVisionRpuException(
-          "a coefficient_log2_denom of "
-              + denominator
-              + " where the syntax allows up to "
-              + LARGEST_COEFFICIENT_LOG2_DENOM);
-    }
-
-    return denominator;
+  // The field holds el_bit_depth_minus8 in its low 8 bits and ext_mapping_idc above them, and the
+  // decoder bounds each part.
+  private static long enhancementLayerBitDepthField(RpuBitReader reader) {
+    var field = reader.unsignedExpGolomb();
+    ENHANCEMENT_LAYER_BIT_DEPTH_MINUS8.checked(field & 0xFF);
+    EXT_MAPPING_IDC.checked(field >> 8);
+    return field;
   }
 
   private static void parseSequenceInformation(
@@ -101,7 +107,7 @@ record RpuDataHeader(
 
     header.coefficientDataType(coefficientDataType);
     if (coefficientDataType == FIXED_POINT_COEFFICIENTS) {
-      header.coefficientLog2Denom(coefficientLog2Denom(reader));
+      header.coefficientLog2Denom(reader.unsignedExpGolomb(COEFFICIENT_LOG2_DENOM));
     }
 
     header.vdrRpuNormalizedIdc((int) reader.bits(2)).baseLayerFullRange(reader.flag());
@@ -110,9 +116,9 @@ record RpuDataHeader(
     }
 
     header
-        .baseLayerBitDepthMinus8(reader.unsignedExpGolomb())
-        .enhancementLayerBitDepthField(reader.unsignedExpGolomb())
-        .vdrBitDepthMinus8(reader.unsignedExpGolomb())
+        .baseLayerBitDepthMinus8(reader.unsignedExpGolomb(BASE_LAYER_BIT_DEPTH_MINUS8))
+        .enhancementLayerBitDepthField(enhancementLayerBitDepthField(reader))
+        .vdrBitDepthMinus8(reader.unsignedExpGolomb(VDR_BIT_DEPTH_MINUS8))
         .spatialResamplingFilter(reader.flag())
         .reservedZero3Bits((int) reader.bits(3))
         .enhancementLayerSpatialResamplingFilter(reader.flag())
