@@ -283,20 +283,29 @@ public final class Producer {
         return false;
       }
 
-      // One stopped process of a pipe holds the other back through the pipe between them.
-      var stopped =
-          ffmpeg.processes().stream().map(launcher::pause).flatMap(Optional::stream).toList();
-      if (stopped.isEmpty()) {
+      if (!stopFfmpegProcesses()) {
         return false;
       }
 
       ffmpegPaused = true;
       pausedAtNanos = clock.nanoTime();
-      productionTimer.pause();
-      watchdog.pause();
-      pausedProcesses = stopped;
       return true;
     }
+  }
+
+  // Guarded by lock. One stopped process of a pipe holds the other back through the pipe between
+  // them.
+  private boolean stopFfmpegProcesses() {
+    var stopped =
+        ffmpeg.processes().stream().map(launcher::pause).flatMap(Optional::stream).toList();
+    if (stopped.isEmpty()) {
+      return false;
+    }
+
+    productionTimer.pause();
+    watchdog.pause();
+    pausedProcesses = stopped;
+    return true;
   }
 
   /** Continues FFmpeg after {@link #pauseFfmpeg}; does nothing while FFmpeg is not paused. */
@@ -317,6 +326,11 @@ public final class Producer {
     restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
     deliveredSinceResume = false;
     resumes++;
+    continueFfmpegProcesses();
+  }
+
+  // Guarded by lock.
+  private void continueFfmpegProcesses() {
     pausedProcesses.forEach(PausedProcess::resume);
     pausedProcesses = List.of();
     watchdog.resume();
