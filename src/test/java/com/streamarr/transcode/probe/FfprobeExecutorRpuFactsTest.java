@@ -10,6 +10,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import com.streamarr.transcode.probe.RpuBits.ExtensionBlock;
 import com.streamarr.transcode.probe.RpuBits.Nlq;
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Named;
@@ -138,6 +139,26 @@ class FfprobeExecutorRpuFactsTest {
                 .build()
                 .hevcNalUnit()),
         Named.of(
+            "a level 1 block without its payload, which FFmpeg rejects",
+            RpuBits.profile7(Nlq.identity())
+                .extensionBlock(new ExtensionBlock(1, List.of()))
+                .extensionBlock(ExtensionBlock.level6(1_000, 400))
+                .build()
+                .hevcNalUnit()),
+        Named.of(
+            "a level 6 block shorter than its 8 bytes",
+            RpuBits.profile7(Nlq.identity())
+                .extensionBlock(new ExtensionBlock(6, List.of(0x03, 0xE8)))
+                .build()
+                .hevcNalUnit()),
+        Named.of(
+            "a level 254 block without its payload after a valid level 6 block",
+            level6.toBuilder()
+                .secondGroupBlockCount(1)
+                .secondGroupBlock(new ExtensionBlock(254, List.of()))
+                .build()
+                .hevcNalUnit()),
+        Named.of(
             "an rpu_format without bit depths",
             level6.toBuilder()
                 .header(level6.header().toBuilder().rpuFormat(0x112).build())
@@ -182,6 +203,28 @@ class FfprobeExecutorRpuFactsTest {
 
     var present = dolbyVisionOf(rpu, rpu, rpu);
 
+    assertThat(present.getRpuContentLightLevel())
+        .isEqualTo(
+            ContentLightLevel.newBuilder()
+                .setMaxContentLightLevel(1_000)
+                .setMaxFrameAverageLightLevel(400)
+                .build());
+  }
+
+  @Test
+  @DisplayName("Should report the RPU's facts when zero bytes pad its NAL unit")
+  void shouldReportTheRpusFactsWhenZeroBytesPadItsNalUnit() {
+    var padded =
+        RpuBits.profile7(Nlq.identity())
+                .extensionBlock(ExtensionBlock.level6(1_000, 400))
+                .build()
+                .hevcNalUnit()
+            + " 00 00";
+
+    var present = dolbyVisionOf(padded, padded, padded);
+
+    assertThat(present.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL);
     assertThat(present.getRpuContentLightLevel())
         .isEqualTo(
             ContentLightLevel.newBuilder()

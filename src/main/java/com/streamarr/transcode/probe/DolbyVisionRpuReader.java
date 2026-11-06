@@ -3,6 +3,8 @@ package com.streamarr.transcode.probe;
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionEnhancementLayer;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
+import java.util.Arrays;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -45,6 +47,13 @@ final class DolbyVisionRpuReader {
   private static final int TRAILER_BITS = 48;
   private static final int TERMINATOR = 0x80;
 
+  // The payload bytes that FFmpeg 8.1 reads from each extension block level that it knows, in the
+  // first group and in the second. A shorter block makes FFmpeg reject the RPU.
+  private static final Map<Long, Long> FIRST_GROUP_BLOCK_BYTES =
+      Map.of(1L, 5L, 2L, 11L, 4L, 3L, 5L, 7L, 6L, 8L, 255L, 6L);
+  private static final Map<Long, Long> SECOND_GROUP_BLOCK_BYTES =
+      Map.of(3L, 2L, 8L, 8L, 9L, 1L, 10L, 5L, 11L, 4L, 254L, 2L);
+
   private DolbyVisionRpuReader() {}
 
   /**
@@ -53,9 +62,9 @@ final class DolbyVisionRpuReader {
    */
   static Optional<RpuFacts> read(byte[] rpu) {
     try {
-      var reader = new BitReader(rpu);
+      var reader = new BitReader(withoutTrailingZeros(rpu));
       return reader.bits(8) == RPU_NAL_PREFIX ? facts(reader) : Optional.empty();
-    } catch (TruncatedBitstreamException _) {
+    } catch (TruncatedBitstreamException | MalformedRpuException _) {
       return Optional.empty();
     }
   }
@@ -64,9 +73,20 @@ final class DolbyVisionRpuReader {
   static Optional<RpuFacts> readWithoutPrefix(byte[] rpu) {
     try {
       return facts(new BitReader(rpu));
-    } catch (TruncatedBitstreamException _) {
+    } catch (TruncatedBitstreamException | MalformedRpuException _) {
       return Optional.empty();
     }
+  }
+
+  // FFmpeg drops the zero bytes that can pad a NAL unit before it parses the RPU, whose terminator
+  // is never zero.
+  private static byte[] withoutTrailingZeros(byte[] rpu) {
+    var end = rpu.length;
+    while (end > 0 && rpu[end - 1] == 0) {
+      end--;
+    }
+
+    return Arrays.copyOf(rpu, end);
   }
 
   private static Optional<RpuFacts> facts(BitReader reader) {
@@ -116,8 +136,14 @@ final class DolbyVisionRpuReader {
     reader.alignToByte();
     for (long block = 0; block < blocks; block++) {
       var length = reader.unsignedExpGolomb();
-      reader.bits(8);
+      requireLength(SECOND_GROUP_BLOCK_BYTES, reader.bits(8), length);
       reader.skip(length * 8);
+    }
+  }
+
+  private static void requireLength(Map<Long, Long> blockBytes, long level, long length) {
+    if (length < blockBytes.getOrDefault(level, 0L)) {
+      throw new MalformedRpuException();
     }
   }
 
@@ -303,7 +329,11 @@ final class DolbyVisionRpuReader {
       var length = reader.unsignedExpGolomb();
       var level = reader.bits(8);
       // FFmpeg ignores a static block, such as level 6, in a compressed DM payload.
-      var isReadable = header.displayManagementCompression() == 0 && length >= LEVEL_6_BYTES;
+      var isReadable = header.displayManagementCompression() == 0;
+      if (isReadable) {
+        requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
+      }
+
       if (level == LEVEL_6 && isReadable && level6.isEmpty()) {
         reader.bits(16);
         reader.bits(16);
@@ -321,6 +351,13 @@ final class DolbyVisionRpuReader {
     }
 
     return Optional.of(level6);
+  }
+
+  /** An extension block shorter than its level's payload, which FFmpeg rejects. */
+  private static final class MalformedRpuException extends RuntimeException {
+    MalformedRpuException() {
+      super(null, null, false, false);
+    }
   }
 
   /**
