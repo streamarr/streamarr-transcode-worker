@@ -344,7 +344,9 @@ public final class TranscodeWorker implements AutoCloseable {
   // A job that names its audio's output layout needs the source layout and sample facts (ADR 0050),
   // and a held encode from a seek may need to search for the video's last keyframe (ADR 0037).
   // Both read on the attempt's own thread, so the control stream keeps delivering commands while
-  // they read: a stop for the attempt or the session's end interrupts the read.
+  // they read: a stop for the attempt or the session's end interrupts the read. The attempt counts
+  // against the probe capacities from the read's start, since the read loads the host as the
+  // encode does.
   private synchronized void startReading(StartVariantCommand command) {
     var jobAttemptId = fromProto(command.getJob().getJobAttemptId());
     var searchProgress = new KeyframeSearchProgress();
@@ -353,6 +355,7 @@ public final class TranscodeWorker implements AutoCloseable {
             .name("read-source-" + jobAttemptId)
             .unstarted(() -> readAndStart(command, searchProgress));
     pendingReads.put(jobAttemptId, new PendingRead(command.getJob(), reading, searchProgress));
+    probeCapacities.jobAttemptStarted(jobAttemptId);
     reading.start();
   }
 
@@ -406,22 +409,30 @@ public final class TranscodeWorker implements AutoCloseable {
   // A stop or the session's end that claimed the attempt during the read already settled it.
   private synchronized AttemptStart startAfterRead(
       StartVariantCommand command, ChosenAudio chosenAudio, Optional<Duration> readPosition) {
-    if (pendingReads.remove(fromProto(command.getJob().getJobAttemptId())) == null) {
+    var jobAttemptId = fromProto(command.getJob().getJobAttemptId());
+    if (pendingReads.remove(jobAttemptId) == null) {
       return new Refused();
     }
 
-    return startAttempt(command, chosenAudio, readPosition);
+    var start = startAttempt(command, chosenAudio, readPosition);
+    if (start instanceof Refused) {
+      probeCapacities.jobAttemptEnded(jobAttemptId);
+    }
+
+    return start;
   }
 
   private synchronized void failAfterRead(
       VariantJob job, JobAttemptFailure failure, RuntimeException cause) {
-    if (pendingReads.remove(fromProto(job.getJobAttemptId())) == null) {
+    var jobAttemptId = fromProto(job.getJobAttemptId());
+    if (pendingReads.remove(jobAttemptId) == null) {
       return;
     }
 
+    probeCapacities.jobAttemptEnded(jobAttemptId);
     log.error(
         "The search for the video's last keyframe of job attempt {} failed",
-        fromProto(job.getJobAttemptId()),
+        jobAttemptId,
         cause);
     reportFailure(job, failure);
   }
@@ -877,6 +888,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     pending.thread().interrupt();
+    probeCapacities.jobAttemptEnded(fromProto(command.getJobAttemptId()));
     tryReport(jobAttemptStopped(pending.job().getJobAttemptId()));
   }
 
@@ -1024,6 +1036,7 @@ public final class TranscodeWorker implements AutoCloseable {
   // An attempt that is still reading its audio stream ends with the read, before any report.
   private synchronized List<Producer> claimActiveAttempts() {
     pendingReads.values().forEach(pending -> pending.thread().interrupt());
+    pendingReads.keySet().forEach(probeCapacities::jobAttemptEnded);
     pendingReads.clear();
     var attempts = List.copyOf(activeAttempts.values());
     attempts.forEach(this::claim);

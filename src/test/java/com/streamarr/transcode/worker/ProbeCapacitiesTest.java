@@ -146,6 +146,21 @@ class ProbeCapacitiesTest {
     assertThat(capacities.takeBrakeCount()).isEqualTo(1);
   }
 
+  // A held encode's search for the video's last keyframe starts the attempt before its encode.
+  @Test
+  @DisplayName("Should brake once when a job attempt that already counts starts again")
+  void shouldBrakeOnceWhenAJobAttemptThatAlreadyCountsStartsAgain() {
+    var capacities = adaptive(16);
+    var attempt = UUID.randomUUID();
+    capacities.jobAttemptStarted(attempt);
+
+    capacities.jobAttemptStarted(attempt);
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
+    assertThat(changes).hasValue(1);
+    assertThat(capacities.takeBrakeCount()).isEqualTo(1);
+  }
+
   @Test
   @DisplayName("Should never lower the background probe capacity below 1 when brakes repeat")
   void shouldNeverLowerTheBackgroundProbeCapacityBelow1WhenBrakesRepeat() {

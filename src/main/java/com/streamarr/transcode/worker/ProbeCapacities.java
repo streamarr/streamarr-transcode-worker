@@ -166,11 +166,15 @@ final class ProbeCapacities {
     changeCapacities(() -> end(probe));
   }
 
-  // A job attempt that starts clears background probes from the host while its viewer waits.
+  // A job attempt that starts clears background probes from the host while its viewer waits. It
+  // counts once, from its first start: a held encode's search starts it before its encode does.
   void jobAttemptStarted(@NonNull UUID jobAttemptId) {
     changeCapacities(
         () -> {
-          jobAttempts.put(jobAttemptId, new ProductionSpeedWindow(clock));
+          if (jobAttempts.putIfAbsent(jobAttemptId, new ProductionSpeedWindow(clock)) != null) {
+            return;
+          }
+
           keyframePacketScanCapacity = 0;
           brake();
         });
