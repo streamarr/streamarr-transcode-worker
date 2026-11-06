@@ -79,4 +79,4 @@ See [Developer Setup](docs/dev-setup.md#contributing) for testing, formatting, a
 
 ## Attribution
 
-Worker images include Jellyfin builds of FFmpeg and ffprobe. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) for licenses, attribution, and corresponding source information.
+Worker images include FFmpeg and ffprobe built by [Streamarr's fork](https://github.com/streamarr/streamarr-ffmpeg) of the pinned FFmpeg build. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) for licenses, attribution, and corresponding source information.

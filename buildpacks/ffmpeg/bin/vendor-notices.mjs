@@ -15,13 +15,14 @@ const root = path.resolve(
 const httpLibrary = fileURLToPath(new URL("../lib/http.sh", import.meta.url));
 const run = promisify(execFile);
 // The repository whose numbered releases the lock pins.
-const SOURCE_REPOSITORY = "jellyfin/jellyfin-ffmpeg";
+const SOURCE_REPOSITORY = "streamarr/streamarr-ffmpeg";
 const FFMPEG_RAW = `https://raw.githubusercontent.com/${SOURCE_REPOSITORY}`;
 const FFMPEG_API = `https://api.github.com/repos/${SOURCE_REPOSITORY}`;
 const INDEX = "Component source index\n======================\n\n";
 const RECIPE = /^builder\/scripts\.d\/[^;]+\.sh$/;
 const DEPENDENCY_FILE = /^([a-z0-9-]+)\/DEPS$/;
 const SUBMODULE = /^([a-z0-9-]+)\/(.+) \(gitlink\)$/;
+const MACOS_BASE = /^builder\/images\/macos\/[^/;]+\.sh$/;
 const LICENSE_FILE =
     /(^|\/)(copying|copyright|licen[cs]e|notice|authors|patents)[^/]*$/i;
 const TOOLCHAIN = {
@@ -159,6 +160,18 @@ async function submodulePin(parent, revision, submodule) {
     )?.id;
 }
 
+// A macOS base image downloads one release of its library by version. The component keeps its
+// revision while the image's recipe at the locked revision still names that version; any other
+// version needs a person, because no rewrite can tell which notice texts the new release carries.
+async function macosBasePin(component, locked) {
+    const recipe = await readable(`${FFMPEG_RAW}/${locked}/${component.recipe}`);
+    if (!token(component.revision).test(recipe))
+        throw new Error(
+            `${component.recipe} no longer builds ${component.id} ${component.revision}`,
+        );
+    return component.revision;
+}
+
 async function toolchainPin(component, locked) {
     const { key, prefix } = TOOLCHAIN[component.id];
     const versions = await Promise.all(
@@ -266,6 +279,7 @@ async function upstreamRevision(component, context) {
     if (component.id === "ffmpeg") return context.locked;
     if (component.revisionEvidence === "notice-only") return component.revision;
     if (TOOLCHAIN[component.id]) return toolchainPin(component, context.locked);
+    if (MACOS_BASE.test(component.recipe)) return macosBasePin(component, context.locked);
     const [, parentId, submodule] =
         component.recipe.match(SUBMODULE) ??
         component.recipe.match(DEPENDENCY_FILE) ??

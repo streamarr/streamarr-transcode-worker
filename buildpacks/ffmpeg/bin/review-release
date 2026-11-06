@@ -21,16 +21,16 @@ comparison_file_limit=300
 # Upstream paths outside the inventory. The changelog and patch series are exempt by decision,
 # not because they are harmless: quilt applies whatever the series names with the options it
 # gives, so an entry could apply the changelog as a patch or reverse a patch with -R. The rest of
-# this list cannot alter which third-party code the Linux portable binaries link, nor any notice
-# text vendored under notices/. Any path not listed needs a person to review the inventory,
-# except a patch file of the series: upstream applies those to the FFmpeg tree before compiling, so what
-# each changed patch does to that tree decides.
+# this list cannot alter which third-party code the inventoried binaries link, nor any notice
+# text vendored under notices/. The macOS base images build inventoried macOS components, so
+# they are inside it. Any path not listed needs a person to review the inventory, except a
+# patch file of the series: the build applies those to the FFmpeg tree before compiling, so
+# what each changed patch does to that tree decides.
 paths_outside_inventory=(
   '^\.github/'
   '^debian/changelog$'
   '^debian/patches/series$'
   '^build\.yaml$'
-  '^builder/images/macos/'
   '^builder/images/base-win64/'
   '^msys2/'
   '^README\.md$'

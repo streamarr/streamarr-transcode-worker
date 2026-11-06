@@ -19,7 +19,7 @@ const REVIEWED = "a".repeat(40);
 const LOCKED = "c".repeat(40);
 const ALPHA_1 = "1".repeat(40);
 const ALPHA_2 = "2".repeat(40);
-const FFMPEG = "https://github.com/jellyfin/jellyfin-ffmpeg";
+const FFMPEG = "https://github.com/streamarr/streamarr-ffmpeg";
 const RAW = "https://raw.githubusercontent.com";
 const API = "https://api.github.com/repos";
 const LICENSE = "Alpha license\n";
@@ -166,7 +166,7 @@ deliver(fs.readFileSync(file));
             role: "FFmpeg executables.",
             notices: [
                 {
-                    url: `${RAW}/jellyfin/jellyfin-ffmpeg/${REVIEWED}/LICENSE.md`,
+                    url: `${RAW}/streamarr/streamarr-ffmpeg/${REVIEWED}/LICENSE.md`,
                     sha256: checksum("FFmpeg license\n"),
                     file: "ffmpeg/LICENSE.md",
                 },
@@ -184,7 +184,7 @@ deliver(fs.readFileSync(file));
         write("notices/sources.json", JSON.stringify(components, null, 2) + "\n");
         write(
             "SOURCE.txt",
-            `Binary release: ${FFMPEG}/releases/tag/v8.1.2-4\nFFmpeg source revision: ${REVIEWED}\n\n` +
+            `Binary release: ${FFMPEG}/releases/tag/v8.1.2-4-streamarr.1\nFFmpeg source revision: ${REVIEWED}\n\n` +
                 INDEX +
                 components.map(stanza).join("\n"),
         );
@@ -202,18 +202,18 @@ deliver(fs.readFileSync(file));
     }
     write(
         "notices/manifest",
-        `release=v8.1.2-4\nsource_revision=${REVIEWED}\namd64_sha256=${"a".repeat(64)}\narm64_sha256=${"b".repeat(64)}\n`,
+        `release=v8.1.2-4-streamarr.1\nsource_revision=${REVIEWED}\namd64_sha256=${"a".repeat(64)}\narm64_sha256=${"b".repeat(64)}\n`,
     );
     write(
         "ffmpeg.lock",
         [
-            "release=v9.0.0-1",
-            "version=9.0.0-1",
+            "release=v9.0.0-1-streamarr.1",
+            "version=9.0.0-1-streamarr.1",
             `source_revision=${LOCKED}`,
             "asset_variant=gpl",
-            "amd64_asset=jellyfin-ffmpeg_9.0.0-1_portable_linux64-gpl.tar.xz",
+            "amd64_asset=streamarr-ffmpeg_9.0.0-1-streamarr.1_portable_linux64-gpl.tar.xz",
             `amd64_sha256=${"d".repeat(64)}`,
-            "arm64_asset=jellyfin-ffmpeg_9.0.0-1_portable_linuxarm64-gpl.tar.xz",
+            "arm64_asset=streamarr-ffmpeg_9.0.0-1-streamarr.1_portable_linuxarm64-gpl.tar.xz",
             `arm64_sha256=${"e".repeat(64)}`,
         ].join("\n") + "\n",
     );
@@ -223,16 +223,16 @@ deliver(fs.readFileSync(file));
         ["50-beta.sh", recipe([["https://gitlab.example/group/beta", "v1.0"]])],
     ]);
     const serveRecipes = (revision, entries = recipes) => {
-        serve(`${API}/jellyfin/jellyfin-ffmpeg/git/trees/${revision}:builder/scripts.d?recursive=1`, {
+        serve(`${API}/streamarr/streamarr-ffmpeg/git/trees/${revision}:builder/scripts.d?recursive=1`, {
             truncated: false,
             tree: [...entries.keys()].map((name) => ({ path: name, type: "blob" })),
         });
         for (const [name, text] of entries)
-            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${revision}/builder/scripts.d/${name}`, text);
+            serve(`${RAW}/streamarr/streamarr-ffmpeg/${revision}/builder/scripts.d/${name}`, text);
     };
     serveRecipes(REVIEWED);
     serveRecipes(LOCKED);
-    serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/LICENSE.md`, "FFmpeg license\n");
+    serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/LICENSE.md`, "FFmpeg license\n");
     serve(`${RAW}/example/alpha/${ALPHA_1}/COPYING`, LICENSE);
     serve("https://gitlab.example/group/beta/-/raw/v1.0/include/beta.h", HEADER + "int beta(void);\n");
 
@@ -256,7 +256,7 @@ deliver(fs.readFileSync(file));
     const validate = () => {
         write(
             "notices/manifest",
-            `release=v9.0.0-1\nsource_revision=${LOCKED}\namd64_sha256=${"d".repeat(64)}\narm64_sha256=${"e".repeat(64)}\ninventory_sha256=${inventoryDigest(buildpack)}\n`,
+            `release=v9.0.0-1-streamarr.1\nsource_revision=${LOCKED}\namd64_sha256=${"d".repeat(64)}\narm64_sha256=${"e".repeat(64)}\ninventory_sha256=${inventoryDigest(buildpack)}\n`,
         );
         return spawnSync(process.execPath, [generator, "--root", buildpack, "--validate"], {
             encoding: "utf8",
@@ -292,9 +292,9 @@ test("Should rebind only the FFmpeg revision when no upstream pin moved", (t) =>
     assert.equal(result.status, 0, result.output);
     const ffmpeg = inventory().find((component) => component.id === "ffmpeg");
     assert.equal(ffmpeg.revision, LOCKED);
-    assert.equal(ffmpeg.notices[0].url, `${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/LICENSE.md`);
+    assert.equal(ffmpeg.notices[0].url, `${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/LICENSE.md`);
     assert.equal(inventory().find((component) => component.id === "alpha").revision, ALPHA_1);
-    assert.match(read("SOURCE.txt"), new RegExp(`releases/tag/v9\\.0\\.0-1\\nFFmpeg source revision: ${LOCKED}`));
+    assert.match(read("SOURCE.txt"), new RegExp(`releases/tag/v9\\.0\\.0-1-streamarr\\.1\\nFFmpeg source revision: ${LOCKED}`));
     assert.doesNotMatch(read("SOURCE.txt"), new RegExp(REVIEWED));
     assert.equal(read("notices/manifest"), manifest, "review approval is never written");
     assert.match(result.output, /Inventory content unchanged/);
@@ -313,7 +313,7 @@ test("Should leave a regenerated inventory a carry-forward can restore when no p
     assert.equal(result.status, 0, result.output);
     assert.match(result.output, /Inventory content unchanged/);
     for (const input of ["notices/sources.json", "SOURCE.txt"])
-        write(input, read(input).replaceAll(LOCKED, REVIEWED).replaceAll("releases/tag/v9.0.0-1", "releases/tag/v8.1.2-4"));
+        write(input, read(input).replaceAll(LOCKED, REVIEWED).replaceAll("releases/tag/v9.0.0-1-streamarr.1", "releases/tag/v8.1.2-4-streamarr.1"));
     assert.equal(inventoryDigest(buildpack), bound);
 });
 
@@ -376,7 +376,7 @@ test("Should record the upstream license text of a new component when its transf
 
 test("Should read a recipe listing whose transfer is interrupted and retried", (t) => {
     const { interrupt, requests, run } = fixture(t);
-    const listing = `${API}/jellyfin/jellyfin-ffmpeg/git/trees/${LOCKED}:builder/scripts.d?recursive=1`;
+    const listing = `${API}/streamarr/streamarr-ffmpeg/git/trees/${LOCKED}:builder/scripts.d?recursive=1`;
     interrupt(listing, 20);
 
     const result = run();
@@ -388,7 +388,7 @@ test("Should read a recipe listing whose transfer is interrupted and retried", (
 
 test("Should leave no download behind when the run fails while another transfer is in flight", (t) => {
     const { run, serve, stall } = fixture(t);
-    const listing = (revision) => `${API}/jellyfin/jellyfin-ffmpeg/git/trees/${revision}:builder/scripts.d?recursive=1`;
+    const listing = (revision) => `${API}/streamarr/streamarr-ffmpeg/git/trees/${revision}:builder/scripts.d?recursive=1`;
     stall(listing(REVIEWED));
     serve(listing(LOCKED), { truncated: true, tree: [] });
 
@@ -596,7 +596,7 @@ for (const [name, roles, written] of [
         write("notices/gcc-runtime/COPYING.txt", LICENSE);
         write("notices/glibc-startup/COPYING.txt", LICENSE);
         for (const image of ["base-linux64", "base-linuxarm64"])
-            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/${image}/ct-ng-config`, 'CT_GLIBC_VERSION="2.31"\nCT_GCC_VERSION="16.1.0"\n');
+            serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/${image}/ct-ng-config`, 'CT_GLIBC_VERSION="2.31"\nCT_GCC_VERSION="16.1.0"\n');
         serve(`${RAW}/gcc-mirror/gcc/releases/gcc-16.1.0/COPYING`, LICENSE);
         serve(`${RAW}/bminor/glibc/glibc-2.31/COPYING`, LICENSE);
 
@@ -616,6 +616,52 @@ for (const [name, roles, written] of [
         assert.equal(validate().status, 0);
     });
 }
+
+function macosBase(components, revision) {
+    return {
+        ...components[0],
+        id: "gamma",
+        repository: "https://github.com/example/gamma",
+        revision,
+        recipe: "builder/images/macos/05-gamma.sh",
+        architectures: ["macarm64"],
+        role: "Static gamma library from the macOS base image.",
+        notices: [{ url: `${RAW}/example/gamma/${revision}/LICENSE`, sha256: checksum(LICENSE), file: "gamma/LICENSE.txt" }],
+    };
+}
+
+const gammaRecipe = (revision) =>
+    `#!/bin/bash\nffbuild_macbase() {\n  git clone https://github.com/example/gamma.git\n  cd gamma\n  git checkout ${revision}\n}\n`;
+
+test("Should keep a macOS base component while its image still builds the reviewed version", (t) => {
+    const { components, inventory, run, serve, validate, write, writeInventory } = fixture(t);
+    components.push(macosBase(components, "v1.6.58"));
+    writeInventory();
+    write("notices/gamma/LICENSE.txt", LICENSE);
+    serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/macos/05-gamma.sh`, gammaRecipe("v1.6.58"));
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    const gamma = inventory().find((component) => component.id === "gamma");
+    assert.deepEqual(gamma, macosBase(components, "v1.6.58"));
+    assert.equal(validate().status, 0);
+});
+
+test("Should stop for a person when a macOS base image builds another version", (t) => {
+    const { buildpack, components, run, serve, write, writeInventory } = fixture(t);
+    components.push(macosBase(components, "v1.6.58"));
+    writeInventory();
+    write("notices/gamma/LICENSE.txt", LICENSE);
+    serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/macos/05-gamma.sh`, gammaRecipe("v1.6.59"));
+    const before = inventoryDigest(buildpack);
+
+    const result = run();
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /builder\/images\/macos\/05-gamma\.sh no longer builds gamma v1\.6\.58/);
+    assert.equal(inventoryDigest(buildpack), before);
+});
 
 test("Should decode base64 source views before comparing license text", (t) => {
     const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
@@ -1014,7 +1060,7 @@ test("Should resolve secondary, dependency-file, submodule and toolchain pins fr
     serve(`${RAW}/example/sub-gitlab/${"6".repeat(40)}/COPYING`, LICENSE);
     serve(`${RAW}/example/sub-gitlab/${"d".repeat(40)}/COPYING`, LICENSE);
     for (const image of ["base-linux64", "base-linuxarm64"])
-        serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/${image}/ct-ng-config`, 'CT_GLIBC_VERSION="2.28"\nCT_GCC_VERSION="16.1.0"\n');
+        serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/${image}/ct-ng-config`, 'CT_GLIBC_VERSION="2.28"\nCT_GCC_VERSION="16.1.0"\n');
     serve(`${RAW}/gcc-mirror/gcc/releases/gcc-15.2.0/COPYING`, LICENSE);
     serve(`${RAW}/gcc-mirror/gcc/releases/gcc-16.1.0/COPYING`, LICENSE);
 
@@ -1461,7 +1507,7 @@ test("Should follow a regrouped recipe and keep the dependencies resolved throug
         { ...components[0], recipe: "builder/scripts.d/47-group/50-alpha.sh" },
         components[1],
         components[3],
-        { ...components[2], revision: LOCKED, notices: [{ ...components[2].notices[0], url: `${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/LICENSE.md` }] },
+        { ...components[2], revision: LOCKED, notices: [{ ...components[2].notices[0], url: `${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/LICENSE.md` }] },
     ]);
     assert.equal(fs.existsSync(path.join(buildpack, "notices/dep-tools/COPYING.txt")), true);
     assert.match(read("SOURCE.txt"), /Recipe: builder\/scripts\.d\/47-group\/50-alpha\.sh/);
@@ -1727,7 +1773,7 @@ for (const [name, args, arrange, firstVerdict] of [
         assert.equal(read("notices/manifest"), manifest, "the regenerated inventory is still unreviewed");
         assert.deepEqual(inputs.map(read), regenerated, "the second run changes nothing");
         assert.doesNotMatch(second.output, /Inventory content unchanged|was rebound/);
-        assert.match(second.output.trimEnd().split("\n").at(-1), /^Inventory content was not compared with the review of v8\.1\.2-4: /);
+        assert.match(second.output.trimEnd().split("\n").at(-1), /^Inventory content was not compared with the review of v8\.1\.2-4-streamarr\.1: /);
     });
 }
 
@@ -1737,13 +1783,13 @@ test("Should not claim to have rebound anything when it only reports an unchange
     const result = run("--dry-run");
 
     assert.equal(result.status, 0, result.output);
-    assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content unchanged since the review of v8.1.2-4; nothing but the FFmpeg revision differs.");
+    assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content unchanged since the review of v8.1.2-4-streamarr.1; nothing but the FFmpeg revision differs.");
 });
 
 // The lock names the release that notices/manifest binds, as it does after every completed review.
 function lockReviewedRelease({ read, write }) {
     const manifest = read("notices/manifest");
-    write("ffmpeg.lock", manifest.replace(/^release=v8\.1\.2-4$/m, "release=v8.1.2-4\nversion=8.1.2-4"));
+    write("ffmpeg.lock", manifest.replace(/^release=v8\.1\.2-4-streamarr\.1$/m, "release=v8.1.2-4-streamarr.1\nversion=8.1.2-4-streamarr.1"));
 }
 
 for (const [name, arrange] of [
@@ -1776,9 +1822,9 @@ for (const [name, arrange] of [
         for (const result of [first, second]) {
             assert.equal(result.status, 0, result.output);
             assert.match(result.output, /Added component: delta\n/);
-            assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content changed since the review of v8.1.2-4; a maintainer must review this diff before notices/manifest is rebound.");
+            assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content changed since the review of v8.1.2-4-streamarr.1; a maintainer must review this diff before notices/manifest is rebound.");
         }
-        assert.match(first.output, /- Nothing written: notices\/manifest binds v8\.1\.2-4, the locked release, whose reviewed inputs a person changes\n/);
+        assert.match(first.output, /- Nothing written: notices\/manifest binds v8\.1\.2-4-streamarr\.1, the locked release, whose reviewed inputs a person changes\n/);
         assert.deepEqual(inputs.map(read), reviewed, "the reviewed inventory is not rewritten");
         assert.equal(fs.existsSync(path.join(buildpack, "notices/delta")), false);
     });
@@ -1791,7 +1837,7 @@ test("Should not call an inventory regenerated for another release unchanged whe
     assert.equal(run().status, 0);
     const regenerated = ["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt"].map(read);
     lockReviewedRelease(context);
-    context.serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${REVIEWED}/LICENSE.md`, "FFmpeg license\n");
+    context.serve(`${RAW}/streamarr/streamarr-ffmpeg/${REVIEWED}/LICENSE.md`, "FFmpeg license\n");
 
     const returned = run();
     const reported = run("--dry-run");
@@ -1799,10 +1845,10 @@ test("Should not call an inventory regenerated for another release unchanged whe
     for (const result of [returned, reported]) {
         assert.equal(result.status, 0, result.output);
         assert.doesNotMatch(result.output, /Inventory content unchanged/);
-        assert.match(result.output.trimEnd().split("\n").at(-1), /^Inventory content was not compared with the review of v8\.1\.2-4: /);
+        assert.match(result.output.trimEnd().split("\n").at(-1), /^Inventory content was not compared with the review of v8\.1\.2-4-streamarr\.1: /);
     }
     assert.deepEqual(["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt"].map(read), regenerated, "a person restores the reviewed inputs");
-    assert.match(read("SOURCE.txt"), /releases\/tag\/v9\.0\.0-1/);
+    assert.match(read("SOURCE.txt"), /releases\/tag\/v9\.0\.0-1-streamarr\.1/);
 });
 
 // A GitHub repository pinned at ALPHA_2 that the tool can propose as a component.
@@ -1858,7 +1904,7 @@ for (const [name, arrange, message] of [
     ],
     [
         "the recipe listing is truncated",
-        ({ serve }) => serve(`${API}/jellyfin/jellyfin-ffmpeg/git/trees/${LOCKED}:builder/scripts.d?recursive=1`, { truncated: true, tree: [] }),
+        ({ serve }) => serve(`${API}/streamarr/streamarr-ffmpeg/git/trees/${LOCKED}:builder/scripts.d?recursive=1`, { truncated: true, tree: [] }),
         /recipe listing .* is truncated/,
     ],
     [
@@ -1882,8 +1928,8 @@ for (const [name, arrange, message] of [
         ({ components, serve, writeInventory }) => {
             components[0] = { ...components[0], id: "gcc-runtime", recipe: "builder/images/base-linux64/ct-ng-config; builder/images/base-linuxarm64/ct-ng-config" };
             writeInventory();
-            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/base-linux64/ct-ng-config`, 'CT_GCC_VERSION="15.2.0"\n');
-            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/base-linuxarm64/ct-ng-config`, 'CT_GCC_VERSION="16.1.0"\n');
+            serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/base-linux64/ct-ng-config`, 'CT_GCC_VERSION="15.2.0"\n');
+            serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/base-linuxarm64/ct-ng-config`, 'CT_GCC_VERSION="16.1.0"\n');
         },
         /Toolchain images disagree about CT_GCC_VERSION: 15\.2\.0, 16\.1\.0/,
     ],
@@ -2128,7 +2174,7 @@ for (const [name, arrange, message] of [
     });
 }
 
-const UNCHANGED = "Inventory content unchanged since the review of v8.1.2-4; nothing but the FFmpeg revision differs.";
+const UNCHANGED = "Inventory content unchanged since the review of v8.1.2-4-streamarr.1; nothing but the FFmpeg revision differs.";
 const SPANNING = `\n${UNCHANGED}\n::error title=forged::annotation from upstream\n`;
 const TOOLCHAIN_IMAGES = "builder/images/base-linux64/ct-ng-config; builder/images/base-linuxarm64/ct-ng-config";
 
@@ -2139,8 +2185,8 @@ for (const [name, status, arrange] of [
         ({ components, serve, writeInventory }) => {
             components[0] = { ...components[0], id: "gcc-runtime", recipe: TOOLCHAIN_IMAGES };
             writeInventory();
-            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/base-linux64/ct-ng-config`, `CT_GCC_VERSION="15.2.0${SPANNING}"\n`);
-            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/base-linuxarm64/ct-ng-config`, 'CT_GCC_VERSION="15.2.0"\n');
+            serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/base-linux64/ct-ng-config`, `CT_GCC_VERSION="15.2.0${SPANNING}"\n`);
+            serve(`${RAW}/streamarr/streamarr-ffmpeg/${LOCKED}/builder/images/base-linuxarm64/ct-ng-config`, 'CT_GCC_VERSION="15.2.0"\n');
         },
     ],
     [

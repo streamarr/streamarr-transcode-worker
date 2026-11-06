@@ -75,13 +75,13 @@ if [[ "${requested_release_set}" == false ]]; then
     release_lines+=("${line}")
   done <"${release_file}"
   if (( ${#release_lines[@]} != 1 )); then
-    echo "Expected ${release_file} to contain exactly one Jellyfin release tag" >&2
+    echo "Expected ${release_file} to contain exactly one Streamarr FFmpeg release tag" >&2
     exit 1
   fi
   release="${release_lines[0]}"
 fi
 if ! ffmpeg_lock_is_release "${release}"; then
-  echo "Expected an exact Jellyfin release tag, found: ${release}" >&2
+  echo "Expected an exact Streamarr FFmpeg release tag, found: ${release}" >&2
   exit 1
 fi
 
@@ -109,7 +109,7 @@ ffmpeg_github_api_get \
 if ! jq -e --arg release "${release}" \
   '.tag_name == $release and .draft == false and .prerelease == false' \
   "${release_json}" >/dev/null; then
-  echo "Expected a published, non-prerelease Jellyfin release for ${release}" >&2
+  echo "Expected a published, non-prerelease Streamarr FFmpeg release for ${release}" >&2
   exit 1
 fi
 
@@ -138,7 +138,7 @@ arm64_sha256="$(asset_digest "${arm64_asset}")"
 ffmpeg_github_api_get "https://api.github.com/repos/${ffmpeg_source_repository}/commits/${release}" "${commit_json}"
 source_revision="$(jq -r '.sha' "${commit_json}")"
 if [[ ! "${source_revision}" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "Expected ${release} to resolve to a full Jellyfin FFmpeg source revision" >&2
+  echo "Expected ${release} to resolve to a full Streamarr FFmpeg source revision" >&2
   exit 1
 fi
 

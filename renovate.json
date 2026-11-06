@@ -7,23 +7,23 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Compare Jellyfin's fourth numeric component as a stable packaging revision; default SemVer treats the hyphen suffix as a prerelease",
+      "description": "Compare the upstream packaging revision and the Streamarr revision as stable numeric components; default SemVer treats the hyphen suffix as a prerelease",
       "managerFilePatterns": [
         "/^buildpacks/ffmpeg/release$/"
       ],
       "matchStrings": [
-        "^(?<currentValue>v\\d+\\.\\d+\\.\\d+-\\d+)\\n?$"
+        "^(?<currentValue>v\\d+\\.\\d+\\.\\d+-\\d+-streamarr\\.\\d+)\\n?$"
       ],
-      "depNameTemplate": "jellyfin/jellyfin-ffmpeg",
+      "depNameTemplate": "streamarr/streamarr-ffmpeg",
       "datasourceTemplate": "github-releases",
-      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<build>\\d+)$"
+      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<build>\\d+)-streamarr\\.(?<revision>\\d+)$"
     }
   ],
   "packageRules": [
     {
       "description": "Keep FFmpeg runtime updates isolated for lock synchronization",
       "matchDepNames": [
-        "jellyfin/jellyfin-ffmpeg"
+        "streamarr/streamarr-ffmpeg"
       ],
       "groupName": "FFmpeg runtime",
       "automerge": false
@@ -31,7 +31,7 @@
     {
       "description": "Require explicit dashboard approval before proposing a new FFmpeg major",
       "matchDepNames": [
-        "jellyfin/jellyfin-ffmpeg"
+        "streamarr/streamarr-ffmpeg"
       ],
       "matchUpdateTypes": [
         "major"

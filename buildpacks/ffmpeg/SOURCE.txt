@@ -1,39 +1,184 @@
-FFmpeg / Jellyfin binary redistribution materials
+FFmpeg binary distribution materials
 
-Binary release: https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/v8.1.3-2
-FFmpeg source revision: 7250de8375a4959ac1c25c139ce9789fdac199fb
+Binary release: https://github.com/streamarr/streamarr-ffmpeg/releases/tag/v8.1.3-2-streamarr.1
+FFmpeg source revision: 8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a
 Targets: portable Linux GPL, amd64 and arm64
 
 Corresponding Source
 ====================
-The source code for FFmpeg, the bundled libraries, and the scripts controlling
-compilation is available without charge at the upstream repositories and exact
-revisions listed below. Obtain FFmpeg and its Jellyfin patches/build recipes at:
-https://github.com/jellyfin/jellyfin-ffmpeg/tree/7250de8375a4959ac1c25c139ce9789fdac199fb
+Streamarr builds these binaries from its fork of the pinned FFmpeg build and
+distributes them. The source code for FFmpeg, Streamarr's patches, the bundled
+libraries, and the scripts controlling compilation is available without charge at
+the repositories and exact revisions listed below. Obtain FFmpeg, its patch series
+in debian/patches (Streamarr's patches are the files whose names start with
+streamarr-) and the build recipes at:
+https://github.com/streamarr/streamarr-ffmpeg/tree/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a
 Source archive:
-https://codeload.github.com/jellyfin/jellyfin-ffmpeg/tar.gz/7250de8375a4959ac1c25c139ce9789fdac199fb
+https://codeload.github.com/streamarr/streamarr-ffmpeg/tar.gz/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a
 
-Follow the upstream builder/README.md. From builder/, run ./makeimage.sh linux64 gpl
-and ./build.sh linux64 gpl; use linuxarm64 instead of linux64 for ARM. The
-builder/scripts.d recipes select library revisions, build
-options, generated code, and any changes in builder/patches. These changes are
-part of the Corresponding Source; an unpatched library release alone is not the
-complete source for a patched component. Streamarr redistributes the upstream
-binaries unchanged. Its packaging scripts are in buildpacks/ffmpeg in:
-https://github.com/streamarr/streamarr-server
+The fork's release workflow, .github/workflows/streamarr-portable.yaml, builds each
+archive with ./build-linux-amd64 or ./build-linux-arm64, which run
+builder/makeimage.sh and builder/build.sh for linux64 or linuxarm64 and gpl and
+apply the patch series with quilt. The builder/scripts.d recipes select library
+revisions, build options, generated code, and any changes in builder/patches.
+These changes are part of the Corresponding Source; an unpatched library release
+alone is not the complete source for a patched component. Streamarr's packaging
+scripts are in buildpacks/ffmpeg in:
+https://github.com/streamarr/streamarr-transcode-worker
 
 For a Git source entry below, clone its repository and check out the listed
 revision (git checkout --detach REVISION); initialize submodules when the pinned
 recipe requires them. For LAME, use svn checkout -r 6531 with the listed URL.
 The source entries also identify relevant generated-loader and build-support
 inputs; not all such entries are standalone libraries linked into the binary.
+The index also lists components that only the fork's macOS arm64 archive
+contains (macarm64); this image does not include that archive.
+
+Build-source records
+====================
+Some recipes clone a source without a revision, and builder/scripts.d/25-fftw3f.sh
+names a revision that it does not check out. Each build records the repository
+and revision that every clone resolved to, and each archive carries that record as
+BUILD-SOURCES.txt. The records of the archives this image pins follow. Where a
+record names another revision than the index below, the record names the source
+of the binary.
+
+streamarr-ffmpeg_8.1.3-2-streamarr.1_portable_linux64-gpl.tar.xz
+SHA-256 5a84a25963ef72e52aa042259b6be563abf734799556660fe1d1fc8879b15b2c
+  /opt/implib https://github.com/yugr/Implib.so a3e167cf978a5b8a38ec0f710d8c4331e8dcdd9a
+  Vulkan-Headers https://github.com/KhronosGroup/Vulkan-Headers.git 6433e5c70bb9ec995f72d767934acaff8ef11ae3
+  amf https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git eadd00804d5f7e5cd8c85d540073198312870776
+  ass https://github.com/libass/libass.git 4a05d8127f525943ebf45fdc6497c9e665947f0d
+  chromaprint https://github.com/acoustid/chromaprint.git 6b13ce3a81ae931e7477c4856a86bece99157cd8
+  dav1d https://code.videolan.org/videolan/dav1d.git 54706fc6bc0cdecab7e9593974a4039cc038fca7
+  fc https://chromium.googlesource.com/external/fontconfig 6d0a98982ec351c165c9224c8b7dbdfca3010e47
+  fdk https://gitlab.freedesktop.org/wtaymans/fdk-aac-stripped.git 529b87452cd33d45e1d0a5066d20b64f10b38845
+  ffnvcodec https://github.com/FFmpeg/nv-codec-headers.git 451da99614412a7f9526ef301a5ee0c7a6f9ad76
+  fftw3f https://github.com/FFTW/fftw3.git a7b679c528330cf6258253d6dcf5ec90552e6c93
+  freetype https://github.com/freetype/freetype.git 1803559c4ee407d0bcbf2a67dbe96690cee869d2
+  fribidi https://github.com/fribidi/fribidi.git 5c85a174650ab8ef106ce85f13bcf2950d3fc65f
+  glvnd https://gitlab.freedesktop.org/glvnd/libglvnd.git c046a760d845416e98ac4128757b2b356c47fdaa
+  gmp https://github.com/BtbN/gmplib.git 9994908f090c694f8a152d660dc6852e0c48557a
+  harfbuzz https://github.com/harfbuzz/harfbuzz.git 56feae4035bdd48f62ba2b8d8c16232d4d89b3a4
+  headers https://github.com/KhronosGroup/OpenCL-Headers.git 4c82e9cfaaad18c340f48af3cf5d09ff33e8c1b7
+  iconv https://skia.googlesource.com/third_party/libiconv a8850dc314a906b7bbe49a7c60424c7b10f57236
+  libbluray https://code.videolan.org/videolan/libbluray.git 4dfb9b0123b006ce5d66592dc8058f61e5c0cdc8
+  libdrm https://gitlab.freedesktop.org/mesa/drm.git 6bfcfc725fbe0ece0918535556d61ee567b1ffff
+  libpciaccess https://gitlab.freedesktop.org/xorg/lib/libpciaccess.git 38e6f15f839fba2c49982e7ad61cde681fd5d4d6
+  libudfread https://code.videolan.org/videolan/libudfread.git 139a2194525f2745b98a98e4d8fa627d07440176
+  libunibreak https://github.com/adah1972/libunibreak.git 3ce4bfa3129ff3738046a44a6db533d2ce25af2b
+  libva https://github.com/intel/libva.git 710eb465c6277ee2cac3e6948767b01eebe7e77a
+  libvpx https://chromium.googlesource.com/webm/libvpx 1024874c5919305883187e2953de8fcb4c3d7fa6
+  libx11 https://gitlab.freedesktop.org/xorg/lib/libx11.git b10abf6b99d5acf846c26f305f1a14a86360a96c
+  libxau https://gitlab.freedesktop.org/xorg/lib/libxau.git 03d51d05a093327e2889b8df2c32a58a4b381133
+  libxcb https://gitlab.freedesktop.org/xorg/lib/libxcb.git 4d6e1c8fffaf811cf4d0e68ff3bc6f50e62c32c7
+  libxcursor https://gitlab.freedesktop.org/xorg/lib/libxcursor.git 15efad7ccd035f5d1ddc8d437e047569d1775fa7
+  libxext https://gitlab.freedesktop.org/xorg/lib/libxext.git 2a694ba264ccdb205909909abfe8b136f9156ebe
+  libxfixes https://gitlab.freedesktop.org/xorg/lib/libxfixes.git 55bb2d1d57d43e0595ce45393f26eb433d75a7cc
+  libxi https://gitlab.freedesktop.org/xorg/lib/libxi.git 3103b5849d89335fd57b08b91ad634216ed96073
+  libxinerama https://gitlab.freedesktop.org/xorg/lib/libxinerama.git d7162b962710bc724b41cabab4e7cea303c4b541
+  libxml2 https://github.com/GNOME/libxml2.git a7511af09f99995cdf81994db21f4eba564276b5
+  libxrandr https://gitlab.freedesktop.org/xorg/lib/libxrandr.git 8a4ba1974bcf07057cf891128d86ae1ab5303574
+  libxrender https://gitlab.freedesktop.org/xorg/lib/libxrender.git f32afe9f877ae032c6bc9c27b17b7978b1b4c856
+  libxscrnsaver https://gitlab.freedesktop.org/xorg/lib/libxscrnsaver.git 3f753e7a4050db083474444ae91cc17a849eaa4d
+  libxtrans https://gitlab.freedesktop.org/xorg/lib/libxtrans.git 693d28a76024a2a0a28eef25037bcb7558b8bbfa
+  libxv https://gitlab.freedesktop.org/xorg/lib/libxv.git f315ec50fcad9bdbaed46c3e78dc5e7fe209f933
+  libxxf86vm https://gitlab.freedesktop.org/xorg/lib/libxxf86vm.git c76fde6bffcc87e5dd98d8196bb01a299bdc3236
+  loader https://github.com/KhronosGroup/OpenCL-ICD-Loader.git 2cde5d09953a041786d1cfdcb1c08704a82cb904
+  ogg https://github.com/xiph/ogg.git 06a5e0262cdc28aa4ae6797627a783b5010440f0
+  openmpt https://github.com/OpenMPT/openmpt.git 11363ff11ba021b1cf1533da17d9fdf20c8d883c
+  openssl https://github.com/openssl/openssl.git aae016bfd52fcad2bc9657c2c782cfdf73b1ed5f
+  opus https://github.com/xiph/opus.git 788cc89ce4f2c42025d8c70ec1b4457dc89cd50f
+  placebo https://code.videolan.org/videolan/libplacebo.git cee9b076f2c63104ccfd497fa79c39a867293ec4
+  shaderc https://github.com/google/shaderc.git d5f08ae5c5a9a45165578445cbd0f9adf0223448
+  spirv-cross https://github.com/KhronosGroup/SPIRV-Cross.git 1a6169566c73d3da552748fc372fe2bbb856e46e
+  srt https://github.com/Haivision/srt.git b6b4ae990daa8193625a4ddeaeaed03023b23125
+  theora https://github.com/xiph/theora.git 014bc312d05241ff2d06fd52ee7cbbec3768bfd6
+  vkheaders https://github.com/KhronosGroup/Vulkan-Headers.git 6433e5c70bb9ec995f72d767934acaff8ef11ae3
+  vkloader https://github.com/BtbN/Vulkan-Shim-Loader.git 65b3936528cd92eb4ea3de485d03f858a3850484
+  vorbis https://github.com/xiph/vorbis.git 68a7fc2246e734f1a311b06083fc1249551c4412
+  webp https://chromium.googlesource.com/webm/libwebp 4fa21912338357f89e4fd51cf2368325b59e9bd9
+  x264 https://code.videolan.org/videolan/x264.git 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+  xcbproto https://gitlab.freedesktop.org/xorg/proto/xcbproto.git cf7e2581b613802f2f8ec2a4b50a6a20aad4bf52
+  xorg-macros https://gitlab.freedesktop.org/xorg/util/macros.git a9d71e3fd8e6758b70be31c586921bbbcd2a8449
+  xproto https://gitlab.freedesktop.org/xorg/proto/xorgproto.git fcb7e9a1a0b593a44740d83b0babddd331fea830
+  xz https://github.com/tukaani-project/xz.git 4b73f2ec19a99ef465282fbce633e8deb33691b3
+  zimg https://github.com/sekrit-twc/zimg.git 5e8c32222569edf3a712f83d7cff80ad4dd9ab6e
+  zlib https://github.com/madler/zlib.git f9dd6009be3ed32415edf1e89d1bc38380ecb95d
+  zvbi https://github.com/zapping-vbi/zvbi.git 41477c97c8edf7a01f1594b2a95b94f0117eed21
+
+streamarr-ffmpeg_8.1.3-2-streamarr.1_portable_linuxarm64-gpl.tar.xz
+SHA-256 07663c6fb54ae5e9adda50341023f3a845373075bc67e153f8b8577179d2a40a
+  /opt/implib https://github.com/yugr/Implib.so a3e167cf978a5b8a38ec0f710d8c4331e8dcdd9a
+  Ne10 https://github.com/gnattu/Ne10.git 502bbc4ab65fe83114d618363510fd4ffb7a8c46
+  Vulkan-Headers https://github.com/KhronosGroup/Vulkan-Headers.git 6433e5c70bb9ec995f72d767934acaff8ef11ae3
+  ass https://github.com/libass/libass.git 4a05d8127f525943ebf45fdc6497c9e665947f0d
+  chromaprint https://github.com/acoustid/chromaprint.git 6b13ce3a81ae931e7477c4856a86bece99157cd8
+  dav1d https://code.videolan.org/videolan/dav1d.git 54706fc6bc0cdecab7e9593974a4039cc038fca7
+  fc https://chromium.googlesource.com/external/fontconfig 6d0a98982ec351c165c9224c8b7dbdfca3010e47
+  fdk https://gitlab.freedesktop.org/wtaymans/fdk-aac-stripped.git 529b87452cd33d45e1d0a5066d20b64f10b38845
+  ffnvcodec https://github.com/FFmpeg/nv-codec-headers.git 451da99614412a7f9526ef301a5ee0c7a6f9ad76
+  fftw3f https://github.com/FFTW/fftw3.git a7b679c528330cf6258253d6dcf5ec90552e6c93
+  freetype https://github.com/freetype/freetype.git 1803559c4ee407d0bcbf2a67dbe96690cee869d2
+  fribidi https://github.com/fribidi/fribidi.git 5c85a174650ab8ef106ce85f13bcf2950d3fc65f
+  glvnd https://gitlab.freedesktop.org/glvnd/libglvnd.git c046a760d845416e98ac4128757b2b356c47fdaa
+  gmp https://github.com/BtbN/gmplib.git 9994908f090c694f8a152d660dc6852e0c48557a
+  harfbuzz https://github.com/harfbuzz/harfbuzz.git 56feae4035bdd48f62ba2b8d8c16232d4d89b3a4
+  headers https://github.com/KhronosGroup/OpenCL-Headers.git 4c82e9cfaaad18c340f48af3cf5d09ff33e8c1b7
+  iconv https://skia.googlesource.com/third_party/libiconv a8850dc314a906b7bbe49a7c60424c7b10f57236
+  libbluray https://code.videolan.org/videolan/libbluray.git 4dfb9b0123b006ce5d66592dc8058f61e5c0cdc8
+  libdrm https://gitlab.freedesktop.org/mesa/drm.git 6bfcfc725fbe0ece0918535556d61ee567b1ffff
+  libpciaccess https://gitlab.freedesktop.org/xorg/lib/libpciaccess.git 38e6f15f839fba2c49982e7ad61cde681fd5d4d6
+  libudfread https://code.videolan.org/videolan/libudfread.git 139a2194525f2745b98a98e4d8fa627d07440176
+  libunibreak https://github.com/adah1972/libunibreak.git 3ce4bfa3129ff3738046a44a6db533d2ce25af2b
+  libva https://github.com/intel/libva.git 710eb465c6277ee2cac3e6948767b01eebe7e77a
+  libvpx https://chromium.googlesource.com/webm/libvpx 1024874c5919305883187e2953de8fcb4c3d7fa6
+  libx11 https://gitlab.freedesktop.org/xorg/lib/libx11.git b10abf6b99d5acf846c26f305f1a14a86360a96c
+  libxau https://gitlab.freedesktop.org/xorg/lib/libxau.git 03d51d05a093327e2889b8df2c32a58a4b381133
+  libxcb https://gitlab.freedesktop.org/xorg/lib/libxcb.git 4d6e1c8fffaf811cf4d0e68ff3bc6f50e62c32c7
+  libxcursor https://gitlab.freedesktop.org/xorg/lib/libxcursor.git 15efad7ccd035f5d1ddc8d437e047569d1775fa7
+  libxext https://gitlab.freedesktop.org/xorg/lib/libxext.git 2a694ba264ccdb205909909abfe8b136f9156ebe
+  libxfixes https://gitlab.freedesktop.org/xorg/lib/libxfixes.git 55bb2d1d57d43e0595ce45393f26eb433d75a7cc
+  libxi https://gitlab.freedesktop.org/xorg/lib/libxi.git 3103b5849d89335fd57b08b91ad634216ed96073
+  libxinerama https://gitlab.freedesktop.org/xorg/lib/libxinerama.git d7162b962710bc724b41cabab4e7cea303c4b541
+  libxml2 https://github.com/GNOME/libxml2.git a7511af09f99995cdf81994db21f4eba564276b5
+  libxrandr https://gitlab.freedesktop.org/xorg/lib/libxrandr.git 8a4ba1974bcf07057cf891128d86ae1ab5303574
+  libxrender https://gitlab.freedesktop.org/xorg/lib/libxrender.git f32afe9f877ae032c6bc9c27b17b7978b1b4c856
+  libxscrnsaver https://gitlab.freedesktop.org/xorg/lib/libxscrnsaver.git 3f753e7a4050db083474444ae91cc17a849eaa4d
+  libxtrans https://gitlab.freedesktop.org/xorg/lib/libxtrans.git 693d28a76024a2a0a28eef25037bcb7558b8bbfa
+  libxv https://gitlab.freedesktop.org/xorg/lib/libxv.git f315ec50fcad9bdbaed46c3e78dc5e7fe209f933
+  libxxf86vm https://gitlab.freedesktop.org/xorg/lib/libxxf86vm.git c76fde6bffcc87e5dd98d8196bb01a299bdc3236
+  loader https://github.com/KhronosGroup/OpenCL-ICD-Loader.git 2cde5d09953a041786d1cfdcb1c08704a82cb904
+  ogg https://github.com/xiph/ogg.git 06a5e0262cdc28aa4ae6797627a783b5010440f0
+  openmpt https://github.com/OpenMPT/openmpt.git 11363ff11ba021b1cf1533da17d9fdf20c8d883c
+  openssl https://github.com/openssl/openssl.git aae016bfd52fcad2bc9657c2c782cfdf73b1ed5f
+  opus https://github.com/xiph/opus.git 788cc89ce4f2c42025d8c70ec1b4457dc89cd50f
+  placebo https://code.videolan.org/videolan/libplacebo.git cee9b076f2c63104ccfd497fa79c39a867293ec4
+  rkmpp https://github.com/nyanmisaka/rk-mirrors.git 848b885f95587994a53216e435f650041a894e31
+  rkrga https://github.com/nyanmisaka/rk-mirrors.git 1d330cc28551943bed3380261a5a9c6fbd58ff53
+  shaderc https://github.com/google/shaderc.git d5f08ae5c5a9a45165578445cbd0f9adf0223448
+  spirv-cross https://github.com/KhronosGroup/SPIRV-Cross.git 1a6169566c73d3da552748fc372fe2bbb856e46e
+  srt https://github.com/Haivision/srt.git b6b4ae990daa8193625a4ddeaeaed03023b23125
+  theora https://github.com/xiph/theora.git 014bc312d05241ff2d06fd52ee7cbbec3768bfd6
+  vkheaders https://github.com/KhronosGroup/Vulkan-Headers.git 6433e5c70bb9ec995f72d767934acaff8ef11ae3
+  vkloader https://github.com/BtbN/Vulkan-Shim-Loader.git 65b3936528cd92eb4ea3de485d03f858a3850484
+  vorbis https://github.com/xiph/vorbis.git 68a7fc2246e734f1a311b06083fc1249551c4412
+  webp https://chromium.googlesource.com/webm/libwebp 4fa21912338357f89e4fd51cf2368325b59e9bd9
+  x264 https://code.videolan.org/videolan/x264.git 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+  xcbproto https://gitlab.freedesktop.org/xorg/proto/xcbproto.git cf7e2581b613802f2f8ec2a4b50a6a20aad4bf52
+  xorg-macros https://gitlab.freedesktop.org/xorg/util/macros.git a9d71e3fd8e6758b70be31c586921bbbcd2a8449
+  xproto https://gitlab.freedesktop.org/xorg/proto/xorgproto.git fcb7e9a1a0b593a44740d83b0babddd331fea830
+  xz https://github.com/tukaani-project/xz.git 4b73f2ec19a99ef465282fbce633e8deb33691b3
+  zimg https://github.com/sekrit-twc/zimg.git 5e8c32222569edf3a712f83d7cff80ad4dd9ab6e
+  zlib https://github.com/madler/zlib.git f9dd6009be3ed32415edf1e89d1bc38380ecb95d
+  zvbi https://github.com/zapping-vbi/zvbi.git 41477c97c8edf7a01f1594b2a95b94f0117eed21
 
 The stripped FDK AAC source, including upstream modifications, is available at:
 https://gitlab.freedesktop.org/wtaymans/fdk-aac-stripped/-/tree/529b87452cd33d45e1d0a5066d20b64f10b38845
 Its license and upstream modification notice are included in
 notices/fdk-aac-stripped/NOTICE.txt and notices/fdk-aac-stripped/README.fedora.txt.
 Streamarr selects FFmpeg's native aac encoder, not libfdk_aac. This does not remove
-the stripped FDK code from the redistributed executables.
+the stripped FDK code from the distributed executables.
 
 License and inventory information
 =================================
@@ -60,7 +205,8 @@ the portable tarballs. Their notices belong to the image/base-system packages th
 provide them. glibc startup/nonshared support is inventoried separately. GCC runtime
 code is linked statically and its Runtime Library Exception is
 included here. The upstream builder does not pin Implib.so: its inventory revision
-identifies the notice source, not a proven revision of the binary's generator.
+identifies the notice source, and the build-source records above name the revision
+that each pinned archive's build cloned.
 
 Component source index
 ======================
@@ -71,6 +217,14 @@ amf (amd64)
   Revision: eadd00804d5f7e5cd8c85d540073198312870776
   Recipe: builder/scripts.d/50-amf.sh
   Notices: see notices/sources.json (amf)
+
+brotli (macarm64)
+  Static Brotli compression library from the macOS base image.
+  Repository: https://github.com/google/brotli
+  Revision: v1.2.0
+  Recipe: builder/images/macos/04-brotli.sh
+  Notices: see notices/sources.json (brotli)
+  The macOS base image downloads GitHub's archive of the v1.2.0 tag.
 
 chromaprint (amd64, arm64)
   Static audio fingerprinting library (--enable-chromaprint).
@@ -101,9 +255,9 @@ fdk-aac-stripped (amd64, arm64)
   Notices: see notices/sources.json (fdk-aac-stripped)
 
 ffmpeg (amd64, arm64)
-  FFmpeg and ffprobe executables, including Jellyfin patches.
-  Repository: https://github.com/jellyfin/jellyfin-ffmpeg
-  Revision: 7250de8375a4959ac1c25c139ce9789fdac199fb
+  FFmpeg and ffprobe executables, including the upstream patch series and Streamarr's streamarr- patches.
+  Repository: https://github.com/streamarr/streamarr-ffmpeg
+  Revision: 8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a
   Recipe: builder
   Notices: see notices/sources.json (ffmpeg)
 
@@ -148,6 +302,14 @@ gcc-runtime (amd64, arm64)
   Revision: releases/gcc-15.2.0
   Recipe: builder/images/base-linux64/ct-ng-config; builder/images/base-linuxarm64/ct-ng-config
   Notices: see notices/sources.json (gcc-runtime)
+
+gettext (macarm64)
+  Static libintl message catalog library from the macOS base image.
+  Repository: https://ftpmirror.gnu.org/gnu/gettext
+  Revision: 1.0
+  Recipe: builder/images/macos/01-gettext.sh
+  Notices: see notices/sources.json (gettext)
+  The macOS base image downloads the gettext-1.0 release tarball (SHA-256 85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a), which holds these notice texts, without checking its digest.
 
 glad (amd64, arm64)
   Generated OpenGL/EGL loader code compiled into libplacebo; excludes generator-only Python dependencies.
@@ -256,11 +418,19 @@ libopus (amd64, arm64)
   Notices: see notices/sources.json (libopus)
 
 libplacebo (amd64, arm64)
-  Static rendering library (--enable-libplacebo), including Jellyfin's builder/patches/libplacebo patches.
+  Static rendering library (--enable-libplacebo), including the build's builder/patches/libplacebo patches.
   Repository: https://code.videolan.org/videolan/libplacebo
   Revision: cee9b076f2c63104ccfd497fa79c39a867293ec4
   Recipe: builder/scripts.d/50-libplacebo.sh
   Notices: see notices/sources.json (libplacebo)
+
+libpng (macarm64)
+  Static PNG library from the macOS base image.
+  Repository: https://github.com/glennrp/libpng
+  Revision: v1.6.58
+  Recipe: builder/images/macos/05-libpng.sh
+  Notices: see notices/sources.json (libpng)
+  The macOS base image clones the v1.6.58 tag.
 
 libtheora (amd64, arm64)
   Static Theora codec (--enable-libtheora).

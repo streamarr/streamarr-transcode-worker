@@ -21,6 +21,27 @@
     "revisionEvidence": "source"
   },
   {
+    "id": "brotli",
+    "recipe": "builder/images/macos/04-brotli.sh",
+    "repository": "https://github.com/google/brotli",
+    "revision": "v1.2.0",
+    "architectures": [
+      "macarm64"
+    ],
+    "role": "Static Brotli compression library from the macOS base image.",
+    "notices": [
+      {
+        "url": "https://raw.githubusercontent.com/google/brotli/v1.2.0/LICENSE",
+        "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
+        "file": "brotli/LICENSE.txt"
+      }
+    ],
+    "licenseExpression": "MIT",
+    "distribution": "runtime",
+    "revisionEvidence": "source",
+    "version_note": "The macOS base image downloads GitHub's archive of the v1.2.0 tag."
+  },
+  {
     "id": "chromaprint",
     "recipe": "builder/scripts.d/50-chromaprint.sh",
     "repository": "https://github.com/acoustid/chromaprint",
@@ -111,42 +132,42 @@
   },
   {
     "id": "ffmpeg",
-    "repository": "https://github.com/jellyfin/jellyfin-ffmpeg",
-    "revision": "7250de8375a4959ac1c25c139ce9789fdac199fb",
+    "repository": "https://github.com/streamarr/streamarr-ffmpeg",
+    "revision": "8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a",
     "recipe": "builder",
     "architectures": [
       "amd64",
       "arm64"
     ],
-    "role": "FFmpeg and ffprobe executables, including Jellyfin patches.",
+    "role": "FFmpeg and ffprobe executables, including the upstream patch series and Streamarr's streamarr- patches.",
     "notices": [
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/7250de8375a4959ac1c25c139ce9789fdac199fb/LICENSE.md",
+        "url": "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a/LICENSE.md",
         "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af",
         "file": "ffmpeg/LICENSE.md"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/7250de8375a4959ac1c25c139ce9789fdac199fb/COPYING.GPLv2",
+        "url": "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a/COPYING.GPLv2",
         "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
         "file": "ffmpeg/COPYING.GPLv2.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/7250de8375a4959ac1c25c139ce9789fdac199fb/COPYING.GPLv3",
+        "url": "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a/COPYING.GPLv3",
         "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
         "file": "ffmpeg/COPYING.GPLv3.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/7250de8375a4959ac1c25c139ce9789fdac199fb/COPYING.LGPLv2.1",
+        "url": "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a/COPYING.LGPLv2.1",
         "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
         "file": "ffmpeg/COPYING.LGPLv2.1.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/7250de8375a4959ac1c25c139ce9789fdac199fb/COPYING.LGPLv3",
+        "url": "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a/COPYING.LGPLv3",
         "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
         "file": "ffmpeg/COPYING.LGPLv3.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/7250de8375a4959ac1c25c139ce9789fdac199fb/debian/copyright",
+        "url": "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/8a984ad1cba1968dc8f1ad3e2e200041dc6bcf7a/debian/copyright",
         "sha256": "1dcbd4a0573defb2b6b44010c96eabe026d06d9cf2a86eaf7782aa80f76ed2f2",
         "file": "ffmpeg/debian/copyright.txt"
       }
@@ -357,6 +378,32 @@
     "licenseExpression": "GPL-3.0-or-later WITH GCC-exception-3.1",
     "distribution": "embedded",
     "revisionEvidence": "source"
+  },
+  {
+    "id": "gettext",
+    "recipe": "builder/images/macos/01-gettext.sh",
+    "repository": "https://ftpmirror.gnu.org/gnu/gettext",
+    "revision": "1.0",
+    "architectures": [
+      "macarm64"
+    ],
+    "role": "Static libintl message catalog library from the macOS base image.",
+    "notices": [
+      {
+        "url": "https://ftpmirror.gnu.org/gnu/gettext/gettext-1.0.tar.gz#gettext-1.0/gettext-runtime/intl/COPYING.LIB",
+        "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+        "file": "gnulib/doc/COPYING.LESSERv2.txt"
+      },
+      {
+        "url": "https://ftpmirror.gnu.org/gnu/gettext/gettext-1.0.tar.gz#gettext-1.0/gettext-runtime/AUTHORS",
+        "sha256": "136ea88816ec1990c2fc060970013b9e94c875ba8b387f9bb3d62e77c90bc9b4",
+        "file": "gettext/gettext-runtime/AUTHORS.txt"
+      }
+    ],
+    "licenseExpression": "LGPL-2.1-or-later",
+    "distribution": "runtime",
+    "revisionEvidence": "source",
+    "version_note": "The macOS base image downloads the gettext-1.0 release tarball (SHA-256 85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a), which holds these notice texts, without checking its digest."
   },
   {
     "id": "glad",
@@ -772,7 +819,7 @@
       "amd64",
       "arm64"
     ],
-    "role": "Static rendering library (--enable-libplacebo), including Jellyfin's builder/patches/libplacebo patches.",
+    "role": "Static rendering library (--enable-libplacebo), including the build's builder/patches/libplacebo patches.",
     "notices": [
       {
         "url": "https://code.videolan.org/videolan/libplacebo/-/raw/cee9b076f2c63104ccfd497fa79c39a867293ec4/LICENSE",
@@ -783,6 +830,27 @@
     "licenseExpression": "LGPL-2.1-or-later",
     "distribution": "runtime",
     "revisionEvidence": "source"
+  },
+  {
+    "id": "libpng",
+    "recipe": "builder/images/macos/05-libpng.sh",
+    "repository": "https://github.com/glennrp/libpng",
+    "revision": "v1.6.58",
+    "architectures": [
+      "macarm64"
+    ],
+    "role": "Static PNG library from the macOS base image.",
+    "notices": [
+      {
+        "url": "https://raw.githubusercontent.com/glennrp/libpng/v1.6.58/LICENSE",
+        "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526",
+        "file": "libpng/LICENSE.txt"
+      }
+    ],
+    "licenseExpression": "libpng-2.0",
+    "distribution": "runtime",
+    "revisionEvidence": "source",
+    "version_note": "The macOS base image clones the v1.6.58 tag."
   },
   {
     "id": "libtheora",

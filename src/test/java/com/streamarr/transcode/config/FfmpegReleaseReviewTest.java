@@ -31,13 +31,13 @@ class FfmpegReleaseReviewTest {
   private static final Path REVIEWER = BUILDPACK.resolve("bin/review-release").toAbsolutePath();
   private static final Path LOCK_UPDATER = BUILDPACK.resolve("bin/update-lock").toAbsolutePath();
   private static final int HUMAN_REVIEW_REQUIRED = 3;
-  private static final String LOCKED_RELEASE = "v99.0.0-1";
+  private static final String LOCKED_RELEASE = "v99.0.0-1-streamarr.1";
   private static final String LOCKED_REVISION = "c".repeat(40);
   private static final String LOCKED_AMD64_SHA256 = "d".repeat(64);
   private static final String LOCKED_ARM64_SHA256 = "e".repeat(64);
   private static final String PATCH = "debian/patches/0099-fix-qsv-av1-hdr-side-data.patch";
   private static final String CONTENTS_URL =
-      "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/contents";
+      "https://api.github.com/repos/streamarr/streamarr-ffmpeg/contents";
 
   @TempDir Path temporaryDirectory;
 
@@ -53,7 +53,7 @@ class FfmpegReleaseReviewTest {
                 "debian/changelog",
                 "debian/patches/series",
                 "build.yaml",
-                "builder/images/macos/00-dep.sh",
+                "builder/images/base-win64/Dockerfile",
                 ".github/workflows/_meta_mac_portable.yaml")
             .upstreamPatch(
                 PatchChange.builder()
@@ -81,7 +81,7 @@ class FfmpegReleaseReviewTest {
                     FfmpegInventoryDigest.of(review.buildpack())));
     assertThat(Files.readString(review.inventory()))
         .contains(
-            "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/%s/LICENSE.md"
+            "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/%s/LICENSE.md"
                 .formatted(LOCKED_REVISION))
         .doesNotContain(reviewedRevision);
     assertThat(Files.readString(review.sourceAccess()))
@@ -101,6 +101,7 @@ class FfmpegReleaseReviewTest {
       strings = {
         "builder/scripts.d/50-x264.sh",
         "builder/images/base-linux64/Dockerfile",
+        "builder/images/macos/05-libpng.sh",
         "builder/variants/linux64-gpl.sh",
         "LICENSE.md",
         "COPYING.GPLv3",
@@ -317,7 +318,7 @@ class FfmpegReleaseReviewTest {
                 .formatted(reviewed("release"), LOCKED_RELEASE));
     assertThat(review.upstreamRequests())
         .contains(
-            "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/%s...%s"
+            "https://api.github.com/repos/streamarr/streamarr-ffmpeg/compare/%s...%s"
                 .formatted(reviewed("source_revision"), LOCKED_REVISION));
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
@@ -877,7 +878,7 @@ class FfmpegReleaseReviewTest {
     assertThat(Files.readAllLines(review.sourceAccess()))
         .filteredOn(line -> line.startsWith("Binary release:"))
         .containsExactly(
-            "Binary release: https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/"
+            "Binary release: https://github.com/streamarr/streamarr-ffmpeg/releases/tag/"
                 + lockedRelease);
     assertThat(Files.readString(review.manifest())).contains("release=" + lockedRelease + "\n");
   }
@@ -1160,9 +1161,9 @@ class FfmpegReleaseReviewTest {
         version=%s
         source_revision=%s
         asset_variant=gpl
-        amd64_asset=jellyfin-ffmpeg_%s_portable_linux64-gpl.tar.xz
+        amd64_asset=streamarr-ffmpeg_%s_portable_linux64-gpl.tar.xz
         amd64_sha256=%s
-        arm64_asset=jellyfin-ffmpeg_%s_portable_linuxarm64-gpl.tar.xz
+        arm64_asset=streamarr-ffmpeg_%s_portable_linuxarm64-gpl.tar.xz
         arm64_sha256=%s
         """
             .formatted(
@@ -1324,7 +1325,7 @@ class FfmpegReleaseReviewTest {
               .environment("FAKE_COMPARISON", comparison.toString())
               .environment(
                   "FAKE_COMPARISON_URL",
-                  "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/%s...%s"
+                  "https://api.github.com/repos/streamarr/streamarr-ffmpeg/compare/%s...%s"
                       .formatted(reviewed("source_revision"), LOCKED_REVISION))
               .environment("FAKE_CONTENTS", contents.toString())
               .environment("FAKE_CONTENTS_URL", CONTENTS_URL);

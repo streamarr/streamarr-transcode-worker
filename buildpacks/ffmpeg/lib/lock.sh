@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # The repository whose numbered releases the lock pins.
-ffmpeg_source_repository=jellyfin/jellyfin-ffmpeg
+ffmpeg_source_repository=streamarr/streamarr-ffmpeg
 
 ffmpeg_lock_keys=(
   release
@@ -14,19 +14,22 @@ ffmpeg_lock_keys=(
   arm64_sha256
 )
 
-# Succeeds when the argument is an exact release tag of the repository the lock pins.
+# Succeeds when the argument is an exact release tag of the repository the lock pins: the
+# upstream release it builds and a Streamarr revision (ADR 0057).
 ffmpeg_lock_is_release() {
-  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]
+  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-streamarr\.[0-9]+$ ]]
 }
 
 # Names the portable archive of a release version for an upstream target and variant.
 ffmpeg_lock_asset() {
-  printf 'jellyfin-ffmpeg_%s_portable_%s-%s.tar.xz' "$1" "$2" "$3"
+  printf 'streamarr-ffmpeg_%s_portable_%s-%s.tar.xz' "$1" "$2" "$3"
 }
 
-# Prints the version that FFmpeg's banner reports for a release version.
+# Prints the version that FFmpeg's banner reports for a release version. The fork keeps the
+# upstream build's banner, which omits the packaging and Streamarr revisions.
 ffmpeg_lock_banner_version() {
-  printf '%s-Jellyfin' "${1%-*}"
+  local upstream_version="${1%-streamarr.*}"
+  printf '%s-Jellyfin' "${upstream_version%-*}"
 }
 
 ffmpeg_lock_value() {
@@ -86,7 +89,7 @@ ffmpeg_lock_validate() {
   arm64_sha256="$(ffmpeg_lock_value "${lock_file}" arm64_sha256)"
 
   if ! ffmpeg_lock_is_release "${release}"; then
-    echo "FFmpeg lock release is not an exact Jellyfin release tag" >&2
+    echo "FFmpeg lock release is not an exact Streamarr FFmpeg release tag" >&2
     return 1
   fi
   if [[ ! "${source_revision}" =~ ^[0-9a-f]{40}$ ]]; then

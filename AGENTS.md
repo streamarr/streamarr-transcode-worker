@@ -171,7 +171,7 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 - **Runtime and health**: Spring Boot with Actuator `/actuator/health/liveness` and `/actuator/health/readiness`. Don't reintroduce a custom gRPC health service, and keep the engine independent of Spring ([ADR 0035](https://github.com/streamarr/streamarr-adr/blob/main/adr/0035-worker-uses-spring-boot-and-mesh-transport-security.adoc)).
 - **Transport**: one plaintext gRPC client in every topology. No application TLS, certificate loading, worker tokens, or transport-mode flags; distributed deployments rely on mesh-enforced mTLS and ServiceAccount authorization (ADR 0035).
 - **Process execution**: FFmpeg and ffprobe run through `ProcessBuilder`, not JNI bindings ([ADR 0004](https://github.com/streamarr/streamarr-adr/blob/main/adr/0004-processbuilder-over-jni.adoc)).
-- **FFmpeg runtime**: numbered Jellyfin FFmpeg releases pinned by `buildpacks/ffmpeg/ffmpeg.lock`. No floating `latest`, distro FFmpeg, or daily autobuilds ([ADR 0029](https://github.com/streamarr/streamarr-adr/blob/main/adr/0029-pin-jellyfin-ffmpeg-releases.adoc)).
+- **FFmpeg runtime**: numbered releases of Streamarr's fork of the pinned FFmpeg build ([streamarr/streamarr-ffmpeg](https://github.com/streamarr/streamarr-ffmpeg), [ADR 0057](https://github.com/streamarr/streamarr-adr/blob/main/adr/0057-the-worker-runs-ffmpeg-built-from-streamarrs-fork-of-the-pinned-build.adoc)) pinned by `buildpacks/ffmpeg/ffmpeg.lock`. No floating `latest`, distro FFmpeg, or daily autobuilds ([ADR 0029](https://github.com/streamarr/streamarr-adr/blob/main/adr/0029-pin-jellyfin-ffmpeg-releases.adoc)).
 - **Concurrency runtime**: virtual threads (Loom). Don't introduce reactive/actor frameworks.
 - **Release versions**: Release Please owns the Maven version, changelog, and GitHub releases — don't hand-edit the version in `pom.xml` or `.release-please-manifest.json` ([ADR 0034](https://github.com/streamarr/streamarr-adr/blob/main/adr/0034-release-please-owns-maven-release-versions.adoc), [Releases](docs/releases.md)).
 - **Sonar config** lives in `pom.xml` properties, not a `sonar-project.properties` file.
@@ -235,7 +235,7 @@ We follow these factors from the Twelve-Factor App methodology:
 - Java 25 (LTS), Spring Boot 4.x — exact versions live in `pom.xml` (Renovate keeps them current; don't pin patch versions here)
 - gRPC (`grpc-netty-shaded`) with the Buf-generated `streamarr-org_transcode_grpc_java` SDK for the worker protocol
 - Spring Boot Actuator over Spring MVC for health probes only; virtual threads for concurrency
-- FFmpeg and ffprobe through `ProcessBuilder`, shipped by the locked Jellyfin FFmpeg buildpack in a Paketo-built, non-root image
+- FFmpeg and ffprobe through `ProcessBuilder`, shipped by the locked FFmpeg buildpack in a Paketo-built, non-root image
 - The worker probes media and runs remux and transcode jobs dispatched by the server, reading FFmpeg's fragmented MP4 from its standard output and uploading each HLS media segment back over gRPC.
 
 <!-- gitnexus:start -->

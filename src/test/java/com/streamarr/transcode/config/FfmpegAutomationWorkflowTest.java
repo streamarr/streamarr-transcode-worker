@@ -32,7 +32,7 @@ import tools.jackson.databind.ObjectMapper;
 @DisplayName("FFmpeg Automation Workflow Tests")
 class FfmpegAutomationWorkflowTest {
 
-  private static final String DEPENDENCY = "jellyfin/jellyfin-ffmpeg";
+  private static final String DEPENDENCY = "streamarr/streamarr-ffmpeg";
   private static final String LOCK_BOT_EMAIL =
       "327604351+streamarr-release[bot]@users.noreply.github.com";
   private static final String LOCK = "buildpacks/ffmpeg/ffmpeg.lock";
@@ -84,13 +84,15 @@ class FfmpegAutomationWorkflowTest {
     assertThat(manager.path("depNameTemplate").asString()).isEqualTo(DEPENDENCY);
     var versionPattern =
         Pattern.compile(manager.path("versioningTemplate").asString().substring(6));
-    var futureBuild = versionPattern.matcher("v8.1.2-10");
+    var futureBuild = versionPattern.matcher("v8.1.2-10-streamarr.12");
     assertThat(futureBuild.matches()).isTrue();
     assertThat(futureBuild.group("major")).isEqualTo("8");
     assertThat(futureBuild.group("minor")).isEqualTo("1");
     assertThat(futureBuild.group("patch")).isEqualTo("2");
     assertThat(futureBuild.group("build")).isEqualTo("10");
-    assertThat(versionPattern.matcher("v8.1.2-4-rc1").matches()).isFalse();
+    assertThat(futureBuild.group("revision")).isEqualTo("12");
+    assertThat(versionPattern.matcher("v8.1.2-4-streamarr.1-rc1").matches()).isFalse();
+    assertThat(versionPattern.matcher("v8.1.2-4").matches()).isFalse();
     assertThat(ffmpegRule.path("groupName").asString()).isEqualTo("FFmpeg runtime");
     assertThat(ffmpegRule.path("automerge").isBoolean()).isTrue();
     assertThat(ffmpegRule.path("automerge").asBoolean()).isFalse();
@@ -1446,7 +1448,7 @@ class FfmpegAutomationWorkflowTest {
         .environment("GITHUB_WORKSPACE", workspace.toString())
         .environment("GH_TOKEN", "the workflow token")
         .environment("GITHUB_REPOSITORY", "streamarr/streamarr-transcode-worker")
-        .environment("HEAD_REF", "renovate/jellyfin-ffmpeg")
+        .environment("HEAD_REF", "renovate/streamarr-ffmpeg")
         .environment("PR_NUMBER", "21");
   }
 
@@ -1460,7 +1462,7 @@ class FfmpegAutomationWorkflowTest {
         .environment("GITHUB_WORKSPACE", workspace.toString())
         .environment("GH_TOKEN", "the workflow token")
         .environment("GITHUB_REPOSITORY", "streamarr/streamarr-transcode-worker")
-        .environment("HEAD_REF", "renovate/jellyfin-ffmpeg")
+        .environment("HEAD_REF", "renovate/streamarr-ffmpeg")
         .environment("PR_NUMBER", "21");
   }
 

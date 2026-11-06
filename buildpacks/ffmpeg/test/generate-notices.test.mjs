@@ -22,7 +22,7 @@ function fixture(t) {
     fs.writeFileSync(path.join(root, "notices/duplicate.txt"), text);
     const component = {
         id: "ffmpeg",
-        repository: "https://github.com/jellyfin/jellyfin-ffmpeg",
+        repository: "https://github.com/streamarr/streamarr-ffmpeg",
         revision: "1".repeat(40),
         architectures: ["amd64", "arm64"],
         role: "FFmpeg executable",
@@ -50,13 +50,13 @@ function fixture(t) {
     fs.writeFileSync(
         path.join(root, "ffmpeg.lock"),
         [
-            "release=v8.1.2-4",
-            "version=8.1.2-4",
+            "release=v8.1.2-4-streamarr.1",
+            "version=8.1.2-4-streamarr.1",
             `source_revision=${component.revision}`,
             "asset_variant=gpl",
-            "amd64_asset=jellyfin-ffmpeg_8.1.2-4_portable_linux64-gpl.tar.xz",
+            "amd64_asset=streamarr-ffmpeg_8.1.2-4-streamarr.1_portable_linux64-gpl.tar.xz",
             `amd64_sha256=${"a".repeat(64)}`,
-            "arm64_asset=jellyfin-ffmpeg_8.1.2-4_portable_linuxarm64-gpl.tar.xz",
+            "arm64_asset=streamarr-ffmpeg_8.1.2-4-streamarr.1_portable_linuxarm64-gpl.tar.xz",
             `arm64_sha256=${"b".repeat(64)}`,
         ].join("\n") + "\n",
     );
@@ -74,7 +74,7 @@ function fixture(t) {
     const bindManifest = () =>
         fs.writeFileSync(
             path.join(root, "notices/manifest"),
-            `release=v8.1.2-4\nsource_revision=${"1".repeat(40)}\namd64_sha256=${"a".repeat(64)}\narm64_sha256=${"b".repeat(64)}\ninventory_sha256=${inventoryDigest(root)}\n`,
+            `release=v8.1.2-4-streamarr.1\nsource_revision=${"1".repeat(40)}\namd64_sha256=${"a".repeat(64)}\narm64_sha256=${"b".repeat(64)}\ninventory_sha256=${inventoryDigest(root)}\n`,
         );
     const writeInventory = () => {
         fs.writeFileSync(
@@ -217,7 +217,7 @@ test("Should validate source inputs without requiring or writing generated artif
     const { root } = fixture(t);
     const manifest =
         [
-            "release=v8.1.2-4",
+            "release=v8.1.2-4-streamarr.1",
             `source_revision=${"1".repeat(40)}`,
             `amd64_sha256=${"a".repeat(64)}`,
             `arm64_sha256=${"b".repeat(64)}`,
@@ -306,7 +306,7 @@ test("Should generate architecture-specific SBOMs without presenting build input
     assert.equal(amd64.formulation[0].components[0].name, "build-tool");
     assert.equal(
         amd64.components[0].purl,
-        "pkg:github/jellyfin/jellyfin-ffmpeg@v8.1.2-4",
+        "pkg:github/streamarr/streamarr-ffmpeg@v8.1.2-4-streamarr.1",
     );
     assert.equal(amd64.components[0].hashes[0].content, "a".repeat(64));
     assert.equal(arm64.components[0].hashes[0].content, "b".repeat(64));
@@ -323,6 +323,26 @@ test("Should generate architecture-specific SBOMs without presenting build input
         !generated.properties.some(
             (p) => p.name === "streamarr:source-revision",
         ),
+    );
+});
+
+test("Should list a macOS-only component in the notices and in neither Linux SBOM", (t) => {
+    const { root, components, writeInventory } = fixture(t);
+    components.push({ ...components[1], id: "macos-only", architectures: ["macarm64"] });
+    writeInventory();
+
+    const result = run(root);
+
+    assert.equal(result.status, 0, result.output);
+    for (const architecture of ["amd64", "arm64"]) {
+        const sbom = JSON.parse(
+            fs.readFileSync(path.join(root, `generated/ffmpeg.${architecture}.cdx.json`)),
+        );
+        assert.ok(!sbom.components.some((c) => c.name === "macos-only"), architecture);
+    }
+    assert.match(
+        fs.readFileSync(path.join(root, "generated/THIRD-PARTY-NOTICES.txt"), "utf8"),
+        /Component: macos-only\n[^]*?Architectures: macarm64\n/,
     );
 });
 
@@ -539,7 +559,7 @@ test("Should map component declarations and exact source notices in both generat
     assert.match(document, /License expression: LicenseRef-example/);
     assert.match(
         document,
-        /Source: https:\/\/github.com\/jellyfin\/jellyfin-ffmpeg/,
+        /Source: https:\/\/github.com\/streamarr\/streamarr-ffmpeg/,
     );
     assert.match(document, /Origin: https:\/\/example.org\/COPYING.md/);
     const bom = JSON.parse(
@@ -613,9 +633,9 @@ for (const invalid of ["duplicate", "asset", "version", "checksum"]) {
         const file = path.join(root, "ffmpeg.lock");
         const original = fs.readFileSync(file, "utf8");
         const changed = {
-            duplicate: original + "version=8.1.2-4\n",
+            duplicate: original + "version=8.1.2-4-streamarr.1\n",
             asset: original.replace("linux64-gpl", "linux64-lgpl"),
-            version: original.replace("version=8.1.2-4", "version=9.0.0-1"),
+            version: original.replace("version=8.1.2-4-streamarr.1", "version=9.0.0-1-streamarr.1"),
             checksum: original.replace("a".repeat(64), "not-a-checksum"),
         };
         fs.writeFileSync(file, changed[invalid]);

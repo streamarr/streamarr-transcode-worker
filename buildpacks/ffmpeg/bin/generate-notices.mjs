@@ -16,7 +16,7 @@ const { values } = parseArgs({
 if ([values.check, values.compare, values.validate].filter(Boolean).length > 1)
     throw new Error("Choose --check, --compare or --validate");
 // The repository whose numbered releases the lock pins.
-const SOURCE_REPOSITORY = "jellyfin/jellyfin-ffmpeg";
+const SOURCE_REPOSITORY = "streamarr/streamarr-ffmpeg";
 const root = path.resolve(
     values.root ?? fileURLToPath(new URL("..", import.meta.url)),
 );
@@ -264,7 +264,7 @@ function sbomComponent({ component, arch }) {
         type: "application",
         name: "FFmpeg",
         version: lock.version,
-        publisher: "Jellyfin",
+        publisher: "Streamarr",
         purl,
         "bom-ref": purl,
         hashes: [{ alg: "SHA-256", content: lock[`${arch}_sha256`] }],
@@ -300,7 +300,7 @@ function validateComponent(component) {
         !Array.isArray(component.architectures) ||
         !component.architectures.length ||
         component.architectures.some(
-            (arch) => !["amd64", "arm64"].includes(arch),
+            (arch) => !["amd64", "arm64", "macarm64"].includes(arch),
         )
     ) {
         throw new Error(`Invalid architectures: ${component.id}`);
