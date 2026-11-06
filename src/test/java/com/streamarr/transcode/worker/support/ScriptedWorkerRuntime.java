@@ -444,12 +444,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
      * the server's refusal reaches the worker after it has sent the segment.
      */
     public void refuseAtTheWorkersLimit() {
-      var refusal = workerLimitRefusal();
+      var limitRefusal = workerLimitRefusal();
       synchronized (this) {
-        this.refusal = Optional.of(refusal);
+        refusal = Optional.of(limitRefusal);
       }
 
-      refuse(refusal);
+      refuse(limitRefusal);
     }
 
     /** Whether the server refused the upload. */
