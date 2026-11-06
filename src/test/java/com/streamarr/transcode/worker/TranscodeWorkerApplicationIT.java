@@ -62,6 +62,25 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Test
+  @DisplayName(
+      "Should list the pause and hold meters when an operator exposes the metrics endpoint")
+  void shouldListThePauseAndHoldMetersWhenAnOperatorExposesTheMetricsEndpoint() throws Exception {
+    var response =
+        getFromRegisteredWorker(
+            "/actuator/metrics",
+            Map.of("MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE", "health,metrics"));
+
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(response.body())
+        .contains(
+            "\"streamarr.worker.seek_yield_pauses\"",
+            "\"streamarr.worker.seek_yield_resumes\"",
+            "\"streamarr.worker.hold_backs\"",
+            "\"streamarr.worker.hold_back_releases\"",
+            "\"streamarr.worker.paused_producers\"");
+  }
+
+  @Test
   @DisplayName("Should return a source failure when a POSIX worker receives a Unicode source")
   void shouldReturnASourceFailureWhenAPosixWorkerReceivesAUnicodeSource() throws Exception {
     var request =
