@@ -3,8 +3,10 @@ package com.streamarr.transcode.worker;
 import com.streamarr.transcode.engine.Producer;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -16,7 +18,9 @@ import lombok.NonNull;
 /**
  * The job attempts that a worker session holds back because they run far ahead of their viewers
  * (ADR 0044, hold-back). Each hold-back replaces the previous one's attempts, and each held attempt
- * resumes at its release time, or at an earlier one that a later hold-back listing it sets.
+ * resumes at its release time, or at an earlier one that a later hold-back listing it sets. An
+ * attempt whose hold ended at its release time stays unheld until a hold-back leaves it out, since
+ * a hold-back sent before that time can arrive after it.
  */
 final class HoldBacks implements AutoCloseable {
 
@@ -27,6 +31,7 @@ final class HoldBacks implements AutoCloseable {
 
   // Guarded by this monitor.
   private final Map<UUID, HeldAttempt> held = new HashMap<>();
+  private final Set<UUID> releasedAtTheirTime = new HashSet<>();
   private long holds;
 
   /**
@@ -46,9 +51,10 @@ final class HoldBacks implements AutoCloseable {
       }
     }
 
+    releasedAtTheirTime.removeIf(attemptId -> !isPositive(releaseAfter.get(attemptId)));
     releaseAfter.forEach(
         (attemptId, after) -> {
-          if (isPositive(after)) {
+          if (isPositive(after) && !releasedAtTheirTime.contains(attemptId)) {
             hold(attemptId, after, runningProducers);
           }
         });
@@ -101,6 +107,7 @@ final class HoldBacks implements AutoCloseable {
     }
 
     held.remove(attemptId);
+    releasedAtTheirTime.add(attemptId);
     current.producer().releaseHeldFfmpeg();
   }
 

@@ -130,17 +130,27 @@ class TranscodeWorkerHoldBackTest {
 
   @Test
   @DisplayName(
-      "Should hold a job attempt back again right after its release, with none of a seek's rest")
-  void shouldHoldAJobAttemptBackAgainRightAfterItsReleaseWithNoneOfASeeksRest() throws Exception {
+      "Should ignore a listing of a job attempt whose hold ended at its release time until a"
+          + " hold-back leaves it out, then hold it again with none of a seek's rest")
+  void shouldIgnoreAListingOfAJobAttemptWhoseHoldEndedAtItsReleaseTimeUntilAHoldBackLeavesItOut()
+      throws Exception {
     try (var worker = worker()) {
       var connection = startThreeAttempts(worker);
       holdBack(connection, Map.of(ahead, Duration.ofMillis(300)));
       promptly().until(() -> heldAttempts().equals(List.of(ahead)));
       promptly().until(() -> heldAttempts().isEmpty());
 
-      holdBack(connection, Map.of(ahead, LONG_HOLD));
+      // A listing that the server sent before the release time; holding the other attempt shows
+      // that the worker applied it.
+      holdBack(connection, Map.of(ahead, LONG_HOLD, behind, LONG_HOLD));
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(EVENT_LIMIT)
+          .until(() -> heldAttempts().equals(List.of(behind)));
+      holdBack(connection, Map.of(behind, LONG_HOLD));
+      holdBack(connection, Map.of(ahead, LONG_HOLD, behind, LONG_HOLD));
 
-      promptly().until(() -> heldAttempts().equals(List.of(ahead)));
+      promptly().until(() -> heldAttempts().equals(List.of(ahead, behind)));
       exitAll();
     }
   }
