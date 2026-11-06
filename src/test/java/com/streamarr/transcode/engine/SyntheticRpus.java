@@ -101,7 +101,7 @@ final class SyntheticRpus {
     private int lumaPieces = 1;
     private boolean mmrChroma = true;
     private boolean dmMetadata = true;
-    private boolean compressedDm;
+    private int dmMetadataCompression;
     private boolean cmv40;
     private OptionalLong previousRpuId = OptionalLong.empty();
     private int colorCoefficient = SOURCE_COLOR_COEFFICIENT;
@@ -272,8 +272,14 @@ final class SyntheticRpus {
       return this;
     }
 
+    /** reserved_zero_3bits 1: the DM metadata holds only its ids. */
     Builder compressedDm() {
-      compressedDm = true;
+      return dmMetadataCompression(1);
+    }
+
+    /** The 3-bit metadata compression field; the decoder implements 0 and 1. */
+    Builder dmMetadataCompression(int value) {
+      dmMetadataCompression = value;
       return this;
     }
 
@@ -357,7 +363,7 @@ final class SyntheticRpus {
       writeCoefficientDataType(sink);
       sink.u(1, 2).bit(fullRange ? 1 : 0);
       sink.ue(baseLayerBitDepthMinus8).ue(enhancementLayerBitDepthField).ue(vdrBitDepthMinus8);
-      sink.bit(0).u(compressedDm ? 1 : 0, 3);
+      sink.bit(0).u(dmMetadataCompression, 3);
       sink.bit(enhancementLayerFilter ? 1 : 0).bit(residual ? 0 : 1);
       sink.bit(dmMetadata ? 1 : 0);
       if (previousRpuId.isPresent()) {
@@ -464,7 +470,7 @@ final class SyntheticRpus {
 
     private void writeDmData(BitSink sink) {
       sink.ue(affectedDmMetadataId).ue(currentDmMetadataId).ue(1);
-      if (!compressedDm) {
+      if (dmMetadataCompression != 1) {
         writeSignalDescription(sink);
       }
 

@@ -862,6 +862,12 @@ class SegmentAssemblerBitstreamRewriteTest {
             sample(
                 aud(), slice(0), SyntheticRpus.profile7().floatingPointCoefficients().nalUnit())),
         Arguments.of(
+            "an RPU whose affected DM metadata id differs from its current one",
+            sample(aud(), slice(0), SyntheticRpus.profile7().affectedDmMetadataId(1).nalUnit())),
+        Arguments.of(
+            "an RPU with a metadata compression of 2",
+            sample(aud(), slice(0), SyntheticRpus.profile7().dmMetadataCompression(2).nalUnit())),
+        Arguments.of(
             "an RPU that names previous RPU 16, above the 15 that the decoder reads",
             sample(aud(), slice(0), SyntheticRpus.profile7().previousRpu(16).nalUnit())),
         Arguments.of(
