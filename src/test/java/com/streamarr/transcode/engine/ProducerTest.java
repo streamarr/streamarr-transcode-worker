@@ -1239,6 +1239,106 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName("Should not fail the attempt as an encoder stall while the worker holds FFmpeg back")
+  void shouldNotFailTheAttemptAsAnEncoderStallWhileTheWorkerHoldsFfmpegBack() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(100)).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+
+    await()
+        .during(Duration.ofMillis(500))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.outcome().isDone() && process.isPausedBySignal());
+    producer.releaseHeldFfmpeg();
+    assertThat(process.isPausedBySignal()).isFalse();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should pause FFmpeg for a seek right after the worker releases a hold-back, with no rest"
+          + " after the hold")
+  void shouldPauseFfmpegForASeekRightAfterTheWorkerReleasesAHoldBack() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var clock = new SteppedClock();
+    var producer = producerFor(process, recording).clock(clock).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(30));
+    producer.releaseHeldFfmpeg();
+
+    var pausedForASeek = producer.pauseFfmpeg();
+
+    assertThat(pausedForASeek).isTrue();
+    assertThat(process.isPausedBySignal()).isTrue();
+    producer.resumeFfmpeg();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep FFmpeg stopped until both a seek's pause and a hold-back that overlap it end")
+  void shouldKeepFfmpegStoppedUntilBothASeeksPauseAndAHoldBackThatOverlapItEnd() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+
+    producer.resumeFfmpeg();
+    var stoppedWhileHeld = process.isPausedBySignal();
+    var pausedAgainWhileHeld = producer.pauseFfmpeg();
+    producer.releaseHeldFfmpeg();
+
+    assertThat(stoppedWhileHeld).isTrue();
+    assertThat(pausedAgainWhileHeld).as("a held attempt takes no seek's pause").isFalse();
+    assertThat(process.isPausedBySignal()).isFalse();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName("Should hold nothing back when the attempt has an outcome")
+  void shouldHoldNothingBackWhenTheAttemptHasAnOutcome() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var producer = producerFor(process, recording).start();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+
+    var held = producer.holdBackFfmpeg();
+
+    assertThat(held).isFalse();
+    assertThat(process.isPausedBySignal()).isFalse();
+  }
+
+  @Test
   @DisplayName("Should leave FFmpeg running when the worker pauses an attempt that has an outcome")
   void shouldLeaveFfmpegRunningWhenTheWorkerPausesAnAttemptThatHasAnOutcome() {
     var recording = recording(ENCODED_RECORDING);

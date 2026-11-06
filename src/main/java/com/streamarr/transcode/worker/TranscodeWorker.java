@@ -7,6 +7,7 @@ import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.HoldBackCommand;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -1106,6 +1107,28 @@ public final class TranscodeWorker implements AutoCloseable {
             Optional.ofNullable(activeAttempts.get(attemptId)).map(ActiveAttempt::producer));
   }
 
+  @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
+  private synchronized void holdBack(HoldBackCommand command, WorkerResponseObserver session) {
+    // A hold-back from a session that close() ended must not touch the session that replaced it.
+    if (!command.getTarget().equals(identity()) || responseObserver.get() != session) {
+      return;
+    }
+
+    var releaseAfter =
+        command.getJobAttemptsList().stream()
+            .collect(
+                Collectors.toMap(
+                    held -> ProtoUuid.fromProto(held.getJobAttemptId()),
+                    held ->
+                        Duration.ofSeconds(
+                            held.getReleaseAfter().getSeconds(), held.getReleaseAfter().getNanos()),
+                    (first, _) -> first));
+    session.sessionHoldBacks.holdBack(
+        releaseAfter,
+        attemptId ->
+            Optional.ofNullable(activeAttempts.get(attemptId)).map(ActiveAttempt::producer));
+  }
+
   // An attempt that is still reading its audio stream has no producer, so its stop is settled at
   // once; the interrupt ends the read.
   private synchronized void stopReading(StopVariantCommand command) {
@@ -1312,6 +1335,7 @@ public final class TranscodeWorker implements AutoCloseable {
     sessionTimers.shutdownNow();
     sessionTimers = null;
     observer.sessionYields.close();
+    observer.sessionHoldBacks.close();
     var attempts = claimActiveAttempts();
     try {
       if (requests != null) {
@@ -1344,6 +1368,7 @@ public final class TranscodeWorker implements AutoCloseable {
     private volatile boolean sessionAccepted;
     private final WorkerProbeSession sessionProbes;
     private final SeekYields sessionYields = new SeekYields();
+    private final HoldBacks sessionHoldBacks = new HoldBacks();
     private final CompletableFuture<Void> sessionDisconnected = disconnected;
 
     private WorkerResponseObserver(
@@ -1384,6 +1409,11 @@ public final class TranscodeWorker implements AutoCloseable {
 
       if (response.hasYieldToSeek()) {
         yieldToSeek(response.getYieldToSeek(), this);
+        return;
+      }
+
+      if (response.hasHoldBack()) {
+        holdBack(response.getHoldBack(), this);
         return;
       }
 

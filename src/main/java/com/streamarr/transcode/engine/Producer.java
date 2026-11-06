@@ -95,6 +95,7 @@ public final class Producer {
   private OptionalInt lastDeliveredMediaSegment = OptionalInt.empty();
   // Guarded by lock. Once the attempt is decided or its output has ended, FFmpeg stays running.
   private boolean ffmpegPaused;
+  private boolean heldBack;
   private boolean pausesEnded;
   // Guarded by lock. After a resume, FFmpeg runs for as long as it was paused and until the sink
   // accepts another media segment before it pauses again.
@@ -279,7 +280,7 @@ public final class Producer {
    */
   public boolean pauseFfmpeg() {
     synchronized (lock) {
-      if (ffmpegPaused || pausesEnded || !deliveredSinceResume || isResting()) {
+      if (ffmpegPaused || heldBack || pausesEnded || !deliveredSinceResume || isResting()) {
         return false;
       }
 
@@ -326,7 +327,55 @@ public final class Producer {
     restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
     deliveredSinceResume = false;
     resumes++;
-    continueFfmpegProcesses();
+    if (!heldBack) {
+      continueFfmpegProcesses();
+    }
+  }
+
+  /**
+   * Holds FFmpeg back until {@link #releaseHeldFfmpeg}, because the attempt runs far ahead of its
+   * viewer, and answers whether FFmpeg is held. A hold has neither the rest nor the delivered
+   * segment that {@link #pauseFfmpeg} waits for after a resume: the server releases it before the
+   * viewer needs the attempt's next segment. FFmpeg runs again once neither a hold nor a seek's
+   * pause stops it. Held time counts neither as production time nor toward the stall timeout. Does
+   * nothing once the attempt has an outcome or FFmpeg's output has ended.
+   */
+  public boolean holdBackFfmpeg() {
+    synchronized (lock) {
+      if (pausesEnded) {
+        return false;
+      }
+
+      if (heldBack) {
+        return true;
+      }
+
+      if (!ffmpegPaused && !stopFfmpegProcesses()) {
+        return false;
+      }
+
+      heldBack = true;
+      return true;
+    }
+  }
+
+  /** Ends the hold of {@link #holdBackFfmpeg}; FFmpeg stays paused while a seek's pause lasts. */
+  public void releaseHeldFfmpeg() {
+    synchronized (lock) {
+      releaseHold();
+    }
+  }
+
+  // Guarded by lock.
+  private void releaseHold() {
+    if (!heldBack) {
+      return;
+    }
+
+    heldBack = false;
+    if (!ffmpegPaused) {
+      continueFfmpegProcesses();
+    }
   }
 
   // Guarded by lock.
@@ -346,6 +395,7 @@ public final class Producer {
   private void endPauses() {
     synchronized (lock) {
       pausesEnded = true;
+      releaseHold();
       resumePausedFfmpeg();
     }
   }
@@ -403,6 +453,7 @@ public final class Producer {
 
       decision = Optional.of(decided);
       pausesEnded = true;
+      releaseHold();
       resumePausedFfmpeg();
       assembler.discardHeldFragments();
       readerReleasedBytes = readerHeldBytes;
