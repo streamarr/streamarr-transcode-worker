@@ -45,6 +45,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -1387,7 +1388,7 @@ class FfprobeExecutorKeyframeTest {
           IntStream.concat(IntStream.concat(repeated(40, 50), repeated(20, 50)), repeated(40, 25))
               .toArray();
 
-      var video = probedVideo(directory, UNAGREED_RATES, intervals);
+      var video = probedVideo(directory, UNAGREED_RATES, SampleTimes.inMilliseconds(intervals));
 
       assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(50, 1));
     }
@@ -1402,7 +1403,7 @@ class FfprobeExecutorKeyframeTest {
           IntStream.concat(IntStream.concat(repeated(40, 16), repeated(20, 8)), repeated(40, 16))
               .toArray();
 
-      var video = probedVideo(directory, UNAGREED_RATES, intervals);
+      var video = probedVideo(directory, UNAGREED_RATES, SampleTimes.inMilliseconds(intervals));
 
       assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(50, 1));
     }
@@ -1416,7 +1417,17 @@ class FfprobeExecutorKeyframeTest {
       // A single 16 ms interval alone would give 62.5 fps.
       var intervals = IntStream.range(0, 120).map(frame -> frame % 3 == 0 ? 16 : 17).toArray();
 
-      var video = probedVideo(directory, UNAGREED_RATES, intervals);
+      var video = probedVideo(directory, UNAGREED_RATES, SampleTimes.inMilliseconds(intervals));
+
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(60, 1));
+    }
+
+    @Test
+    @DisplayName(
+        "Should report 60 fps when an MP4 in 1/60 s ticks holds one frame that lasts a single tick")
+    void shouldReport60FpsWhenAnMp4In160SecondTicksHoldsOneFrameThatLastsASingleTick(
+        @TempDir Path directory) throws Exception {
+      var video = probedVideo(directory, UNAGREED_RATES, new SampleTimes(60, List.of(2, 1, 2, 2)));
 
       assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(60, 1));
     }
@@ -1438,7 +1449,7 @@ class FfprobeExecutorKeyframeTest {
           probedVideo(
               directory,
               "\"r_frame_rate\":\"30000/1001\",\"avg_frame_rate\":\"30000/1001\"",
-              intervals);
+              SampleTimes.inMilliseconds(intervals));
 
       assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(30_000, 1001));
     }
@@ -1462,16 +1473,19 @@ class FfprobeExecutorKeyframeTest {
     }
 
     /**
-     * Probes an MP4 whose single video track holds one keyframe sample per interval in 1 ms ticks,
-     * and one more, with these declared rates, and returns its video stream.
+     * Probes an MP4 whose single video track holds one keyframe sample per interval, and one more,
+     * with these declared rates, and returns its video stream.
      */
     private static ProbeStreamInfo probedVideo(
-        Path directory, String declaredRates, int[] intervals) throws IOException {
-      var mp4 = SyntheticMp4.builder().mediaTimescale(1_000);
-      Arrays.stream(intervals).forEach(interval -> mp4.durationRun(new DurationRun(1, interval)));
-      mp4.durationRun(new DurationRun(1, 40));
+        Path directory, String declaredRates, SampleTimes times) throws IOException {
+      var mp4 = SyntheticMp4.builder().mediaTimescale(times.timescale());
+      times.intervals().forEach(interval -> mp4.durationRun(new DurationRun(1, interval)));
+      mp4.durationRun(new DurationRun(1, times.intervals().getFirst()));
       var source = Files.write(directory.resolve("source.mp4"), mp4.build().bytes());
-      var lastTime = Arrays.stream(intervals).sum();
+      var lastTime = times.intervals().stream().mapToInt(Integer::intValue).sum();
+      var lastSeconds =
+          BigDecimal.valueOf(lastTime)
+              .divide(BigDecimal.valueOf(times.timescale()), 6, RoundingMode.CEILING);
       var ffprobe =
           ScriptedFfprobe.builder()
               .streams(
@@ -1481,7 +1495,7 @@ class FfprobeExecutorKeyframeTest {
                   """
                       .formatted(declaredRates))
               .packet(
-                  BigDecimal.valueOf(lastTime, 3).setScale(6) + "%+#1",
+                  lastSeconds.toPlainString() + "%+#1",
                   "{\"packets\":[{\"pts\":%d,\"dts\":%d,\"flags\":\"K__\"}]}"
                       .formatted(lastTime, lastTime))
               .build();
@@ -1492,6 +1506,13 @@ class FfprobeExecutorKeyframeTest {
           .as("keyframes from the sample table")
           .isTrue();
       return media.getStreams(0);
+    }
+
+    /** Sample durations in ticks of 1 / {@code timescale} seconds. */
+    private record SampleTimes(int timescale, List<Integer> intervals) {
+      static SampleTimes inMilliseconds(int[] intervals) {
+        return new SampleTimes(1_000, Arrays.stream(intervals).boxed().toList());
+      }
     }
 
     private static Fraction fraction(int numerator, int denominator) {

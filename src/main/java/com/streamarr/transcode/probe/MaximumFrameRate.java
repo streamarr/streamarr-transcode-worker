@@ -72,8 +72,8 @@ final class MaximumFrameRate {
    * over 1 to {@link #WINDOW_INTERVALS} consecutive intervals. Each time can be up to one tick off,
    * so a run of k intervals that spans s ticks proves at least k frames per s + 1 ticks. The run
    * that proves the highest rate decides: when a listed rate lies between k / (s + 1) and k / (s -
-   * 1) frames per tick, the listed rate nearest k / s is the maximum, else k / (s + 1) is. Empty
-   * for fewer than two frames or frames that all present at once.
+   * 1) frames per tick, the listed rate nearest k / s is the maximum, else k / s is. Empty for
+   * fewer than two frames or frames that all present at once.
    */
   static Optional<ExactFraction> measured(long[] presentationTimes, long timescale) {
     var sorted = presentationTimes.clone();
@@ -110,17 +110,20 @@ final class MaximumFrameRate {
     }
 
     ExactFraction rate(long timescale) {
-      var lowest = lowestRate(timescale);
-      if (span == 1) {
-        return lowest;
-      }
-
-      var highest = highestRate(timescale);
       var estimate = new ExactFraction(ticks(timescale), BigInteger.valueOf(span));
       return ListedFrameRates.RATES.stream()
-          .filter(listed -> !lowest.isGreaterThan(listed) && !listed.isGreaterThan(highest))
+          .filter(listed -> isWithinPrecision(listed, timescale))
           .min(Comparator.comparing(listed -> listed.minus(estimate).abs()))
-          .orElse(lowest);
+          .orElse(estimate);
+    }
+
+    // A run that spans one tick allows every rate from k frames per 2 ticks up.
+    private boolean isWithinPrecision(ExactFraction rate, long timescale) {
+      if (lowestRate(timescale).isGreaterThan(rate)) {
+        return false;
+      }
+
+      return span == 1 || !rate.isGreaterThan(highestRate(timescale));
     }
 
     private ExactFraction lowestRate(long timescale) {

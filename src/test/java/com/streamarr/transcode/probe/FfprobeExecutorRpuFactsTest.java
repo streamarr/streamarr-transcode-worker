@@ -10,6 +10,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import com.streamarr.transcode.probe.RpuBits.ExtensionBlock;
 import com.streamarr.transcode.probe.RpuBits.Nlq;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -139,31 +140,64 @@ class FfprobeExecutorRpuFactsTest {
                 .build()
                 .hevcNalUnit()),
         Named.of(
-            "a level 1 block without its payload, which FFmpeg rejects",
-            RpuBits.profile7(Nlq.identity())
-                .extensionBlock(new ExtensionBlock(1, List.of()))
-                .extensionBlock(ExtensionBlock.level6(1_000, 400))
-                .build()
-                .hevcNalUnit()),
-        Named.of(
-            "a level 6 block shorter than its 8 bytes",
-            RpuBits.profile7(Nlq.identity())
-                .extensionBlock(new ExtensionBlock(6, List.of(0x03, 0xE8)))
-                .build()
-                .hevcNalUnit()),
-        Named.of(
-            "a level 254 block without its payload after a valid level 6 block",
-            level6.toBuilder()
-                .secondGroupBlockCount(1)
-                .secondGroupBlock(new ExtensionBlock(254, List.of()))
-                .build()
-                .hevcNalUnit()),
-        Named.of(
             "an rpu_format without bit depths",
             level6.toBuilder()
                 .header(level6.header().toBuilder().rpuFormat(0x112).build())
                 .build()
                 .hevcNalUnit()));
+  }
+
+  @ParameterizedTest(name = "level {0} in group {1}, at least {2} bytes")
+  @MethodSource("blockMinimums")
+  @DisplayName(
+      "Should parse an extension block of its minimum length and reject one a byte shorter, as"
+          + " FFmpeg does")
+  void shouldParseAnExtensionBlockOfItsMinimumLengthAndRejectOneAByteShorter(
+      int level, int group, int minimumBytes) {
+    var whole = dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes)), group);
+    var shorter = dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes - 1)), group);
+
+    assertThat(whole.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL);
+    assertThat(whole.hasRpuContentLightLevel()).isTrue();
+    assertThat(shorter.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_UNSPECIFIED);
+    assertThat(shorter.hasRpuContentLightLevel()).isFalse();
+  }
+
+  // FFmpeg 8.1's dovi_rpudec.c: the payload each recognized level needs, by group.
+  static Stream<Arguments> blockMinimums() {
+    return Stream.of(
+        Arguments.of(1, 1, 5),
+        Arguments.of(2, 1, 11),
+        Arguments.of(4, 1, 3),
+        Arguments.of(5, 1, 7),
+        Arguments.of(6, 1, 8),
+        Arguments.of(255, 1, 6),
+        Arguments.of(3, 2, 5),
+        Arguments.of(8, 2, 10),
+        Arguments.of(9, 2, 1),
+        Arguments.of(10, 2, 5),
+        Arguments.of(11, 2, 4),
+        Arguments.of(254, 2, 2));
+  }
+
+  private static DolbyVisionPresent dolbyVisionWithBlock(ExtensionBlock block, int group) {
+    var rpu = RpuBits.profile7(Nlq.identity()).extensionBlock(ExtensionBlock.level6(1_000, 400));
+    if (group == 1) {
+      rpu.extensionBlock(block);
+    }
+
+    if (group == 2) {
+      rpu.secondGroupBlockCount(1).secondGroupBlock(block);
+    }
+
+    var nalUnit = rpu.build().hevcNalUnit();
+    return dolbyVisionOf(nalUnit, nalUnit, nalUnit);
+  }
+
+  private static List<Integer> zeros(int bytes) {
+    return Collections.nCopies(bytes, 0);
   }
 
   @Test

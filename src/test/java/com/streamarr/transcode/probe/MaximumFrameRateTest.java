@@ -38,10 +38,11 @@ class MaximumFrameRateTest {
   }
 
   @Test
-  @DisplayName("Should report the lowest rate the times allow when no listed rate fits them")
-  void shouldReportTheLowestRateTheTimesAllowWhenNoListedRateFitsThem() {
+  @DisplayName("Should report the rate of the times themselves when no listed rate fits them")
+  void shouldReportTheRateOfTheTimesThemselvesWhenNoListedRateFitsThem() {
     // 120 fps in 1 ms ticks: intervals of 8, 8 and 9 ms. 23 intervals that span 191 ms prove the
-    // most: at least 23 frames in 192 ms, 119.8 fps. No listed rate lies between 119.8 and 121.1.
+    // most. No listed rate lies between 23 frames in 192 ms and 23 in 190 ms, so the maximum is 23
+    // frames in 191 ms, 120.4 fps.
     var times = new long[25];
     for (var frame = 1; frame < times.length; frame++) {
       times[frame] = times[frame - 1] + (frame % 3 == 0 ? 9 : 8);
@@ -49,7 +50,16 @@ class MaximumFrameRateTest {
 
     var measured = MaximumFrameRate.measured(times, 1_000);
 
-    assertThat(measured).contains(ExactFraction.of(23_000, 192));
+    assertThat(measured).contains(ExactFraction.of(23_000, 191));
+  }
+
+  @Test
+  @DisplayName("Should report 60 fps when one frame lasts a single tick of 1/60 s")
+  void shouldReport60FpsWhenOneFrameLastsASingleTickOf160S() {
+    // 30 fps with one frame of a single tick: that interval allows any rate from 30 fps up.
+    var measured = MaximumFrameRate.measured(new long[] {0, 2, 3, 5}, 60);
+
+    assertThat(measured).contains(ExactFraction.of(60, 1));
   }
 
   @Test

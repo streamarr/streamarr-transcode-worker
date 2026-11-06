@@ -52,7 +52,7 @@ final class DolbyVisionRpuReader {
   private static final Map<Long, Long> FIRST_GROUP_BLOCK_BYTES =
       Map.of(1L, 5L, 2L, 11L, 4L, 3L, 5L, 7L, 6L, 8L, 255L, 6L);
   private static final Map<Long, Long> SECOND_GROUP_BLOCK_BYTES =
-      Map.of(3L, 2L, 8L, 8L, 9L, 1L, 10L, 5L, 11L, 4L, 254L, 2L);
+      Map.of(3L, 5L, 8L, 10L, 9L, 1L, 10L, 5L, 11L, 4L, 254L, 2L);
 
   private DolbyVisionRpuReader() {}
 
