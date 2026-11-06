@@ -2149,6 +2149,52 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt as a startup failure, without starting its encode, when a held"
+          + " encode's keyframe scan exits with an error")
+  void shouldFailTheAttemptAsAStartupFailureWhenAHeldEncodesKeyframeScanExitsWithAnError()
+      throws Exception {
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (_, _) -> ScriptedProcess.builder().output(new byte[0]).exitCode(1).build());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId())))
+          .allMatch(TranscodeWorkerJobAttemptTest::isKeyframeScan);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse a held encode from a seek as an invalid specification, without a keyframe"
+          + " scan, when the job breaks the contract")
+  void shouldRefuseAHeldEncodeFromASeekWithoutAKeyframeScanWhenTheJobBreaksTheContract()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = heldJobReadingBackAfterTheLastKeyframe();
+    job.getExecutionBuilder().clearAdvertisedEnd();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should report the source bytes that the search has read, and no output end, while a held"
           + " encode searches for the video's last keyframe")
   void shouldReportTheSourceBytesThatTheSearchHasReadWhileAHeldEncodeSearches() throws Exception {
