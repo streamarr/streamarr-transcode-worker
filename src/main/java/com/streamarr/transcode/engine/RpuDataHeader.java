@@ -36,7 +36,6 @@ record RpuDataHeader(
   // rpu_format bits that, when set, leave the bit depths and layer flags out of the header.
   private static final int FORMAT_WITHOUT_BIT_DEPTHS = 0x700;
   private static final int FIXED_POINT_COEFFICIENTS = 0;
-  private static final int FLOATING_POINT_COEFFICIENT_BITS = 32;
   // The decoder reads a denominator of 13 to 32; 23 is the one every real RPU carries, and it sizes
   // every fixed-point coefficient fraction.
   private static final AcceptedRange COEFFICIENT_LOG2_DENOM =
@@ -108,10 +107,9 @@ record RpuDataHeader(
               + " where the conversion handles fixed-point coefficients only");
     }
 
-    header.coefficientDataType(coefficientDataType);
-    if (coefficientDataType == FIXED_POINT_COEFFICIENTS) {
-      header.coefficientLog2Denom(reader.unsignedExpGolomb(COEFFICIENT_LOG2_DENOM));
-    }
+    header
+        .coefficientDataType(coefficientDataType)
+        .coefficientLog2Denom(reader.unsignedExpGolomb(COEFFICIENT_LOG2_DENOM));
 
     header.vdrRpuNormalizedIdc((int) reader.bits(2)).baseLayerFullRange(reader.flag());
     if ((rpuFormat & FORMAT_WITHOUT_BIT_DEPTHS) != 0) {
@@ -143,9 +141,7 @@ record RpuDataHeader(
 
   private void writeSequenceInformation(RpuBitWriter writer) {
     writer.flag(chromaResamplingExplicitFilter).bits(coefficientDataType, 2);
-    if (coefficientDataType == FIXED_POINT_COEFFICIENTS) {
-      writer.unsignedExpGolomb(coefficientLog2Denom);
-    }
+    writer.unsignedExpGolomb(coefficientLog2Denom);
 
     writer.bits(vdrRpuNormalizedIdc, 2).flag(baseLayerFullRange);
     if (holdsBitDepths()) {
@@ -160,18 +156,9 @@ record RpuDataHeader(
     }
   }
 
-  /** The bits of each coefficient's fraction: the log2 denominator, or 32 in floating point. */
+  /** The bits of each coefficient's fraction: the log2 denominator. */
   int coefficientBits() {
-    if (coefficientDataType == FIXED_POINT_COEFFICIENTS) {
-      return (int) coefficientLog2Denom;
-    }
-
-    return FLOATING_POINT_COEFFICIENT_BITS;
-  }
-
-  /** Whether each coefficient has an integer part, coded as se(v) or ue(v), before its bits. */
-  boolean codesIntegerParts() {
-    return coefficientDataType == FIXED_POINT_COEFFICIENTS;
+    return (int) coefficientLog2Denom;
   }
 
   /** Whether the header names the layers' bit depths and the residual, which rpu_format decides. */

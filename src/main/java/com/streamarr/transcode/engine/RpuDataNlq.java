@@ -49,41 +49,23 @@ record RpuDataNlq(@NonNull List<Integer> predPivotValues, @NonNull List<Componen
     }
 
     private static Component parse(RpuBitReader reader, RpuDataHeader header) {
-      var component =
-          Component.builder().offset((int) reader.bits(header.enhancementLayerBitDepth()));
-      if (header.codesIntegerParts()) {
-        component.vdrInMaxIntegerPart(reader.unsignedExpGolomb());
-      }
-
-      component.vdrInMax(reader.bits(header.coefficientBits()));
-      if (header.codesIntegerParts()) {
-        component.deadzoneSlopeIntegerPart(reader.unsignedExpGolomb());
-      }
-
-      component.deadzoneSlope(reader.bits(header.coefficientBits()));
-      if (header.codesIntegerParts()) {
-        component.deadzoneThresholdIntegerPart(reader.unsignedExpGolomb());
-      }
-
-      return component.deadzoneThreshold(reader.bits(header.coefficientBits())).build();
+      return Component.builder()
+          .offset((int) reader.bits(header.enhancementLayerBitDepth()))
+          .vdrInMaxIntegerPart(reader.unsignedExpGolomb())
+          .vdrInMax(reader.bits(header.coefficientBits()))
+          .deadzoneSlopeIntegerPart(reader.unsignedExpGolomb())
+          .deadzoneSlope(reader.bits(header.coefficientBits()))
+          .deadzoneThresholdIntegerPart(reader.unsignedExpGolomb())
+          .deadzoneThreshold(reader.bits(header.coefficientBits()))
+          .build();
     }
 
     private void write(RpuBitWriter writer, RpuDataHeader header) {
       writer.bits(offset, header.enhancementLayerBitDepth());
-      if (header.codesIntegerParts()) {
-        writer.unsignedExpGolomb(vdrInMaxIntegerPart);
-      }
-
-      writer.bits(vdrInMax, header.coefficientBits());
-      if (header.codesIntegerParts()) {
-        writer.unsignedExpGolomb(deadzoneSlopeIntegerPart);
-      }
-
+      writer.unsignedExpGolomb(vdrInMaxIntegerPart).bits(vdrInMax, header.coefficientBits());
+      writer.unsignedExpGolomb(deadzoneSlopeIntegerPart);
       writer.bits(deadzoneSlope, header.coefficientBits());
-      if (header.codesIntegerParts()) {
-        writer.unsignedExpGolomb(deadzoneThresholdIntegerPart);
-      }
-
+      writer.unsignedExpGolomb(deadzoneThresholdIntegerPart);
       writer.bits(deadzoneThreshold, header.coefficientBits());
     }
   }
