@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.OptionalLong;
 
 /**
@@ -31,6 +32,8 @@ final class SyntheticRpus {
   private static final int RPU_TYPE = 2;
   private static final int RPU_FORMAT = 18;
   private static final int FINAL_BYTE = 0x80;
+  // An extension block level that the decoder skips without reading a byte of the block.
+  private static final int UNREAD_BLOCK_LEVEL = 200;
 
   // dovi_tool 2.3.4, `editor` with {"mode": 2}, on profile7(): 323 bytes in, 159 out.
   private static final String CONVERTED_PROFILE_7 =
@@ -110,8 +113,27 @@ final class SyntheticRpus {
     private byte[] bytesBeforeCrc32 = new byte[0];
     private long coefficientLog2Denom = COEFFICIENT_LOG2_DENOM;
     private int fractionBits = COEFFICIENT_LOG2_DENOM;
+    private OptionalInt emptyBlocks = OptionalInt.empty();
+    private long lumaMappingIdc = 0;
 
     private Builder() {}
+
+    /**
+     * A CM v2.9 block list of this many blocks of no bytes under a level the decoder does not read,
+     * in place of the usual four blocks.
+     */
+    Builder emptyBlocks(int count) {
+      emptyBlocks = OptionalInt.of(count);
+      return this;
+    }
+
+    /**
+     * The mapping_idc ahead of every luma piece's polynomial fields; the syntax defines 0 and 1.
+     */
+    Builder lumaMappingIdc(long value) {
+      lumaMappingIdc = value;
+      return this;
+    }
 
     /** A header that declares the denominator; the fraction fields keep their own width. */
     Builder coefficientLog2Denom(long value) {
@@ -269,7 +291,7 @@ final class SyntheticRpus {
 
       sink.ue(2).ue(1);
       for (var piece = 0; piece < lumaPieces; piece++) {
-        writeIdentityPolynomial(sink);
+        writeIdentityPolynomial(sink, lumaMappingIdc);
       }
 
       for (var component = 1; component < 3; component++) {
@@ -295,7 +317,11 @@ final class SyntheticRpus {
 
     // mapping_idc 0, first order, no linear interpolation, 0 + 1 * x.
     private void writeIdentityPolynomial(BitSink sink) {
-      sink.ue(0).ue(0).bit(0);
+      writeIdentityPolynomial(sink, 0);
+    }
+
+    private void writeIdentityPolynomial(BitSink sink, long mappingIdc) {
+      sink.ue(mappingIdc).ue(0).bit(0);
       sink.se(0).u(0, fractionBits);
       sink.se(1).u(0, fractionBits);
     }
@@ -324,6 +350,24 @@ final class SyntheticRpus {
         writeSignalDescription(sink);
       }
 
+      writeCmv29Blocks(sink);
+      if (cmv40) {
+        sink.ue(2).align();
+        sink.ue(2).u(254, 8).u(0, 8).u(2, 8);
+        sink.ue(4).u(11, 8).u(1, 8).u(0x08, 8).u(0, 8).u(0, 8);
+      }
+    }
+
+    private void writeCmv29Blocks(BitSink sink) {
+      if (emptyBlocks.isPresent()) {
+        sink.ue(emptyBlocks.getAsInt()).align();
+        for (var block = 0; block < emptyBlocks.getAsInt(); block++) {
+          sink.ue(0).u(UNREAD_BLOCK_LEVEL, 8);
+        }
+
+        return;
+      }
+
       // CM v2.9: L1, L2, L5 and L6 blocks.
       sink.ue(4).align();
       sink.ue(firstBlockClaimedBytes.orElse(5)).u(1, 8).u(7, 12).u(3079, 12).u(1500, 12).u(0, 4);
@@ -331,11 +375,6 @@ final class SyntheticRpus {
       sink.u(2048, 13).u(0, 3);
       sink.ue(7).u(5, 8).u(0, 13).u(0, 13).u(60, 13).u(60, 13).u(0, 4);
       sink.ue(8).u(6, 8).u(1000, 16).u(1, 16).u(1000, 16).u(400, 16);
-      if (cmv40) {
-        sink.ue(2).align();
-        sink.ue(2).u(254, 8).u(0, 8).u(2, 8);
-        sink.ue(4).u(11, 8).u(1, 8).u(0x08, 8).u(0, 8).u(0, 8);
-      }
     }
 
     // The 3 x 3 colour matrices and offsets, then the signal's EOTF and ranges.

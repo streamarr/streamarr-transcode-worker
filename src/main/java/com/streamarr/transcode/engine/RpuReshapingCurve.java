@@ -14,8 +14,8 @@ import lombok.NonNull;
 record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pieces) {
 
   private static final int MAXIMUM_PIECES = 8;
-  private static final int POLYNOMIAL = 0;
-  private static final int MMR = 1;
+  private static final long POLYNOMIAL = 0;
+  private static final long MMR = 1;
   private static final int MMR_COEFFICIENTS_PER_ORDER = 7;
 
   RpuReshapingCurve {
@@ -192,13 +192,19 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
     return new RpuReshapingCurve(pivots, pieces);
   }
 
+  // The mapping_idc is compared as the ue(v) the reader returned, never narrowed first: a 32-bit
+  // view of 2^32 would read as the polynomial's 0.
   private static Piece parsePiece(RpuBitReader reader, RpuDataHeader header) {
     var mappingIdc = reader.unsignedExpGolomb();
-    return switch ((int) mappingIdc) {
-      case POLYNOMIAL -> Polynomial.parse(reader, header);
-      case MMR -> Mmr.parse(reader, header);
-      default -> throw new DolbyVisionRpuException("mapping_idc " + mappingIdc);
-    };
+    if (mappingIdc == POLYNOMIAL) {
+      return Polynomial.parse(reader, header);
+    }
+
+    if (mappingIdc == MMR) {
+      return Mmr.parse(reader, header);
+    }
+
+    throw new DolbyVisionRpuException("mapping_idc " + mappingIdc);
   }
 
   void writePivots(RpuBitWriter writer, RpuDataHeader header) {
