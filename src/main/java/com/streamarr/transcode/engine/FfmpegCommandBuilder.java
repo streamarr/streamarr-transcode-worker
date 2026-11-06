@@ -85,6 +85,7 @@ public class FfmpegCommandBuilder {
   private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
   private static final String FLUSH_PACKETS = "-flush_packets";
+  private static final String COPY_PRIOR_SEEK_START = "-copypriorss";
 
   // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
   // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
@@ -314,14 +315,14 @@ public class FfmpegCommandBuilder {
   private static void addSourceAudioStreams(List<String> cmd, AudioDecision audio, int source) {
     if (audio.mode() != AudioMode.TRANSCODE) {
       addAudioStreamSelection(cmd, audio, source);
-      cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
+      cmd.addAll(List.of("-c", "copy", COPY_PRIOR_SEEK_START, "1"));
       return;
     }
 
     var audioMap = audioMap(audio, source);
     cmd.addAll(List.of("-map", audioMap, "-map", audioMap));
     addNamedAudioStreamExclusions(cmd, audio, source);
-    cmd.addAll(List.of("-c", "copy", "-copypriorss", "1", "-c:a:1", "pcm_f32le"));
+    cmd.addAll(List.of("-c", "copy", COPY_PRIOR_SEEK_START, "1", "-c:a:1", "pcm_f32le"));
   }
 
   /**
@@ -337,7 +338,7 @@ public class FfmpegCommandBuilder {
     cmd.addAll(KEYFRAME_SCAN_OPTIONS);
     cmd.addAll(List.of("-ss", seekArgument(seekPosition), "-i", source.toString()));
     addChosenSourceStreams(cmd, decision, 0);
-    cmd.addAll(List.of("-c", "copy", "-copyinkf", "-copypriorss", "1", "-frames:v", "1"));
+    cmd.addAll(List.of("-c", "copy", "-copyinkf", COPY_PRIOR_SEEK_START, "1", "-frames:v", "1"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
     return List.copyOf(cmd);
