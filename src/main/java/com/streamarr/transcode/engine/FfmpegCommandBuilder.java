@@ -547,17 +547,16 @@ public class FfmpegCommandBuilder {
   // A Matroska demuxer that discards the video after a seek drops every audio block until one
   // passes the seek's cue, laced frames that reach past the first segment's start among them. The
   // held encode's audio input keeps its video in use, as the one input did, through a copy to
-  // FFmpeg's null muxer, which writes nothing.
+  // FFmpeg's null muxer, which writes nothing and, like every output, no metadata of the source.
   private static void addAudioInputsVideoInUse(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(
         List.of(
             "-map",
             HELD_AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(),
             "-c",
-            "copy",
-            "-f",
-            "null",
-            "-"));
+            "copy"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(List.of("-f", "null", "-"));
   }
 
   private static Optional<String> takeOptionValue(List<String> cmd, String option) {

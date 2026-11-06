@@ -3712,7 +3712,18 @@ class FfmpegCommandBuilderTest {
             heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
 
     assertThat(cmd.subList(cmd.indexOf("pipe:2") + 1, cmd.size()))
-        .containsExactly("-map", "1:0", "-c", "copy", "-f", "null", "-");
+        .containsExactly(
+            "-map",
+            "1:0",
+            "-c",
+            "copy",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "null",
+            "-");
   }
 
   // The worker reads a named stream's facts only for a job that names its output layout. Without

@@ -6214,6 +6214,28 @@ class WorkerMediaSmokeTest {
                 .build());
   }
 
+  // A held encode reads its audio from a second input, whose copy of the video to FFmpeg's null
+  // muxer is one more output whose metadata FFmpeg would write among the framecrc.
+  @Test
+  @DisplayName(
+      "Should report each stream's end and no early end when an encode holds the last frame and"
+          + " the source's metadata carries text shaped like the framecrc of its streams")
+  void shouldReportEachStreamsEndWhenAHeldEncodesSourceMetadataCarriesFramecrcShapedText()
+      throws Exception {
+    var source = videoEndsBeforeAudioSourceWithFramecrcShapedMetadata();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getExecutionBuilder().setStartSequenceNumber(11);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().hasSourceEndedEarly()).isFalse();
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+  }
+
   // The source's last frame starts at 5.983 s, inside segment 0, but FFmpeg's conversion to 24 fps
   // can place the output's last frame at 6 s, inside segment 1.
   @Test
