@@ -127,6 +127,9 @@ class FfprobeExecutorRpuFactsTest {
             "an RPU cut inside its level 6 block",
             endingAfter(level6, level6.payload().length - 8)),
         Named.of(
+            "a partition count of 2^32, whose 32 leading zeros FFmpeg reads as 31",
+            level6.toBuilder().xPartitionsMinus1(0xFFFF_FFFFL).build().hevcNalUnit()),
+        Named.of(
             "an RPU that reuses an earlier RPU's mapping, whose presence the walk does not track",
             level6.toBuilder().usePreviousMapping(true).build().hevcNalUnit()),
         Named.of(

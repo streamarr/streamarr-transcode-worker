@@ -215,8 +215,8 @@ final class DolbyVisionRpuReader {
     }
 
     // FFmpeg reads the partition counts and then one set of curves, whatever the counts say.
-    reader.unsignedExpGolomb();
-    reader.unsignedExpGolomb();
+    reader.unsignedExpGolombLong();
+    reader.unsignedExpGolombLong();
 
     for (var component = 0; component < COMPONENTS; component++) {
       for (var piece = 0; piece < pivots[component] - 1; piece++) {
@@ -311,7 +311,7 @@ final class DolbyVisionRpuReader {
       return new Coefficient(0, reader.bits(FLOAT_BITS));
     }
 
-    var integer = reader.unsignedExpGolomb();
+    var integer = reader.unsignedExpGolombLong();
     return new Coefficient(integer, reader.bits(header.coefficientLog2Denominator()));
   }
 
@@ -321,7 +321,7 @@ final class DolbyVisionRpuReader {
       return;
     }
 
-    reader.unsignedExpGolomb();
+    reader.unsignedExpGolombLong();
     reader.bits(header.coefficientLog2Denominator());
   }
 
@@ -487,7 +487,7 @@ final class DolbyVisionRpuReader {
       }
 
       var baseLayerBitDepthMinus8 = reader.unsignedExpGolomb31();
-      var enhancementLayerField = reader.unsignedExpGolomb();
+      var enhancementLayerField = reader.unsignedExpGolombLong();
       var enhancementLayerBitDepthMinus8 = enhancementLayerField & EL_BIT_DEPTH_BITS;
       var vdrBitDepthMinus8 = reader.unsignedExpGolomb31();
       if ((enhancementLayerField >> 8) > LARGEST_EXT_MAPPING_IDC

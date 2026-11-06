@@ -5,6 +5,8 @@ final class BitReader {
 
   private static final int UVLC_LONGEST_VALUE = 32;
   private static final int TABLE_BITS = 9;
+  private static final int LONGEST_LONG_PREFIX = 31;
+  private static final long UNSIGNED_32_BITS = 0xFFFF_FFFFL;
   private static final int LONGEST_TABLE_CODE_BITS = 19;
 
   private final byte[] bytes;
@@ -65,6 +67,20 @@ final class BitReader {
 
   boolean flag() {
     return bits(1) == 1;
+  }
+
+  /**
+   * FFmpeg's get_ue_golomb_long(): ue(v) with at most 31 leading zeros. After 31 zeros it reads the
+   * next 32 bits, whatever they hold, as the code, and wraps the value minus one to 32 bits.
+   */
+  long unsignedExpGolombLong() {
+    for (var zeros = 0; zeros < LONGEST_LONG_PREFIX; zeros++) {
+      if (flag()) {
+        return ((1L << zeros) | bits(zeros)) - 1;
+      }
+    }
+
+    return (bits(Integer.SIZE) - 1) & UNSIGNED_32_BITS;
   }
 
   /**

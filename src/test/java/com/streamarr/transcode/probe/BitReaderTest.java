@@ -38,6 +38,24 @@ class BitReaderTest {
     assertThat(reader.flag()).as("the bit after %d consumed bits", consumedBits).isTrue();
   }
 
+  @ParameterizedTest(name = "{0} leading zeros read as {1} over {2} bits")
+  @CsvSource({
+    "0, 0, 1",
+    "3, 7, 7",
+    "31, 2147483647, 63",
+    "32, 1073741823, 63",
+    "63, 4294967295, 63"
+  })
+  @DisplayName(
+      "Should read a code as FFmpeg's get_ue_golomb_long does, which reads at most 31 leading zeros")
+  void shouldReadACodeAsFfmpegsGetUeGolombLongDoes(int zeros, long value, int consumedBits) {
+    var code = "0".repeat(zeros) + (zeros < 63 ? "1" : "") + "0".repeat(Math.min(zeros, 31));
+    var reader = new BitReader(bytesOf(code.substring(0, consumedBits) + "1" + "0".repeat(40)));
+
+    assertThat(reader.unsignedExpGolombLong()).isEqualTo(value);
+    assertThat(reader.flag()).as("the bit after %d consumed bits", consumedBits).isTrue();
+  }
+
   private static byte[] bytesOf(String bits) {
     var padded = bits + "0".repeat((8 - bits.length() % 8) % 8);
     var bytes = new BigInteger("1" + padded, 2).toByteArray();
