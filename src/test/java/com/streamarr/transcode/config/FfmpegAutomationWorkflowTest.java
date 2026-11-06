@@ -1130,7 +1130,10 @@ class FfmpegAutomationWorkflowTest {
     assertThat(smokeSteps.indexOf(installation)).isLessThan(smokeSteps.indexOf(smoke));
     assertThat(smoke.get("run").toString())
         .contains(
-            "-Dtest=WorkerMediaSmokeTest", "DownmixLimiterSmokeTest", "-Dsurefire.excludedGroups=");
+            "-Dtest=WorkerMediaSmokeTest",
+            "DownmixLimiterSmokeTest",
+            "HdrEncodeSmokeTest",
+            "-Dsurefire.excludedGroups=");
     var image = map(jobs.get("image"));
     var targets = listOfMaps(map(map(image.get("strategy")).get("matrix")).get("include"));
     assertThat(targets.stream().map(target -> target.get("architecture")))
