@@ -16,7 +16,7 @@ import lombok.NonNull;
 /**
  * The job attempts that a worker session holds back because they run far ahead of their viewers
  * (ADR 0044, hold-back). Each hold-back replaces the previous one's attempts, and each held attempt
- * resumes at its release time unless a later hold-back that lists it sets a new one.
+ * resumes at its release time, or at an earlier one that a later hold-back listing it sets.
  */
 final class HoldBacks implements AutoCloseable {
 
@@ -58,15 +58,13 @@ final class HoldBacks implements AutoCloseable {
     return releaseAfter != null && releaseAfter.isPositive();
   }
 
-  // Guarded by this monitor. Listing a held attempt again only moves its release.
+  // Guarded by this monitor. Listing a held attempt again only moves its release earlier: a
+  // command that arrives late must not extend a hold while the viewer's lead runs down.
   private void hold(
-      UUID attemptId,
-      Duration releaseAfter,
-      Function<UUID, Optional<Producer>> runningProducers) {
+      UUID attemptId, Duration releaseAfter, Function<UUID, Optional<Producer>> runningProducers) {
     var current = held.get(attemptId);
     if (current != null) {
-      current.release().cancel(false);
-      schedule(attemptId, current.producer(), releaseAfter);
+      moveReleaseEarlier(attemptId, current, releaseAfter);
       return;
     }
 
@@ -74,6 +72,16 @@ final class HoldBacks implements AutoCloseable {
         .apply(attemptId)
         .filter(Producer::holdBackFfmpeg)
         .ifPresent(producer -> schedule(attemptId, producer, releaseAfter));
+  }
+
+  // Guarded by this monitor.
+  private void moveReleaseEarlier(UUID attemptId, HeldAttempt current, Duration releaseAfter) {
+    if (releaseAfter.toNanos() >= current.release().getDelay(TimeUnit.NANOSECONDS)) {
+      return;
+    }
+
+    current.release().cancel(false);
+    schedule(attemptId, current.producer(), releaseAfter);
   }
 
   // Guarded by this monitor.

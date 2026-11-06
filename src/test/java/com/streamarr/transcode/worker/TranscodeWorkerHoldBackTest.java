@@ -112,6 +112,24 @@ class TranscodeWorkerHoldBackTest {
 
   @Test
   @DisplayName(
+      "Should keep a held job attempt's earlier release when a later hold-back lists it with a later"
+          + " one, so that a late command never extends a hold")
+  void shouldKeepAHeldJobAttemptsEarlierReleaseWhenALaterHoldBackListsItWithALaterOne()
+      throws Exception {
+    try (var worker = worker()) {
+      var connection = startThreeAttempts(worker);
+      holdBack(connection, Map.of(ahead, Duration.ofSeconds(3)));
+      promptly().until(() -> heldAttempts().equals(List.of(ahead)));
+
+      holdBack(connection, Map.of(ahead, LONG_HOLD));
+
+      promptly().until(() -> heldAttempts().isEmpty());
+      exitAll();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should hold a job attempt back again right after its release, with none of a seek's rest")
   void shouldHoldAJobAttemptBackAgainRightAfterItsReleaseWithNoneOfASeeksRest() throws Exception {
     try (var worker = worker()) {
