@@ -542,12 +542,19 @@ final class DolbyVisionRpuReader {
         return OptionalInt.empty();
       }
 
-      var denominator = reader.unsignedExpGolomb();
-      if (denominator < SMALLEST_LOG2_DENOMINATOR || denominator > LARGEST_LOG2_DENOMINATOR) {
+      // FFmpeg's get_ue_golomb() refuses a code of more than 12 leading zeros, and FFmpeg keeps
+      // the value in 8 bits before it validates it.
+      var denominator = reader.unsignedExpGolombUpTo12LeadingZeros();
+      if (denominator.isEmpty()) {
         return OptionalInt.empty();
       }
 
-      return OptionalInt.of((int) denominator);
+      var narrowed = (int) (denominator.getAsLong() & 0xFF);
+      if (narrowed < SMALLEST_LOG2_DENOMINATOR || narrowed > LARGEST_LOG2_DENOMINATOR) {
+        return OptionalInt.empty();
+      }
+
+      return OptionalInt.of(narrowed);
     }
   }
 }

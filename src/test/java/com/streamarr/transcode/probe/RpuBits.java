@@ -112,7 +112,8 @@ record RpuBits(
       return;
     }
 
-    bits.unsignedExpGolomb(integer).put((int) header.coefficientLog2Denom(), fraction);
+    // FFmpeg keeps coefficient_log2_denom in 8 bits.
+    bits.unsignedExpGolomb(integer).put((int) (header.coefficientLog2Denom() & 0xFF), fraction);
   }
 
   private void writeDisplayManagement(Bits bits) {

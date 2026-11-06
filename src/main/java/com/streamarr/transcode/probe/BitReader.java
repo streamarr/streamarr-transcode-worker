@@ -1,10 +1,13 @@
 package com.streamarr.transcode.probe;
 
+import java.util.OptionalLong;
+
 /** Reads a byte array's bits, most significant first, as the H.26x and AV1 syntax tables do. */
 final class BitReader {
 
   private static final int UVLC_LONGEST_VALUE = 32;
   private static final int TABLE_BITS = 9;
+  private static final int LONGEST_GET_UE_GOLOMB_PREFIX = 12;
   private static final int LONGEST_LONG_PREFIX = 31;
   private static final long UNSIGNED_32_BITS = 0xFFFF_FFFFL;
   private static final int LONGEST_TABLE_CODE_BITS = 19;
@@ -67,6 +70,22 @@ final class BitReader {
 
   boolean flag() {
     return bits(1) == 1;
+  }
+
+  /**
+   * FFmpeg's get_ue_golomb(): ue(v), empty for a code of more than 12 leading zeros, which FFmpeg
+   * refuses after reading past it.
+   */
+  OptionalLong unsignedExpGolombUpTo12LeadingZeros() {
+    var leadingZeros = 0;
+    while (!flag()) {
+      leadingZeros++;
+      if (leadingZeros > LONGEST_GET_UE_GOLOMB_PREFIX) {
+        return OptionalLong.empty();
+      }
+    }
+
+    return OptionalLong.of((1L << leadingZeros) - 1 + bits(leadingZeros));
   }
 
   /**
