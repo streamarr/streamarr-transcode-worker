@@ -18,10 +18,12 @@ import java.util.Set;
  * RPUs, and type 63, which holds a single-track profile 7 enhancement layer, whatever their layer
  * and temporal id. Converting profile 7 removes the same NAL units and writes the sample's one RPU,
  * converted to profile 8.1, as the sample's last NAL unit (ADR 0036); a sample without exactly one
- * RPU that converts fails the attempt as a conversion failure. Stripping HDR10+ removes each HDR10+
- * message from the SEI NAL units and keeps their other messages; a NAL unit left with no message
- * goes. Every other NAL unit keeps its bytes, and so does an SEI NAL unit that holds no HDR10+
- * message. Bytes after the last NAL unit too few to hold a length stay where they are.
+ * RPU that converts fails the attempt as a conversion failure, and so does an RPU that reuses a
+ * previous RPU's mapping that no RPU since the last random access point defined, as the decoder
+ * resolves such a reuse from the mappings it holds. Stripping HDR10+ removes each HDR10+ message
+ * from the SEI NAL units and keeps their other messages; a NAL unit left with no message goes.
+ * Every other NAL unit keeps its bytes, and so does an SEI NAL unit that holds no HDR10+ message.
+ * Bytes after the last NAL unit too few to hold a length stay where they are.
  */
 final class NalUnitSampleRewrite implements SampleRewrite {
 
@@ -42,6 +44,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   private final boolean stripsDolbyVision;
   private final boolean stripsHdr10Plus;
   private final boolean convertsProfile7;
+  private final DefinedRpuMappings definedMappings = new DefinedRpuMappings();
 
   /**
    * @param lengthSize the bytes of each NAL unit's length: 1, 2 or 4
@@ -72,6 +75,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     private ByteBuffer kept;
     private final List<ByteBuffer> rpus = new ArrayList<>(1);
     private boolean changed;
+    private boolean randomAccessPoint;
     private int position;
 
     private Walk(ByteBuffer sample) {
@@ -90,7 +94,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
 
       var trailing = sample.slice(position, sample.limit() - position);
       if (convertsProfile7) {
-        return joinedWith(convertedRpuOf(rpus), trailing);
+        return joinedWith(convertedRpuOf(rpus, randomAccessPoint), trailing);
       }
 
       if (!changed) {
@@ -124,6 +128,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
       }
 
       var type = syntax.typeOf(sample.get(start));
+      randomAccessPoint |= syntax.isRandomAccessPoint(type);
       if ((stripsDolbyVision || convertsProfile7) && syntax.isDolbyVision(type)) {
         dropDolbyVision(start, length, type);
         return;
@@ -211,7 +216,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     }
   }
 
-  private ByteBuffer convertedRpuOf(List<ByteBuffer> rpus) {
+  private ByteBuffer convertedRpuOf(List<ByteBuffer> rpus, boolean randomAccessPoint) {
     if (rpus.isEmpty()) {
       throw conversionFailed("a video sample holds no RPU where the conversion needs one");
     }
@@ -225,8 +230,8 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     }
 
     var headerBytes = syntax.headerBytes();
-    return withHeaderOf(
-        rpu, convertedToProfile81(rpu.slice(headerBytes, rpu.remaining() - headerBytes)));
+    var payload = rpu.slice(headerBytes, rpu.remaining() - headerBytes);
+    return withHeaderOf(rpu, convertedToProfile81(payload, randomAccessPoint));
   }
 
   // The pinned decoder reads an RPU only from a NAL unit of type 62 with forbidden_zero_bit 0,
@@ -236,9 +241,15 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     return rpu.get(0) == BASE_LAYER_RPU_HEADER[0] && rpu.get(1) == BASE_LAYER_RPU_HEADER[1];
   }
 
-  private static byte[] convertedToProfile81(ByteBuffer escapedPayload) {
+  private byte[] convertedToProfile81(ByteBuffer escapedPayload, boolean randomAccessPoint) {
+    if (randomAccessPoint) {
+      definedMappings.startAtRandomAccessPoint();
+    }
+
     try {
-      return DolbyVisionRpu.parse(escapedPayload).convertedToProfile81().write();
+      var rpu = DolbyVisionRpu.parse(escapedPayload);
+      definedMappings.resolve(rpu);
+      return rpu.convertedToProfile81().write();
     } catch (DolbyVisionRpuException exception) {
       throw conversionFailed(exception.getMessage());
     }

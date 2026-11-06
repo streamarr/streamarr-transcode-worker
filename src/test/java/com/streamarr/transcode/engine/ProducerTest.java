@@ -2908,11 +2908,16 @@ class ProducerTest {
           + " FFmpeg wrote it")
   void shouldReleaseEveryReservedByteWhenTheConversionMakesAFragmentLonger() {
     var workerBudget = SegmentMemoryBudget.forSlots(1);
-    var rpu = SyntheticRpus.profile7().previousRpu(0).nalUnit();
+    // A profile 8 RPU, whose curves the conversion keeps, grows by the emulation prevention bytes
+    // that the profile 8.1 colour matrices take.
+    var source = SyntheticRpus.profile7().withoutResidual();
+    var converted =
+        DolbyVisionRpu.parse(ByteBuffer.wrap(source.escaped())).convertedToProfile81().write();
+    assertThat(converted).hasSizeGreaterThan(source.escaped().length);
     var fragment =
         HevcCopies.fragmentBuilder()
             .startsWithKeyframe(true)
-            .video(0, HevcCopies.sample(HevcCopies.aud(), HevcCopies.slice(0), rpu))
+            .video(0, HevcCopies.sample(HevcCopies.aud(), HevcCopies.slice(0), source.nalUnit()))
             .build();
     var output =
         IsoBoxes.concat(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)), fragment);
@@ -2933,7 +2938,7 @@ class ProducerTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
     assertThat(HexFormat.of().formatHex(sink.contentOf("segment0.m4s")))
         .as("the delivered media segment")
-        .contains(HexFormat.of().formatHex(SyntheticRpus.convertedPreviousRpu()));
+        .contains(HexFormat.of().formatHex(converted));
     assertReleasesEveryReservedByte(workerBudget);
   }
 

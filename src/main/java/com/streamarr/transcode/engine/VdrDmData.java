@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import lombok.Builder;
 import lombok.NonNull;
 
@@ -27,9 +28,16 @@ record VdrDmData(
   // level 254 block of two bytes, the CRC32 and the final byte.
   private static final int FEWEST_BITS_WITH_CMV40_BLOCKS = 56;
   // The pinned decoder reads each list's count as an Exp-Golomb code of at most 31 and keeps at
-  // most 32 blocks, so a longer list never plays; the bound also keeps a list of empty blocks, nine
-  // bits each, from allocating a block per nine bits of input.
+  // most 32 blocks in all, so a longer list never plays; the bound also keeps a list of empty
+  // blocks, nine bits each, from allocating a block per nine bits of input.
   private static final long MOST_BLOCKS_IN_A_LIST = 31;
+  // The decoder keeps an RPU's blocks of both lists in 7 slots for the static levels and 25 for the
+  // dynamic ones and rejects the RPU that overfills either; the static blocks of compressed
+  // metadata
+  // it parses without keeping.
+  private static final Set<Integer> STATIC_LEVELS = Set.of(6, 10, 32, 254, 255);
+  private static final int MOST_STATIC_BLOCKS = 7;
+  private static final int MOST_DYNAMIC_BLOCKS = 25;
   private static final int MATRIX_COEFFICIENTS = 9;
   private static final int OFFSETS = 3;
   private static final AcceptedRange AFFECTED_DM_METADATA_ID =
@@ -62,6 +70,11 @@ record VdrDmData(
     @Override
     public String toString() {
       return "ExtensionBlock[level=" + level + ", " + bytes.length + " bytes]";
+    }
+
+    /** Whether the decoder keeps the block among the static ones: levels 6, 10, 32, 254 and 255. */
+    boolean isStatic() {
+      return STATIC_LEVELS.contains(level);
     }
   }
 
@@ -186,7 +199,30 @@ record VdrDmData(
       cmv40Blocks = Optional.of(parseBlocks(reader));
     }
 
-    return dmData.cmv40Blocks(cmv40Blocks).build();
+    var parsed = dmData.cmv40Blocks(cmv40Blocks).build();
+    parsed.requireWithinTheDecodersSlots(header);
+    return parsed;
+  }
+
+  private void requireWithinTheDecodersSlots(RpuDataHeader header) {
+    var blocks = new ArrayList<>(cmv29Blocks);
+    cmv40Blocks.ifPresent(blocks::addAll);
+    var staticBlocks = blocks.stream().filter(ExtensionBlock::isStatic).count();
+    if (!header.compressesDmMetadata() && staticBlocks > MOST_STATIC_BLOCKS) {
+      throw new DolbyVisionRpuException(
+          staticBlocks
+              + " static extension blocks, of levels 6, 10, 32, 254 or 255, where the decoder keeps"
+              + " at most "
+              + MOST_STATIC_BLOCKS);
+    }
+
+    var dynamicBlocks = blocks.size() - staticBlocks;
+    if (dynamicBlocks > MOST_DYNAMIC_BLOCKS) {
+      throw new DolbyVisionRpuException(
+          dynamicBlocks
+              + " dynamic extension blocks where the decoder keeps at most "
+              + MOST_DYNAMIC_BLOCKS);
+    }
   }
 
   private static List<ExtensionBlock> parseBlocks(RpuBitReader reader) {
