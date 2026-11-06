@@ -710,7 +710,10 @@ class FfmpegCommandBuilderTest {
   // A held encode that encodes its audio filters the source's video from its first input, and the
   // audio from its second in a filter graph of its own whose output the video's graph takes in.
   private static final Pattern HELD_AUDIO_CHANNELS =
-      Pattern.compile(",aformat=channel_layouts=[^,\\[]+\\[filtered_held_audio]$");
+      Pattern.compile(",aformat=[^,\\[]+\\[filtered_held_audio]$");
+  // The sample rates FFmpeg's AAC encoder lists.
+  private static final String AAC_SAMPLE_RATES =
+      "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350";
   private static final String HELD_VIDEO_GRAPH_OUTPUTS =
       "[held_video];[filtered_held_audio]anull[held_audio]";
 
@@ -3685,8 +3688,8 @@ class FfmpegCommandBuilderTest {
 
   // An attempt from the start that neither pads nor names its layout filters no audio; the graphs
   // still carry it, so that the audio paces the held pictures. The first graph's output keeps the
-  // format of its first frames, so it takes the channel count of -ac: a source that turns from
-  // mono to stereo must not stay mono.
+  // format of its first frames, so it takes the encoder's input: a source that turns from mono to
+  // stereo must not stay mono.
   @Test
   @DisplayName(
       "Should keep the output's channel count as the audio enters the held video's graph when an"
@@ -3704,19 +3707,33 @@ class FfmpegCommandBuilderTest {
             "libx264");
 
     assertThat(heldAudioGraph(cmd))
-        .isEqualTo("[1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]");
+        .isEqualTo(
+            "[1:a:0]anull,aformat=sample_fmts=fltp:sample_rates="
+                + AAC_SAMPLE_RATES
+                + ":channel_layouts=stereo[filtered_held_audio]");
   }
 
-  // FFmpeg gives -ac's count the first layout of that count that the encoder lists: AC-3 and
-  // E-AC-3 list quad(side) and 5.1(side) first, ALAC 7.1(wide). An encoder that lists none, as
-  // AAC, takes the count's default layout.
+  // The audio's graph ends in the encoder's input as FFmpeg negotiates it: the sample formats and
+  // rates the encoder lists, and the layout FFmpeg gives the channel count where the encoder's
+  // table names one. AC-3 lists quad(side) as its first four-channel layout, which FFmpeg chooses
+  // for itself; ALAC is not in the table, so FFmpeg converts its audio before the encoder.
   @ParameterizedTest(name = "{1} channels of {0}")
-  @CsvSource({"aac, 6, 6c", "ac3, 4, quad(side)", "eac3, 6, 5.1(side)", "alac, 8, 7.1(wide)"})
+  @CsvSource(
+      delimiter = ';',
+      value = {
+        "aac; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=AAC_RATES:channel_layouts=5.1"
+            + "[filtered_held_audio]",
+        "ac3; 4; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
+            + "[filtered_held_audio]",
+        "eac3; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
+            + ":channel_layouts=5.1(side)[filtered_held_audio]",
+        "alac; 8; [1:a:0]anull[filtered_held_audio]"
+      })
   @DisplayName(
-      "Should give the audio the layout that the encoder takes for -ac's count as it enters the"
-          + " held video's graph when an encode holds the last frame and names no layout")
-  void shouldGiveTheAudioTheEncodersLayoutForTheChannelCountWhenAnEncodeHoldsAndNamesNoLayout(
-      String codec, int channels, String layout) {
+      "Should end the audio's graph in the encoder's input when an encode holds the last frame and"
+          + " names no layout")
+  void shouldEndTheAudiosGraphInTheEncodersInputWhenAnEncodeHoldsAndNamesNoLayout(
+      String codec, int channels, String graph) {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
             .videoDecision(
@@ -3729,8 +3746,7 @@ class FfmpegCommandBuilderTest {
             request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
             "libx264");
 
-    assertThat(heldAudioGraph(cmd))
-        .isEqualTo("[1:a:0]anull,aformat=channel_layouts=" + layout + "[filtered_held_audio]");
+    assertThat(heldAudioGraph(cmd)).isEqualTo(graph.replace("AAC_RATES", AAC_SAMPLE_RATES));
   }
 
   // A Matroska demuxer that discards the video after a seek drops every audio block until one

@@ -696,7 +696,9 @@ class TranscodeWorkerJobAttemptTest {
           .endsWith(
               "apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
                   + ",asetpts='PTS-round((0+floor(6*SR/(1024))*(1024))/SR/TB)',atrim=end=85.5"
-                  + ",aformat=channel_layouts=2c[filtered_held_audio]");
+                  + ",aformat=sample_fmts=fltp:sample_rates="
+                  + "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350"
+                  + ":channel_layouts=stereo[filtered_held_audio]");
     }
   }
 

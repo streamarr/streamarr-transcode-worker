@@ -22,7 +22,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 class FfmpegCommandBuilderAudioLayoutTest {
 
   private static final Pattern HELD_AUDIO_CHANNELS =
-      Pattern.compile(",aformat=channel_layouts=[^,\\[]+\\[filtered_held_audio]$");
+      Pattern.compile(",aformat=[^,\\[]+\\[filtered_held_audio]$");
 
   private static final String TUNED_RESAMPLER =
       "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14";

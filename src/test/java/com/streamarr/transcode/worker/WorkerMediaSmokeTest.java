@@ -6267,6 +6267,42 @@ class WorkerMediaSmokeTest {
         .isGreaterThan(1_000);
   }
 
+  // An encode that holds the last frame reads its audio from a second input; its audio must not
+  // change for that. FFmpeg downmixes integer samples with a gain that keeps them from clipping and
+  // floating-point samples without one, so the format the encoder takes must reach the downmix.
+  @Test
+  @DisplayName(
+      "Should encode the same audio as an encode that holds no frame when an encode holds the last"
+          + " frame and downmixes 16-bit 5.1 FLAC at 96 kHz to stereo AC-3")
+  void shouldEncodeTheSameAudioAsAnEncodeThatHoldsNoFrameWhenAHeldEncodeDownmixesIntegerSurround()
+      throws Exception {
+    var source = integerSurroundFlacSource();
+    var held = integerSurroundJob(source);
+    held.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+
+    var heldUploads = execute(engine(softwareCapabilities()), source.getParent(), held.build());
+    var uploads =
+        execute(
+            engine(softwareCapabilities()), source.getParent(), integerSurroundJob(source).build());
+
+    assertThat(decodedAudio(heldUploads.contentOf(heldUploads.names())))
+        .as("the held encode's decoded audio")
+        .isNotEmpty()
+        .isEqualTo(decodedAudio(uploads.contentOf(uploads.names())));
+  }
+
+  private static VariantJob.Builder integerSurroundJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(2);
+    job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(12);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("ac3")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(192_000);
+    return job;
+  }
+
   // FFmpeg encodes -ac 4 in AC-3 as quad(side), the first four-channel layout its encoder lists,
   // where the source's side channels play 700 Hz on the left and 900 Hz on the right.
   @Test
@@ -8313,6 +8349,42 @@ class WorkerMediaSmokeTest {
               "-c:a",
               "copy"),
           source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 16-bit 5.1 FLAC at 96 kHz whose six
+  // channels play 300 to 800 Hz, both for 12 s.
+  private static synchronized Path integerSurroundFlacSource() throws Exception {
+    var source = seekableSources.resolve("integer-surround-flac.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          new ArrayList<>(List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=12"));
+      for (var frequency = 300; frequency <= 800; frequency += 100) {
+        arguments.addAll(List.of("-f", "lavfi", "-i", "sine=f=" + frequency + ":r=96000:d=12"));
+      }
+
+      arguments.addAll(
+          List.of(
+              "-filter_complex",
+              "[1][2][3][4][5][6]join=inputs=6:channel_layout=5.1[a]",
+              "-map",
+              "0:v",
+              "-map",
+              "[a]",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s16"));
+      runFfmpeg(arguments, source);
       generatedSeekableSources.add(source);
     }
 
