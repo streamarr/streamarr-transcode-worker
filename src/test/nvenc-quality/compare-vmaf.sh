@@ -3,7 +3,7 @@
 # (streamarr/streamarr-transcode-worker#56). Each encode runs the worker's own FFmpeg command,
 # which PrintWorkerCommand prints from FfmpegCommandBuilder, at each default-ladder rung's bitrate.
 # Encodes run on the pinned FFmpeg; VMAF (vmaf_v0.6.1) runs on an FFmpeg built with libvmaf. Each
-# encode is upscaled with bicubic to 1920x1080 and scored against the prepared 1080p source, frame
+# encode is upscaled with bicubic to 1920x1080 and scored against the prepared 1080p source frame
 # by frame: both streams are restamped by frame index first, because the intermediate's container
 # rounds frame times to milliseconds while the worker's MP4 keeps the exact frame grid, and VMAF's
 # frame sync would otherwise pair a third of the frames with the reference picture before them.
@@ -18,6 +18,7 @@ set -euo pipefail
 REPOSITORY="$(cd "$(dirname "$0")/../../.." && pwd)"
 PINNED=${PINNED_FFMPEG:?set PINNED_FFMPEG to the pinned worker FFmpeg}
 VMAF_FFMPEG=${VMAF_FFMPEG:-ffmpeg}
+FFPROBE=${FFPROBE:-ffprobe}
 cd "${WORK_DIR:?set WORK_DIR to a directory holding sources/}"
 mkdir -p pwc prepared out
 CP="pwc:$REPOSITORY/target/classes:$REPOSITORY/target/test-classes:$(cat "$REPOSITORY/target/cp.txt")"
@@ -33,14 +34,22 @@ frame_count() {
   "$VMAF_FFMPEG" -hide_banner -nostdin -loglevel error -i "$1" -map 0:v:0 -f framecrc - | grep -c -v '^#'
 }
 
-# Each source becomes an FFV1 intermediate at 1920x1080, 8-bit 4:2:0, at 24 or 30 fps. A cached
-# intermediate is reused only when it still decodes to every frame of the source.
+color_space_of() {
+  "$FFPROBE" -v error -select_streams v:0 -show_entries stream=color_space -of csv=p=0 "$1"
+}
+
+# Each source becomes an FFV1 intermediate at 1920x1080, 8-bit 4:2:0, at 24 or 30 fps, tagged as
+# BT.709. None of the sources tags its colours, and the worker's scale would otherwise treat an
+# untagged intermediate as BT.601 and convert it at every rung below 1080p. A cached intermediate is
+# reused only when it is tagged so and still decodes to every frame of the source.
+TAG_BT709=setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv
 prepare() {
   local name=$1 src=$2 filter=$3
-  if [[ -s prepared/$name.mkv && $(frame_count "prepared/$name.mkv") == "$(frames_of "$name")" ]]; then
+  if [[ -s prepared/$name.mkv && $(color_space_of "prepared/$name.mkv") == bt709 &&
+    $(frame_count "prepared/$name.mkv") == "$(frames_of "$name")" ]]; then
     return
   fi
-  "$PINNED" -hide_banner -nostdin -loglevel error -y -i "sources/$src" -an -vf "$filter" \
+  "$PINNED" -hide_banner -nostdin -loglevel error -y -i "sources/$src" -an -vf "$filter,$TAG_BT709" \
     -c:v ffv1 -level 3 -g 1 "prepared/$name.partial.mkv"
   local frames
   frames=$(frame_count "prepared/$name.partial.mkv")
@@ -57,13 +66,16 @@ frame_aligned() {
   printf '[%s]settb=expr=%s/%s,setpts=N' "$1" "$3" "$2"
 }
 
-# A lossless encode in an MP4, scored with the same frame alignment, must match the intermediate on
-# every frame; otherwise the scores below would compare different pictures.
+# A lossless encode through the worker's own 1080p filter, in an MP4 and scored with the same frame
+# alignment, must match the intermediate on every frame; otherwise the scores below would compare
+# different pictures.
 check_alignment() {
-  local name=$1 num den
+  local name=$1 num den worker_filter
   read -r num den <<<"$(rate_of "$name")"
-  "$PINNED" -hide_banner -nostdin -loglevel error -y -i "prepared/$name.mkv" -an -c:v libx264 -qp 0 \
-    -bf 0 "out/$name-lossless.mp4"
+  worker_filter=$("$JAVA_HOME/bin/java" -cp "$CP" com.streamarr.transcode.engine.PrintWorkerCommand \
+    libx264 1080 5000000 40 "$num" "$den" 1 "prepared/$name.mkv" | grep -A1 -x -- -vf | tail -1)
+  "$PINNED" -hide_banner -nostdin -loglevel error -y -i "prepared/$name.mkv" -an -vf "$worker_filter" \
+    -c:v libx264 -qp 0 -bf 0 "out/$name-lossless.mp4"
   local psnr
   psnr=$("$VMAF_FFMPEG" -hide_banner -nostdin -i "out/$name-lossless.mp4" -i "prepared/$name.mkv" -lavfi \
     "$(frame_aligned 0:v "$num" "$den")[d];$(frame_aligned 1:v "$num" "$den")[r];[d][r]psnr" -f null - 2>&1 |
