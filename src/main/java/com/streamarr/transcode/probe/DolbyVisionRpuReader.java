@@ -202,6 +202,29 @@ final class DolbyVisionRpuReader {
 
     reader.unsignedExpGolomb31();
     reader.unsignedExpGolomb31();
+    var pivots = pivotCounts(reader, header);
+    if (pivots.isEmpty()) {
+      return Optional.empty();
+    }
+
+    var usesNlq = !header.disableResidual();
+    if (usesNlq && !readNlqMethod(reader, header)) {
+      return Optional.empty();
+    }
+
+    if (!hasPartitionCounts(reader) || !skipCurves(reader, header, pivots.get())) {
+      return Optional.empty();
+    }
+
+    if (!usesNlq) {
+      return Optional.of(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_NONE);
+    }
+
+    return Optional.of(nlqLayer(reader, header));
+  }
+
+  /** Each component's pivot count; empty when one exceeds what FFmpeg accepts. */
+  private static Optional<int[]> pivotCounts(BitReader reader, Header header) {
     var pivots = new int[COMPONENTS];
     for (var component = 0; component < COMPONENTS; component++) {
       var pivotsMinus2 = reader.unsignedExpGolomb31();
@@ -213,39 +236,47 @@ final class DolbyVisionRpuReader {
       reader.bits(pivots[component] * header.baseLayerBitDepth());
     }
 
-    var usesNlq = !header.disableResidual();
-    if (usesNlq && !readNlqMethod(reader, header)) {
-      return Optional.empty();
-    }
+    return Optional.of(pivots);
+  }
 
-    // The pinned FFmpeg accepts 1 to 65,535 partitions each way, the count minus one wrapping to
-    // 32 bits, and then reads one set of curves whatever the counts say.
-    if (!isPartitionCount(reader.unsignedExpGolombLong() + 1)
-        || !isPartitionCount(reader.unsignedExpGolombLong() + 1)) {
-      return Optional.empty();
-    }
+  // The pinned FFmpeg accepts 1 to 65,535 partitions each way, the count minus one wrapping to 32
+  // bits, and then reads one set of curves whatever the counts say.
+  private static boolean hasPartitionCounts(BitReader reader) {
+    return isPartitionCount(reader.unsignedExpGolombLong() + 1)
+        && isPartitionCount(reader.unsignedExpGolombLong() + 1);
+  }
 
+  /** Skips each component's reshaping curve; false for syntax that FFmpeg rejects. */
+  private static boolean skipCurves(BitReader reader, Header header, int[] pivots) {
     for (var component = 0; component < COMPONENTS; component++) {
-      for (var piece = 0; piece < pivots[component] - 1; piece++) {
-        if (!skipPiece(reader, header)) {
-          return Optional.empty();
-        }
+      if (!skipPieces(reader, header, pivots[component] - 1)) {
+        return false;
       }
     }
 
-    if (!usesNlq) {
-      return Optional.of(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_NONE);
+    return true;
+  }
+
+  private static boolean skipPieces(BitReader reader, Header header, int pieces) {
+    for (var piece = 0; piece < pieces; piece++) {
+      if (!skipPiece(reader, header)) {
+        return false;
+      }
     }
 
+    return true;
+  }
+
+  /** MEL when every component's NLQ parameters are the identity, and FEL otherwise. */
+  private static DolbyVisionEnhancementLayer nlqLayer(BitReader reader, Header header) {
     var isIdentity = true;
     for (var component = 0; component < COMPONENTS; component++) {
       isIdentity &= isIdentityNlq(reader, header);
     }
 
-    return Optional.of(
-        isIdentity
-            ? DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL
-            : DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_FEL);
+    return isIdentity
+        ? DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL
+        : DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_FEL;
   }
 
   // FFmpeg parses only the linear deadzone method.
