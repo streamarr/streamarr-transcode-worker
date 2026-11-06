@@ -309,6 +309,10 @@ public class FfmpegCommandBuilder {
 
     addFragmentedMp4Output(cmd);
     addSourceStreamsOutput(cmd, decision, input);
+    if (readsAudioFromItsOwnInput(job.request(), input)) {
+      addAudioInputsVideoInUse(cmd, decision);
+    }
+
     return List.copyOf(cmd);
   }
 
@@ -479,7 +483,8 @@ public class FfmpegCommandBuilder {
   // and placed on its timeline by -isync: the first input reaches the file's end at the demuxer's
   // pace. Both inputs' filters run in one filter graph, which filters each output in turn from the
   // one with the earliest time, so the held pictures do not run ahead of the audio. That graph maps
-  // the encode's outputs (addOneFilterGraphOfBothInputs).
+  // the encode's outputs (addOneFilterGraphOfBothInputs), and the audio's input keeps its video in
+  // use (addAudioInputsVideoInUse).
   private void addSourceInputsAndStreamSelection(List<String> cmd, TranscodeRequest request) {
     addSourceInput(cmd, request);
     if (readsAudioFromItsOwnInput(request, EncoderInput.SOURCE)) {
@@ -526,6 +531,22 @@ public class FfmpegCommandBuilder {
             HELD_VIDEO_LABEL,
             "-map",
             HELD_AUDIO_LABEL));
+  }
+
+  // A Matroska demuxer that discards the video after a seek drops every audio block until one
+  // passes the seek's cue, laced frames that reach past the first segment's start among them. The
+  // held encode's audio input keeps its video in use, as the one input did, through a copy to
+  // FFmpeg's null muxer, which writes nothing.
+  private static void addAudioInputsVideoInUse(List<String> cmd, TranscodeDecision decision) {
+    cmd.addAll(
+        List.of(
+            "-map",
+            HELD_AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(),
+            "-c",
+            "copy",
+            "-f",
+            "null",
+            "-"));
   }
 
   private static Optional<String> takeOptionValue(List<String> cmd, String option) {

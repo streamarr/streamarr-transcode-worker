@@ -3659,6 +3659,42 @@ class FfmpegCommandBuilderTest {
     assertThat(heldFilterGraph(cmd)).contains("[held_video];[1:2]");
   }
 
+  // An attempt from the start that neither pads nor names its layout filters no audio; the graph
+  // still carries it, so that the audio paces the held pictures.
+  @Test
+  @DisplayName(
+      "Should pass the audio through the filter graph unchanged when an encode from the start holds"
+          + " the last frame and neither pads nor names the audio's layout")
+  void shouldPassTheAudioThroughTheGraphUnchangedWhenAHoldingEncodeFiltersNoAudio() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
+            "libx264");
+
+    assertThat(heldAudioFilter(cmd)).isEqualTo("anull");
+  }
+
+  // A Matroska demuxer that discards the video after a seek drops every audio block until one
+  // passes the seek's cue, laced frames that reach past the first segment's start among them, so
+  // the audio's input keeps its video in use, as the one input did.
+  @Test
+  @DisplayName(
+      "Should keep the audio input's video in use through a copy to FFmpeg's null muxer when an"
+          + " encode holds the last frame and encodes its audio")
+  void shouldKeepTheAudioInputsVideoInUseThroughANullCopyWhenAnEncodeHoldsTheLastFrame() {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:2") + 1, cmd.size()))
+        .containsExactly("-map", "1:0", "-c", "copy", "-f", "null", "-");
+  }
+
   // The worker reads a named stream's facts only for a job that names its output layout. Without
   // them, the stream may not be audio, so the optional map lets the producer refuse the output.
   @Test
