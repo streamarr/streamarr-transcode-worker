@@ -29,6 +29,18 @@ public class FfmpegCommandBuilder {
   private static final String LEVEL_OPTION = "-level:v";
   // The planar 10-bit 4:2:0 format that the software encoders and the Dolby Vision reshape take.
   private static final String PLANAR_TEN_BIT_PIXEL_FORMAT = "yuv420p10le";
+
+  /**
+   * The filters that reshape Dolby Vision without a compatible base with each frame's RPU into
+   * planar 10-bit BT.2020 PQ. tonemapx reshapes only from planar 10-bit input, and aborts FFmpeg
+   * for PQ in an 8-bit format.
+   */
+  static final String DOLBY_VISION_TO_PQ_RESHAPE_FILTERS =
+      "format="
+          + PLANAR_TEN_BIT_PIXEL_FORMAT
+          + ",tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format="
+          + PLANAR_TEN_BIT_PIXEL_FORMAT;
+
   // The hardware encoders take 10-bit 4:2:0 video as biplanar p010.
   private static final String P010 = "p010le";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
@@ -1069,9 +1081,6 @@ public class FfmpegCommandBuilder {
     };
   }
 
-  // tonemapx reshapes Dolby Vision only from planar 10-bit input, and only into PQ with BT.2020
-  // primaries and matrix; it aborts FFmpeg for PQ in an 8-bit format, which the encode's own
-  // check rules out.
   private static String videoFormat(TranscodeJob job) {
     return switch (pictureConversion(job)) {
       case TONE_MAP_TO_SDR ->
@@ -1079,10 +1088,7 @@ public class FfmpegCommandBuilder {
               + planarFormat(job)
               + ",sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT";
       case RESHAPE_DOLBY_VISION_TO_PQ ->
-          "format="
-              + PLANAR_TEN_BIT_PIXEL_FORMAT
-              + ",tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format="
-              + PLANAR_TEN_BIT_PIXEL_FORMAT
+          DOLBY_VISION_TO_PQ_RESHAPE_FILTERS
               + encoderFormatAfterThePlanarOne(job)
               + hdrColourParameters(job);
       case KEEP_THE_SOURCES_RANGE -> "format=" + encoderPixelFormat(job) + hdrColourParameters(job);
@@ -1090,17 +1096,46 @@ public class FfmpegCommandBuilder {
     };
   }
 
-  // The encoder and the mp4 muxer take the colour description from the frames, so the filters
-  // describe every frame as the job's output whatever the source's own tags say: without it,
-  // FFmpeg writes no colr box for an untagged source.
   private static String hdrColourParameters(TranscodeJob job) {
-    return hdrTransferOf(job)
-        .map(
-            transfer ->
-                ",setparams=color_primaries=bt2020:color_trc="
-                    + transfer.ffmpegName()
-                    + ":colorspace=bt2020nc:range=tv")
-        .orElse("");
+    return hdrTransferOf(job).map(transfer -> "," + frameColourFilter(transfer)).orElse("");
+  }
+
+  /**
+   * The filter that describes every frame with the transfer's BT.2020 colour description. The
+   * encoder and the mp4 muxer take the colour description from the frames, so the filters describe
+   * every frame as the job's output whatever the source's own tags say: without it, FFmpeg writes
+   * no colr box for an untagged source.
+   */
+  static String frameColourFilter(HdrTransfer transfer) {
+    return "setparams=color_primaries=bt2020:color_trc="
+        + transfer.ffmpegName()
+        + ":colorspace=bt2020nc:range=tv";
+  }
+
+  /**
+   * The encoder and the arguments with which it forces the encode's codec profile, colour
+   * description and HDR10 static metadata, as a job's command passes them. The worker's own test
+   * encode of each encode feature runs them.
+   */
+  static List<String> encoderArguments(String encoder, VideoDecision.Encode encode) {
+    var forcing = traitsOf(encoder).codecProfileForcing();
+    var arguments = new ArrayList<>(List.of("-c:v", encoder));
+    arguments.addAll(forcing.argumentsFor(encode));
+    arguments.addAll(hdrColourArgs(HdrTransfer.of(encode.outputDynamicRange())));
+    var x265 = forcing.x265ParametersFor(encode);
+    if (!x265.isEmpty()) {
+      arguments.addAll(List.of("-x265-params", String.join(":", x265)));
+    }
+
+    var svtAv1 =
+        forcing == CodecProfileForcing.LIBSVTAV1
+            ? HdrEncoderParameters.svtAv1(encode)
+            : List.<String>of();
+    if (!svtAv1.isEmpty()) {
+      arguments.addAll(List.of("-svtav1-params", String.join(":", svtAv1)));
+    }
+
+    return List.copyOf(arguments);
   }
 
   private static String planarFormat(TranscodeJob job) {
@@ -1170,7 +1205,11 @@ public class FfmpegCommandBuilder {
   // The colour description of a PQ or HLG output, which the mp4 muxer writes into the colr box
   // and the encoder into the bitstream; an SDR output takes BT.709 from the scale filter.
   private static List<String> hdrColourArgs(TranscodeJob job) {
-    return hdrTransferOf(job)
+    return hdrColourArgs(hdrTransferOf(job));
+  }
+
+  private static List<String> hdrColourArgs(Optional<HdrTransfer> hdrTransfer) {
+    return hdrTransfer
         .map(
             transfer ->
                 List.of(
