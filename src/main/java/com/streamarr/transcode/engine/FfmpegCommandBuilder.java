@@ -319,11 +319,13 @@ public class FfmpegCommandBuilder {
 
   /**
    * The command that checks where a seek lands in a held encode's search for the video's last
-   * keyframe: it copies the chosen video stream's first packet from where the job attempt's own
-   * seek to the position would start reading, to a framecrc on standard output, on the attempt's
-   * zero-based timeline.
+   * keyframe: it copies the chosen video stream's first packet, beside the chosen audio's, from
+   * where the job attempt's own seek to the position would start reading, to a framecrc on standard
+   * output. It reads the attempt's own streams, so its times lie on the attempt's zero-based
+   * timeline, whose zero is the earliest start among the streams that a command reads.
    */
-  List<String> buildSeekLandingCommand(Path source, int videoStreamIndex, Duration seekPosition) {
+  List<String> buildSeekLandingCommand(
+      Path source, TranscodeDecision decision, Duration seekPosition) {
     var cmd =
         new ArrayList<>(
             List.of(
@@ -336,16 +338,9 @@ public class FfmpegCommandBuilder {
                 "-ss",
                 seekArgument(seekPosition),
                 "-i",
-                source.toString(),
-                "-map",
-                "0:" + videoStreamIndex,
-                "-c",
-                "copy",
-                "-copyinkf",
-                "-copypriorss",
-                "1",
-                "-frames:v",
-                "1"));
+                source.toString()));
+    addChosenSourceStreams(cmd, decision, 0);
+    cmd.addAll(List.of("-c", "copy", "-copyinkf", "-copypriorss", "1", "-frames:v", "1"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "framecrc", "pipe:1"));
     return List.copyOf(cmd);
@@ -353,12 +348,12 @@ public class FfmpegCommandBuilder {
 
   /**
    * The command of a keyframe scan in a held encode's search for the video's last keyframe (ADR
-   * 0037, early ends): it copies the chosen video stream's packets and the audio's, without
-   * decoding them, from the position for the length, to a framecrc on standard output. Its times
-   * lie on the attempt's zero-based timeline, as the job attempt's own command places them.
+   * 0037, early ends): it copies the packets of the chosen video and audio streams, without
+   * decoding them, from the position for the length, to a framecrc on standard output. It reads the
+   * attempt's own streams, so its times lie on the attempt's zero-based timeline.
    */
   List<String> buildKeyframeScanCommand(
-      Path source, int videoStreamIndex, Duration from, Duration length) {
+      Path source, TranscodeDecision decision, Duration from, Duration length) {
     var cmd =
         new ArrayList<>(
             List.of(ffmpegPath, "-nostdin", "-v", "quiet", "-copyts", "-start_at_zero"));
@@ -366,19 +361,9 @@ public class FfmpegCommandBuilder {
       cmd.addAll(List.of("-ss", seekArgument(from)));
     }
 
-    cmd.addAll(
-        List.of(
-            "-t",
-            seekArgument(length),
-            "-i",
-            source.toString(),
-            "-map",
-            "0:" + videoStreamIndex,
-            "-map",
-            "0:a?",
-            "-c",
-            "copy",
-            "-copyinkf"));
+    cmd.addAll(List.of("-t", seekArgument(length), "-i", source.toString()));
+    addChosenSourceStreams(cmd, decision, 0);
+    cmd.addAll(List.of("-c", "copy", "-copyinkf"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "framecrc", "pipe:1"));
     return List.copyOf(cmd);

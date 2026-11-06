@@ -20,9 +20,10 @@ import lombok.NonNull;
 
 /**
  * Reads the chosen video stream's keyframes in one interval of the source, without decoding: an
- * FFmpeg copies the video's packets and the audio's, from a seek to the interval's start for its
- * length, to a framecrc on its standard output. It also reads where a seek to a position lands.
- * Each scan passes the bytes of every packet it read to the consumer as it reads them.
+ * FFmpeg copies the packets of the attempt's video and audio streams, from a seek to the interval's
+ * start for its length, to a framecrc on its standard output. It also reads where a seek to a
+ * position lands. Each scan passes the bytes of every packet it read to the consumer as it reads
+ * them.
  */
 @Builder
 final class KeyframeScan {
@@ -63,9 +64,7 @@ final class KeyframeScan {
   Optional<Duration> landingDecodeTime(Duration seekPosition) throws InterruptedException {
     var command =
         commandBuilder.buildSeekLandingCommand(
-            request.sourcePath(),
-            request.transcodeDecision().videoDecision().streamIndex(),
-            seekPosition);
+            request.sourcePath(), request.transcodeDecision(), seekPosition);
     return read(command, _ -> true, 1).stream().findFirst().map(VideoPacket::decodeTime);
   }
 
@@ -89,7 +88,7 @@ final class KeyframeScan {
   private List<String> scanCommand(Interval interval) {
     return commandBuilder.buildKeyframeScanCommand(
         request.sourcePath(),
-        request.transcodeDecision().videoDecision().streamIndex(),
+        request.transcodeDecision(),
         interval.from(),
         interval.until().minus(interval.from()));
   }

@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
@@ -40,19 +41,92 @@ class KeyframeSearchSmokeTest {
       String format, String extension, BigDecimal expectedSeconds) throws Exception {
     var source = delayedPicturesWithKeyframesUpToTenSeconds(format, extension);
 
-    var readPosition = engine().heldPictureReadPosition(heldRequest(source), _ -> {}).orElseThrow();
+    var readPosition =
+        engine()
+            .heldPictureReadPosition(heldRequest(source, OptionalInt.empty()), _ -> {})
+            .orElseThrow();
 
     assertThat(readPosition)
         .as("where a seek lands on the keyframe that presents at 8 s")
         .isEqualTo(Duration.ofNanos(expectedSeconds.movePointRight(9).longValueExact()));
   }
 
+  // The timeline's zero is the earliest start among the streams that a command reads. The 440 Hz
+  // tone starts 2 s before the video's first picture, and the 880 Hz tone with the video, 0.02 s
+  // before its first picture once the AAC encoder's priming is counted. The video's one keyframe
+  // decodes 0.5 s before it presents. On the timeline of an attempt that reads the 440 Hz tone, it
+  // presents at 2.021 s and decodes at 1.521 s, and an MPEG-TS seek to its presentation time lands
+  // after it, so the attempt reads from its decode time. On the timeline of one that reads the
+  // 880 Hz tone, it presents at 0.021 s, where a seek lands on it; a seek to 1.521 s there would
+  // land after the keyframe and decode no picture.
+  @ParameterizedTest(name = "audio stream {0}")
+  @CsvSource({"1, 1.521333333", "2, 0.021333333"})
+  @DisplayName(
+      "Should read from where the attempt's own seek reads the video's only keyframe when an audio"
+          + " stream starts before the video")
+  void shouldReadFromWhereTheAttemptsOwnSeekReadsTheOnlyKeyframeWhenAnAudioStreamStartsFirst(
+      int audioStream, BigDecimal expectedSeconds) throws Exception {
+    var source = tonesThatStartBeforeTheVideo();
+
+    var readPosition =
+        engine()
+            .heldPictureReadPosition(heldRequest(source, OptionalInt.of(audioStream)), _ -> {})
+            .orElseThrow();
+
+    assertThat(readPosition)
+        .as("where a seek on the attempt's own timeline reads the video's keyframe")
+        .isEqualTo(Duration.ofNanos(expectedSeconds.movePointRight(9).longValueExact()));
+  }
+
+  // 20 s of H.264 at 128x72 and 4 fps, with one keyframe, starting 2 s after a 440 Hz tone, and an
+  // 880 Hz tone that starts with the video, in MPEG-TS.
+  private Path tonesThatStartBeforeTheVideo() throws Exception {
+    var source = root.resolve("tones-before-video.ts");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=40",
+            "-itsoffset",
+            "2",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=4:duration=20",
+            "-itsoffset",
+            "2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000:duration=40",
+            "-map",
+            "1:v",
+            "-map",
+            "0:a",
+            "-map",
+            "2:a",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-b_strategy",
+            "0",
+            "-x264-params",
+            "b-pyramid=normal:scenecut=0:keyint=1000:min-keyint=1000",
+            "-c:a",
+            "aac",
+            "-f",
+            "mpegts",
+            source.toString()));
+    return source;
+  }
+
   // 20 s of H.264 at 128x72 and 4 fps with IDR keyframes at 0, 2, 4, 6, 8 and 10 s only.
   private Path delayedPicturesWithKeyframesUpToTenSeconds(String format, String extension)
       throws Exception {
     var source = root.resolve("delayed-pictures." + extension);
-    var command = new ArrayList<>(List.of("ffmpeg", "-nostdin", "-y", "-loglevel", "error"));
-    command.addAll(
+    ffmpeg(
         List.of(
             "-f",
             "lavfi",
@@ -73,7 +147,13 @@ class KeyframeSearchSmokeTest {
             "-f",
             format,
             source.toString()));
-    var errors = root.resolve("ffmpeg.log");
+    return source;
+  }
+
+  private void ffmpeg(List<String> arguments) throws Exception {
+    var command = new ArrayList<>(List.of("ffmpeg", "-nostdin", "-y", "-loglevel", "error"));
+    command.addAll(arguments);
+    var errors = root.resolve("ffmpeg-" + System.nanoTime() + ".log");
     var process =
         new ProcessBuilder(command)
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
@@ -81,7 +161,6 @@ class KeyframeSearchSmokeTest {
             .start();
     assertThat(process.waitFor(5, TimeUnit.MINUTES)).as("FFmpeg exits").isTrue();
     assertThat(process.exitValue()).as(Files.readString(errors)).isZero();
-    return source;
   }
 
   private static FfmpegTranscodeEngine engine() {
@@ -94,8 +173,22 @@ class KeyframeSearchSmokeTest {
         .build();
   }
 
-  // A held encode on a 2 s grid whose first segment starts at 18 s, read back from 14 s.
-  private static TranscodeRequest heldRequest(Path source) {
+  // A held encode on a 2 s grid whose first segment starts at 18 s, read back from 14 s, of the
+  // named audio stream, or of none.
+  private static TranscodeRequest heldRequest(Path source, OptionalInt audioStream) {
+    var audio = AudioDecision.builder().mode(AudioMode.NONE).build();
+    if (audioStream.isPresent()) {
+      audio =
+          AudioDecision.builder()
+              .mode(AudioMode.TRANSCODE)
+              .codec("aac")
+              .channels(2)
+              .bitrate(128_000L)
+              .streamIndex(audioStream)
+              .padsWithSilenceToAdvertisedEnd(true)
+              .build();
+    }
+
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())
         .attemptId(UUID.randomUUID())
@@ -112,14 +205,7 @@ class KeyframeSearchSmokeTest {
                     VideoDecisionFixtures.encodeBuilder()
                         .holdsLastFrameToAdvertisedEnd(true)
                         .build())
-                .audioDecision(
-                    AudioDecision.builder()
-                        .mode(AudioMode.TRANSCODE)
-                        .codec("aac")
-                        .channels(2)
-                        .bitrate(128_000L)
-                        .padsWithSilenceToAdvertisedEnd(true)
-                        .build())
+                .audioDecision(audio)
                 .subtitleDecision(SubtitleDecisions.EXCLUDED)
                 .build())
         .encoderPreset(EncoderPreset.FASTER)

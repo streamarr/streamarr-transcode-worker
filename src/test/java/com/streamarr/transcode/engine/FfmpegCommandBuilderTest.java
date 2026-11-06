@@ -1946,13 +1946,16 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should copy the chosen video stream's packets and the audio's, from the position for the"
-          + " length and on the attempt's timeline, to a framecrc on standard output when building a"
+      "Should copy the chosen video and audio streams' packets, from the position for the length"
+          + " and on the attempt's timeline, to a framecrc on standard output when building a"
           + " keyframe scan")
-  void shouldCopyTheVideosAndAudiosPacketsFromThePositionForTheLengthWhenBuildingAKeyframeScan() {
+  void shouldCopyTheChosenStreamsPacketsFromThePositionForTheLengthWhenBuildingAKeyframeScan() {
     var cmd =
         builder.buildKeyframeScanCommand(
-            Path.of("/media/source.ts"), 2, Duration.ofMillis(4_500), Duration.ofSeconds(10));
+            Path.of("/media/source.ts"),
+            chosenStreams(),
+            Duration.ofMillis(4_500),
+            Duration.ofSeconds(10));
 
     assertThat(cmd)
         .containsExactly(
@@ -1971,7 +1974,15 @@ class FfmpegCommandBuilderTest {
             "-map",
             "0:2",
             "-map",
-            "0:a?",
+            "0:1?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic",
             "-c",
             "copy",
             "-copyinkf",
@@ -1989,19 +2000,20 @@ class FfmpegCommandBuilderTest {
   void shouldSeekNowhereWhenBuildingAKeyframeScanFromTheStartOfTheTimeline() {
     var cmd =
         builder.buildKeyframeScanCommand(
-            Path.of("/media/source.ts"), 0, Duration.ZERO, Duration.ofSeconds(4));
+            Path.of("/media/source.ts"), chosenStreams(), Duration.ZERO, Duration.ofSeconds(4));
 
     assertThat(cmd).doesNotContain("-ss").containsSequence("-t", "4", "-i", "/media/source.ts");
   }
 
   @Test
   @DisplayName(
-      "Should copy the chosen video stream's first packet from where a seek to the position lands,"
-          + " on the attempt's timeline, to a framecrc on standard output when building a seek"
-          + " landing check")
+      "Should copy the chosen video stream's first packet, beside the chosen audio's, from where a"
+          + " seek to the position lands and on the attempt's timeline, to a framecrc on standard"
+          + " output when building a seek landing check")
   void shouldCopyTheVideosFirstPacketFromWhereASeekLandsWhenBuildingASeekLandingCheck() {
     var cmd =
-        builder.buildSeekLandingCommand(Path.of("/media/source.mp4"), 2, Duration.ofMillis(8_000));
+        builder.buildSeekLandingCommand(
+            Path.of("/media/source.mp4"), chosenStreams(), Duration.ofMillis(8_000));
 
     assertThat(cmd)
         .containsExactly(
@@ -2017,6 +2029,16 @@ class FfmpegCommandBuilderTest {
             "/media/source.mp4",
             "-map",
             "0:2",
+            "-map",
+            "0:1?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic",
             "-c",
             "copy",
             "-copyinkf",
@@ -2031,6 +2053,19 @@ class FfmpegCommandBuilderTest {
             "-f",
             "framecrc",
             "pipe:1");
+  }
+
+  // A held encode of the video at index 2 and the audio at index 1. The timeline's zero is the
+  // earliest start of the streams that a command reads, so a scan reads the attempt's own streams.
+  private static TranscodeDecision chosenStreams() {
+    return decision(TranscodeMode.FULL_TRANSCODE)
+        .videoDecision(
+            VideoDecisionFixtures.encodeBuilder()
+                .streamIndex(2)
+                .holdsLastFrameToAdvertisedEnd(true)
+                .build())
+        .audioDecision(audio(TranscodeMode.FULL_TRANSCODE).streamIndex(OptionalInt.of(1)).build())
+        .build();
   }
 
   // FFmpeg writes each output's metadata to its error output, where the worker reads the framecrc.
