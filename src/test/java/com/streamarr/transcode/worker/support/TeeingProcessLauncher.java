@@ -1,5 +1,6 @@
 package com.streamarr.transcode.worker.support;
 
+import com.streamarr.transcode.engine.PausedProcess;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import java.io.ByteArrayOutputStream;
 import java.io.FilterInputStream;
@@ -42,13 +43,8 @@ public final class TeeingProcessLauncher implements ProcessLauncher {
   }
 
   @Override
-  public void pause(Process process) {
-    launcher.pause(((TeedProcess) process).process);
-  }
-
-  @Override
-  public void resume(Process process) {
-    launcher.resume(((TeedProcess) process).process);
+  public PausedProcess pause(Process process) {
+    return launcher.pause(((TeedProcess) process).process);
   }
 
   /**

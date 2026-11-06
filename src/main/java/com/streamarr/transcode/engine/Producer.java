@@ -94,6 +94,7 @@ public final class Producer {
   // Guarded by lock. Once the attempt is decided or its output has ended, FFmpeg stays running.
   private boolean ffmpegPaused;
   private boolean pausesEnded;
+  private List<PausedProcess> pausedProcesses = List.of();
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
     this.ffmpeg = ffmpeg;
@@ -273,7 +274,7 @@ public final class Producer {
       ffmpegPaused = true;
       productionTimer.pause();
       watchdog.pause();
-      ffmpeg.processes().forEach(launcher::pause);
+      pausedProcesses = ffmpeg.processes().stream().map(launcher::pause).toList();
     }
   }
 
@@ -291,7 +292,8 @@ public final class Producer {
     }
 
     ffmpegPaused = false;
-    ffmpeg.processes().forEach(launcher::resume);
+    pausedProcesses.forEach(PausedProcess::resume);
+    pausedProcesses = List.of();
     watchdog.resume();
     productionTimer.resume();
   }

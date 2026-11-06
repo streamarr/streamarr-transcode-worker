@@ -7,12 +7,14 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.invoke.MethodHandle;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Sends a job control signal to a child process. On Linux the signal travels through a pidfd, which
- * keeps naming the child even when its pid is reused. Elsewhere, and where the kernel opens no
- * pidfd, it travels by pid while the child is alive, which leaves the window that {@link
- * Process#destroy} also leaves between its check and its signal.
+ * Stops a child process with SIGSTOP and continues it with SIGCONT. On Linux both signals travel
+ * through one pidfd that the pause holds until it resumes, so they keep naming the child even when
+ * its pid is reused, and the resume needs no new file descriptor. Elsewhere, and where the kernel
+ * opens no pidfd, they travel by pid, which leaves the window that {@link Process#destroy} also
+ * leaves between its check and its signal.
  */
 final class ProcessSignals {
 
@@ -39,7 +41,9 @@ final class ProcessSignals {
           FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG),
           Linker.Option.firstVariadicArg(1));
 
-  enum Signal {
+  private static final PausedProcess NOTHING_TO_RESUME = () -> {};
+
+  private enum Signal {
     STOP(19, 17),
     CONTINUE(18, 19);
 
@@ -58,15 +62,65 @@ final class ProcessSignals {
 
   private ProcessSignals() {}
 
-  /** Signals the process unless it has exited. */
-  @SuppressWarnings("java:S1181") // MethodHandle.invokeExact declares Throwable.
-  static void send(Process process, Signal signal) {
-    try {
-      if (!DARWIN && isSentThroughPidfd(process, signal)) {
-        return;
-      }
+  /** Stops the process unless it has exited; the returned pause continues it. */
+  static PausedProcess stop(Process process) {
+    return invoke(() -> DARWIN ? stopByPid(process) : stopThroughPidfd(process));
+  }
 
-      sendByPid(process, signal);
+  // A child whose handle is alive after the pidfd opened still held its pid then, so the pidfd
+  // names the child. The handle compares the process's start time, which Process.isAlive does not.
+  private static PausedProcess stopThroughPidfd(Process process) throws Throwable {
+    var pidfd = (long) PIDFD_OPEN.invokeExact(SYS_PIDFD_OPEN, process.pid(), 0L);
+    if (pidfd < 0) {
+      return stopByPid(process);
+    }
+
+    if (!process.toHandle().isAlive()) {
+      close(pidfd);
+      return NOTHING_TO_RESUME;
+    }
+
+    sendThroughPidfd(pidfd, Signal.STOP);
+    return new PidfdPause(pidfd);
+  }
+
+  // kill(2) fails only for a child that has exited since the check, which needs no signal. The
+  // resume checks only the JDK's own exit record, which needs no file descriptor; a SIGCONT that
+  // reaches a process that reused the pid continues a process that runs anyway.
+  private static PausedProcess stopByPid(Process process) throws Throwable {
+    if (!process.toHandle().isAlive()) {
+      return NOTHING_TO_RESUME;
+    }
+
+    var pid = Math.toIntExact(process.pid());
+    int _ = (int) KILL.invokeExact(pid, Signal.STOP.number());
+    return () ->
+        invoke(
+            () -> {
+              if (process.isAlive()) {
+                int _ = (int) KILL.invokeExact(pid, Signal.CONTINUE.number());
+              }
+
+              return NOTHING_TO_RESUME;
+            });
+  }
+
+  // pidfd_send_signal(2) fails only for a child that has exited, which needs no signal.
+  private static void sendThroughPidfd(long pidfd, Signal signal) throws Throwable {
+    long _ =
+        (long)
+            PIDFD_SEND_SIGNAL.invokeExact(
+                SYS_PIDFD_SEND_SIGNAL, pidfd, (long) signal.number(), 0L, 0L);
+  }
+
+  private static void close(long pidfd) throws Throwable {
+    int _ = (int) CLOSE.invokeExact(Math.toIntExact(pidfd));
+  }
+
+  @SuppressWarnings("java:S1181") // MethodHandle.invokeExact declares Throwable.
+  private static PausedProcess invoke(NativeCall call) {
+    try {
+      return call.run();
     } catch (RuntimeException | Error e) {
       throw e;
     } catch (Throwable e) {
@@ -74,36 +128,38 @@ final class ProcessSignals {
     }
   }
 
-  // False when the kernel opened no pidfd, as for a child that it has already reaped. A child whose
-  // handle is alive after the pidfd opened still held its pid then, so the pidfd names the child.
-  // The handle compares the process's start time, which Process.isAlive does not.
-  private static boolean isSentThroughPidfd(Process process, Signal signal) throws Throwable {
-    var pidfd = (long) PIDFD_OPEN.invokeExact(SYS_PIDFD_OPEN, process.pid(), 0L);
-    if (pidfd < 0) {
-      return false;
-    }
-
-    try {
-      if (process.toHandle().isAlive()) {
-        long _ =
-            (long)
-                PIDFD_SEND_SIGNAL.invokeExact(
-                    SYS_PIDFD_SEND_SIGNAL, pidfd, (long) signal.number(), 0L, 0L);
-      }
-
-      return true;
-    } finally {
-      int _ = (int) CLOSE.invokeExact(Math.toIntExact(pidfd));
-    }
+  @FunctionalInterface
+  private interface NativeCall {
+    PausedProcess run() throws Throwable;
   }
 
-  // kill(2) fails only for a child that has exited since the check, which needs no signal.
-  private static void sendByPid(Process process, Signal signal) throws Throwable {
-    if (!process.toHandle().isAlive()) {
-      return;
+  // Resumes once, and closes the pidfd with that resume.
+  private static final class PidfdPause implements PausedProcess {
+
+    private final long pidfd;
+    private final AtomicBoolean resumed = new AtomicBoolean();
+
+    private PidfdPause(long pidfd) {
+      this.pidfd = pidfd;
     }
 
-    int _ = (int) KILL.invokeExact(Math.toIntExact(process.pid()), signal.number());
+    @Override
+    public void resume() {
+      if (resumed.getAndSet(true)) {
+        return;
+      }
+
+      invoke(
+          () -> {
+            try {
+              sendThroughPidfd(pidfd, Signal.CONTINUE);
+            } finally {
+              close(pidfd);
+            }
+
+            return NOTHING_TO_RESUME;
+          });
+    }
   }
 
   private static MethodHandle downcall(

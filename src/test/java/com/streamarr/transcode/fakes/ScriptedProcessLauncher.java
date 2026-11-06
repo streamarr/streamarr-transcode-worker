@@ -4,6 +4,7 @@ import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDI
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.FfmpegRecordings;
+import com.streamarr.transcode.engine.PausedProcess;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
@@ -65,13 +66,10 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
   }
 
   @Override
-  public void pause(Process process) {
-    ((ScriptedProcess) process).pauseBySignal();
-  }
-
-  @Override
-  public void resume(Process process) {
-    ((ScriptedProcess) process).resumeBySignal();
+  public PausedProcess pause(Process process) {
+    var scripted = (ScriptedProcess) process;
+    scripted.pauseBySignal();
+    return scripted::resumeBySignal;
   }
 
   public boolean hasLaunched(UUID jobAttemptId) {

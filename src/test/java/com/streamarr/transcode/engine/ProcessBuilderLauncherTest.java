@@ -75,7 +75,7 @@ class ProcessBuilderLauncherTest {
       var output = process.getInputStream();
       await().atMost(OUTCOME_LIMIT).until(() -> output.available() > 0);
 
-      launcher.pause(process);
+      var paused = launcher.pause(process);
       var lastSeen = new AtomicInteger(-1);
       await()
           .pollInterval(Duration.ofMillis(100))
@@ -91,7 +91,7 @@ class ProcessBuilderLauncherTest {
           .during(Duration.ofMillis(300))
           .atMost(OUTCOME_LIMIT)
           .until(() -> output.available() == settled);
-      launcher.resume(process);
+      paused.resume();
       await().atMost(OUTCOME_LIMIT).until(() -> output.available() > settled);
     } finally {
       process.destroyForcibly();
@@ -104,10 +104,30 @@ class ProcessBuilderLauncherTest {
     var process = launcher.launch(List.of("bash", "-c", "exit 0"), UUID.randomUUID());
     assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
 
-    launcher.pause(process);
-    launcher.resume(process);
+    launcher.pause(process).resume();
 
     assertThat(process.exitValue()).isZero();
+  }
+
+  @Test
+  @EnabledOnOs(OS.LINUX)
+  @DisplayName("Should continue a paused process when its liveness can no longer be read at resume")
+  void shouldContinueAPausedProcessWhenItsLivenessCanNoLongerBeReadAtResume() throws Exception {
+    var exited = launcher.launch(List.of("bash", "-c", "exit 0"), UUID.randomUUID());
+    assertThat(exited.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+    var running = launcher.launch(List.of("sleep", "60"), UUID.randomUUID());
+    var observed = new LivenessTurnsUnreadable(running, exited);
+    try {
+      var paused = launcher.pause(observed);
+      await().atMost(OUTCOME_LIMIT).until(() -> linuxProcessState(running.pid()) == 'T');
+      observed.makeLivenessUnreadable();
+
+      paused.resume();
+
+      await().atMost(OUTCOME_LIMIT).until(() -> linuxProcessState(running.pid()) != 'T');
+    } finally {
+      running.destroyForcibly();
+    }
   }
 
   @Test
@@ -282,6 +302,69 @@ class ProcessBuilderLauncherTest {
   private static char linuxProcessState(long pid) throws IOException {
     var stat = Files.readString(Path.of("/proc", Long.toString(pid), "stat"));
     return stat.charAt(stat.lastIndexOf(')') + 2);
+  }
+
+  // A running child whose liveness a check can no longer read, as when no file descriptor is free
+  // to open its /proc entry: its handle then answers as an exited process's does.
+  private static final class LivenessTurnsUnreadable extends Process {
+
+    private final Process running;
+    private final Process exited;
+    private volatile boolean unreadable;
+
+    private LivenessTurnsUnreadable(Process running, Process exited) {
+      this.running = running;
+      this.exited = exited;
+    }
+
+    private void makeLivenessUnreadable() {
+      unreadable = true;
+    }
+
+    @Override
+    public long pid() {
+      return running.pid();
+    }
+
+    @Override
+    public boolean isAlive() {
+      return running.isAlive();
+    }
+
+    @Override
+    public ProcessHandle toHandle() {
+      return unreadable ? exited.toHandle() : running.toHandle();
+    }
+
+    @Override
+    public OutputStream getOutputStream() {
+      return running.getOutputStream();
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return running.getInputStream();
+    }
+
+    @Override
+    public InputStream getErrorStream() {
+      return running.getErrorStream();
+    }
+
+    @Override
+    public int waitFor() throws InterruptedException {
+      return running.waitFor();
+    }
+
+    @Override
+    public int exitValue() {
+      return running.exitValue();
+    }
+
+    @Override
+    public void destroy() {
+      running.destroy();
+    }
   }
 
   // A child that the kernel has reaped, whose pid another process took before the JDK recorded
