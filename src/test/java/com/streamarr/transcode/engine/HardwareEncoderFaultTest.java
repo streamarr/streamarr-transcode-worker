@@ -34,6 +34,33 @@ class HardwareEncoderFaultTest {
         .contains(HardwareEncoderFault.SESSION_REFUSED);
   }
 
+  // The end of the worker's error output when an RTX 5090 (driver 615.78.08) already ran its 12
+  // encode sessions and the worker's command asked for a 13th, under the pinned FFmpeg 8.1.3.
+  @Test
+  @DisplayName(
+      "Should read a session refusal when the driver refuses a session past its limit and FFmpeg"
+          + " then reports that it found no capable device")
+  void
+      shouldReadASessionRefusalWhenTheDriverRefusesASessionPastItsLimitAndFfmpegThenReportsThatItFoundNoCapableDevice() {
+    var errorOutput =
+        """
+        [h264_nvenc @ 0x55e904799fc0] OpenEncodeSessionEx failed: incompatible client key (21): \
+        (no details)
+        [h264_nvenc @ 0x55e904799fc0] No capable devices found
+        [vost#0:0/h264_nvenc @ 0x55e904799b40] [enc:h264_nvenc @ 0x55e904799f40] Error while \
+        opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height.
+        [vf#0:0 @ 0x55e90479ab00] Error sending frames to consumers: Generic error in an external \
+        library
+        [vost#0:0/h264_nvenc @ 0x55e904799b40] [enc:h264_nvenc @ 0x55e904799f40] Could not open \
+        encoder before EOF
+        [out#0/mp4 @ 0x55e904799640] Nothing was written into output file, because at least one \
+        of its streams received no packets.
+        Conversion failed!""";
+
+    assertThat(HardwareEncoderFault.of(H264_NVENC, exitedWith(errorOutput)))
+        .contains(HardwareEncoderFault.SESSION_REFUSED);
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {
