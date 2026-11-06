@@ -545,12 +545,17 @@ public class FfmpegCommandBuilder {
   }
 
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
-    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
+    addChosenSourceStreams(cmd, decision, 0);
     var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio, 0);
     if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE && !namesAudioStream(audio)) {
       cmd.addAll(List.of("-map", "-0:s"));
     }
+  }
+
+  private static void addChosenSourceStreams(
+      List<String> cmd, TranscodeDecision decision, int input) {
+    cmd.addAll(List.of("-map", input + ":" + decision.videoDecision().streamIndex()));
+    addAudioStreamSelection(cmd, decision.audioDecision(), input);
   }
 
   // A negative map undoes the maps before it that it matches, so a named subtitle, data,
