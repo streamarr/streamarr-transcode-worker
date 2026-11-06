@@ -59,8 +59,10 @@ final class DolbyVisionRpuReader {
   private static final long MS_WEIGHT_OF_MINUS_1 = (1L << 13) - 1;
   private static final int LEVEL_6 = 6;
   private static final int LEVEL_6_BYTES = 8;
-  // Up to 7 bits of alignment, the 32-bit CRC and the 8-bit terminator.
-  private static final int TRAILER_BITS = 48;
+  // The pinned FFmpeg reads a second group of extension blocks only when the smallest one fits
+  // before the trailer: a count of 1 and a length of 0 as ue(v), a level, the CRC32 and the
+  // terminator.
+  private static final int SMALLEST_SECOND_GROUP_AND_TRAILER_BITS = 3 + 1 + 8 + 32 + 8;
   private static final int TERMINATOR = 0x80;
 
   // The payload bytes that FFmpeg 8.1 reads from each extension block level that it knows, in the
@@ -136,13 +138,13 @@ final class DolbyVisionRpuReader {
 
   /**
    * The level 6 block of the DM payload, after which FFmpeg reads a second group of extension
-   * blocks when more than the padding, the CRC and the terminator remain.
+   * blocks when the smallest one and the trailer fit in the bits that remain.
    */
   private static Optional<Optional<ContentLightLevel>> displayManagementLevel6(
       BitReader reader, Header header) {
     var counts = new BlockCounts(header.displayManagementCompression() != 0);
     var level6 = level6(reader, header, counts);
-    if (level6.isPresent() && reader.bitsLeft() > TRAILER_BITS) {
+    if (level6.isPresent() && reader.bitsLeft() >= SMALLEST_SECOND_GROUP_AND_TRAILER_BITS) {
       skipExtensionBlocks(reader, counts);
     }
 

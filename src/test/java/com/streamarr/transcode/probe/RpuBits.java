@@ -13,8 +13,9 @@ import lombok.Singular;
  * payload whose first group of extension blocks the test lists, followed by a second group when
  * {@code secondGroupBlockCount} is positive. A second group declares that many blocks and holds
  * {@code secondGroupBlocks}. The CRC32 is not checked by the probe, so the RPU carries zeros in its
- * place, then the terminator, 0x80 unless {@code terminator} names another byte. The DM payload's
- * metadata IDs are 0 and its signal is 12-bit unless the test names other values.
+ * place, then the terminator, 0x80 unless {@code terminator} names another byte, and then {@code
+ * bytesAfterTerminator}. The DM payload's metadata IDs are 0 and its signal is 12-bit unless the
+ * test names other values.
  */
 @Builder(toBuilder = true)
 record RpuBits(
@@ -29,7 +30,8 @@ record RpuBits(
     @Singular List<ExtensionBlock> extensionBlocks,
     long secondGroupBlockCount,
     @Singular List<ExtensionBlock> secondGroupBlocks,
-    Integer terminator) {
+    Integer terminator,
+    @Singular("byteAfterTerminator") List<Integer> bytesAfterTerminator) {
 
   private static final int COMPONENTS = 3;
 
@@ -68,7 +70,9 @@ record RpuBits(
       writeDisplayManagement(bits);
     }
 
-    return bits.align().put(32, 0).put(8, terminator == null ? 0x80 : terminator).bytes();
+    bits.align().put(32, 0).put(8, terminator == null ? 0x80 : terminator);
+    bytesAfterTerminator.forEach(value -> bits.put(8, value));
+    return bits.bytes();
   }
 
   private void writeMapping(Bits bits) {

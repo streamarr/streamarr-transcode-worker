@@ -434,6 +434,29 @@ class FfprobeExecutorRpuFactsTest {
   }
 
   @Test
+  @DisplayName(
+      "Should read no second group of extension blocks when fewer than 52 bits follow the first,"
+          + " as the pinned FFmpeg does")
+  void shouldReadNoSecondGroupWhenFewerThan52BitsFollowTheFirst() {
+    // The level 6 block ends 1 bit short of a byte, so the trailer and one byte after the
+    // terminator leave 49 bits: FFmpeg 8.1 would read a second group there, the pinned build not.
+    var rpu =
+        RpuBits.profile7(Nlq.identity())
+            .extensionBlock(ExtensionBlock.level6(1_000, 400))
+            .byteAfterTerminator(0x01)
+            .build();
+
+    var present = dolbyVisionOf(rpu, rpu, rpu);
+
+    assertThat(present.getRpuContentLightLevel())
+        .isEqualTo(
+            ContentLightLevel.newBuilder()
+                .setMaxContentLightLevel(1_000)
+                .setMaxFrameAverageLightLevel(400)
+                .build());
+  }
+
+  @Test
   @DisplayName("Should report the RPU's facts when zero bytes pad its NAL unit")
   void shouldReportTheRpusFactsWhenZeroBytesPadItsNalUnit() {
     var padded =
