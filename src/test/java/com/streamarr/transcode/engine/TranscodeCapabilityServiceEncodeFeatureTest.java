@@ -126,7 +126,8 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
       "Should run the Dolby Vision reshape test on an owner-only copy of the worker's profile 5"
           + " test frame and delete the copy when detection ends")
   void shouldRunTheDolbyVisionReshapeTestOnAnOwnerOnlyCopyOfTheTestFrameWhenDetectionRuns()
-      throws Exception {
+      throws IOException {
+    var testFrame = testFrame();
     var inputsOfTheReshapeTests = new ArrayList<Path>();
     var inputBytes = new ArrayList<byte[]>();
     var inputPermissions = new ArrayList<Set<PosixFilePermission>>();
@@ -144,7 +145,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
 
     service.detectCapabilities();
 
-    assertThat(inputBytes).hasSize(2).allSatisfy(bytes -> assertThat(bytes).isEqualTo(testFrame()));
+    assertThat(inputBytes).hasSize(2).allSatisfy(bytes -> assertThat(bytes).isEqualTo(testFrame));
     assertThat(inputPermissions)
         .hasSize(2)
         .allSatisfy(

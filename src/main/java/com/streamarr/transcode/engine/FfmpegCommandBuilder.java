@@ -29,6 +29,8 @@ public class FfmpegCommandBuilder {
   private static final String LEVEL_OPTION = "-level:v";
   // The planar 10-bit 4:2:0 format that the software encoders and the Dolby Vision reshape take.
   private static final String PLANAR_TEN_BIT_PIXEL_FORMAT = "yuv420p10le";
+  // The filter that converts each frame into the pixel format named after it.
+  private static final String FORMAT_FILTER = "format=";
 
   /**
    * The filters that reshape Dolby Vision without a compatible base with each frame's RPU into
@@ -36,7 +38,7 @@ public class FfmpegCommandBuilder {
    * for PQ in an 8-bit format.
    */
   static final String DOLBY_VISION_TO_PQ_RESHAPE_FILTERS =
-      "format="
+      FORMAT_FILTER
           + PLANAR_TEN_BIT_PIXEL_FORMAT
           + ",tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format="
           + PLANAR_TEN_BIT_PIXEL_FORMAT;
@@ -1097,8 +1099,9 @@ public class FfmpegCommandBuilder {
           DOLBY_VISION_TO_PQ_RESHAPE_FILTERS
               + encoderFormatAfterThePlanarOne(job)
               + hdrColourParameters(job);
-      case KEEP_THE_SOURCES_RANGE -> "format=" + encoderPixelFormat(job) + hdrColourParameters(job);
-      case CONVERT_TO_BT709 -> "format=" + encoderPixelFormat(job);
+      case KEEP_THE_SOURCES_RANGE ->
+          FORMAT_FILTER + encoderPixelFormat(job) + hdrColourParameters(job);
+      case CONVERT_TO_BT709 -> FORMAT_FILTER + encoderPixelFormat(job);
     };
   }
 
@@ -1158,7 +1161,7 @@ public class FfmpegCommandBuilder {
       return "";
     }
 
-    return ",format=" + format;
+    return "," + FORMAT_FILTER + format;
   }
 
   private static String encoderPixelFormat(TranscodeJob job) {

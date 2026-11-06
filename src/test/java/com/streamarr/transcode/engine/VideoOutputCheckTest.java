@@ -332,8 +332,9 @@ class VideoOutputCheckTest {
             .codecString(SYNTHETIC_HEVC_CODEC_STRING)
             .outputPictureFormat(new PictureFormat(10, ChromaSubsampling.CHROMA_420))
             .build();
+    var eightBitSegment = hevcSegmentWith(new byte[0]);
 
-    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(tenBitSdr, hevcSegmentWith(new byte[0])))
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(tenBitSdr, eightBitSegment))
         .isInstanceOf(FragmentedMp4Exception.class)
         .extracting("reason")
         .isEqualTo(Reason.OUTPUT_MISMATCH);
@@ -346,9 +347,10 @@ class VideoOutputCheckTest {
           + " another colour description")
   void shouldRefuseThePqEncodeWhenItsColrBoxIsMissingOrDeclaresAnotherColourDescription(
       String colour, byte[] boxesAfterTheRecord) {
+    var pq = mainTenPqEncode();
     var segment = mainTenSegment(PQ_SEI_UNITS, boxesAfterTheRecord);
 
-    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(mainTenPqEncode(), segment))
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(pq, segment))
         .isInstanceOf(FragmentedMp4Exception.class)
         .extracting("reason")
         .isEqualTo(Reason.OUTPUT_MISMATCH);
@@ -368,9 +370,10 @@ class VideoOutputCheckTest {
       "Should refuse the PQ encode as an output mismatch when its hvc1 record holds none of its"
           + " static HDR messages")
   void shouldRefuseThePqEncodeWhenItsRecordHoldsNoneOfItsStaticHdrMessages() {
+    var pq = mainTenPqEncode();
     var segment = mainTenSegment(List.of(), colr(9, 16, 9));
 
-    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(mainTenPqEncode(), segment))
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(pq, segment))
         .isInstanceOf(FragmentedMp4Exception.class)
         .extracting("reason")
         .isEqualTo(Reason.OUTPUT_MISMATCH);
