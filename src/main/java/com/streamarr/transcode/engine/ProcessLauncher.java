@@ -12,7 +12,7 @@ public interface ProcessLauncher {
 
   /**
    * Stops every thread of the process with SIGSTOP until the returned pause is resumed with
-   * SIGCONT. A process that has exited is left alone.
+   * SIGCONT. A process that has exited, or that no Linux pidfd names, keeps running.
    */
   default PausedProcess pause(Process process) {
     return ProcessSignals.stop(process);

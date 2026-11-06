@@ -10,23 +10,23 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Stops a child process with SIGSTOP and continues it with SIGCONT. On Linux both signals travel
- * through one pidfd that the pause holds until it resumes, so they keep naming the child even when
- * its pid is reused, and the resume needs no new file descriptor. Elsewhere, and where the kernel
- * opens no pidfd, they travel by pid, which leaves the window that {@link Process#destroy} also
- * leaves between its check and its signal.
+ * Stops a child process with SIGSTOP and continues it with SIGCONT, through one Linux pidfd that
+ * the pause holds until it resumes. The pidfd keeps naming the child even when its pid is reused,
+ * and the resume needs no new file descriptor. Where no pidfd names the child, on another system or
+ * when the kernel opens none, the process keeps running: a signal by pid could stop a process that
+ * took the pid of a child that has just exited.
  */
 final class ProcessSignals {
 
-  private static final boolean DARWIN =
-      System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
+  private static final boolean LINUX =
+      System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux");
 
-  // The same numbers on every Linux architecture.
+  // The same numbers on every Linux architecture that the worker image targets.
   private static final long SYS_PIDFD_SEND_SIGNAL = 424;
   private static final long SYS_PIDFD_OPEN = 434;
+  private static final long SIGCONT = 18;
+  private static final long SIGSTOP = 19;
 
-  private static final MethodHandle KILL =
-      downcall("kill", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
   private static final MethodHandle CLOSE =
       downcall("close", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
   // syscall(2) is variadic, and every argument after the number travels as a long.
@@ -43,28 +43,17 @@ final class ProcessSignals {
 
   private static final PausedProcess NOTHING_TO_RESUME = () -> {};
 
-  private enum Signal {
-    STOP(19, 17),
-    CONTINUE(18, 19);
-
-    private final int linuxNumber;
-    private final int darwinNumber;
-
-    Signal(int linuxNumber, int darwinNumber) {
-      this.linuxNumber = linuxNumber;
-      this.darwinNumber = darwinNumber;
-    }
-
-    private int number() {
-      return DARWIN ? darwinNumber : linuxNumber;
-    }
-  }
-
   private ProcessSignals() {}
 
-  /** Stops the process unless it has exited; the returned pause continues it. */
+  /**
+   * Stops the process unless it has exited or no pidfd names it; the returned pause continues it.
+   */
   static PausedProcess stop(Process process) {
-    return invoke(() -> DARWIN ? stopByPid(process) : stopThroughPidfd(process));
+    if (!LINUX) {
+      return NOTHING_TO_RESUME;
+    }
+
+    return invoke(() -> stopThroughPidfd(process));
   }
 
   // A child whose handle is alive after the pidfd opened still held its pid then, so the pidfd
@@ -72,7 +61,7 @@ final class ProcessSignals {
   private static PausedProcess stopThroughPidfd(Process process) throws Throwable {
     var pidfd = (long) PIDFD_OPEN.invokeExact(SYS_PIDFD_OPEN, process.pid(), 0L);
     if (pidfd < 0) {
-      return stopByPid(process);
+      return NOTHING_TO_RESUME;
     }
 
     if (!process.toHandle().isAlive()) {
@@ -80,37 +69,13 @@ final class ProcessSignals {
       return NOTHING_TO_RESUME;
     }
 
-    sendThroughPidfd(pidfd, Signal.STOP);
+    sendThroughPidfd(pidfd, SIGSTOP);
     return new PidfdPause(pidfd);
   }
 
-  // kill(2) fails only for a child that has exited since the check, which needs no signal. The
-  // resume checks only the JDK's own exit record, which needs no file descriptor; a SIGCONT that
-  // reaches a process that reused the pid continues a process that runs anyway.
-  private static PausedProcess stopByPid(Process process) throws Throwable {
-    if (!process.toHandle().isAlive()) {
-      return NOTHING_TO_RESUME;
-    }
-
-    var pid = Math.toIntExact(process.pid());
-    int _ = (int) KILL.invokeExact(pid, Signal.STOP.number());
-    return () ->
-        invoke(
-            () -> {
-              if (process.isAlive()) {
-                int _ = (int) KILL.invokeExact(pid, Signal.CONTINUE.number());
-              }
-
-              return NOTHING_TO_RESUME;
-            });
-  }
-
   // pidfd_send_signal(2) fails only for a child that has exited, which needs no signal.
-  private static void sendThroughPidfd(long pidfd, Signal signal) throws Throwable {
-    long _ =
-        (long)
-            PIDFD_SEND_SIGNAL.invokeExact(
-                SYS_PIDFD_SEND_SIGNAL, pidfd, (long) signal.number(), 0L, 0L);
+  private static void sendThroughPidfd(long pidfd, long signal) throws Throwable {
+    long _ = (long) PIDFD_SEND_SIGNAL.invokeExact(SYS_PIDFD_SEND_SIGNAL, pidfd, signal, 0L, 0L);
   }
 
   private static void close(long pidfd) throws Throwable {
@@ -152,7 +117,7 @@ final class ProcessSignals {
       invoke(
           () -> {
             try {
-              sendThroughPidfd(pidfd, Signal.CONTINUE);
+              sendThroughPidfd(pidfd, SIGCONT);
             } finally {
               close(pidfd);
             }

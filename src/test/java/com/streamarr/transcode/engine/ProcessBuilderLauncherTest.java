@@ -29,6 +29,7 @@ import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
@@ -64,6 +65,7 @@ class ProcessBuilderLauncherTest {
   }
 
   @Test
+  @EnabledOnOs(OS.LINUX)
   @DisplayName(
       "Should stop a launched process's output while it is paused and continue it once resumed")
   void shouldStopALaunchedProcesssOutputWhileItIsPausedAndContinueItOnceResumed()
@@ -93,6 +95,24 @@ class ProcessBuilderLauncherTest {
           .until(() -> output.available() == settled);
       paused.resume();
       await().atMost(OUTCOME_LIMIT).until(() -> output.available() > settled);
+    } finally {
+      process.destroyForcibly();
+    }
+  }
+
+  @Test
+  @DisabledOnOs(OS.LINUX)
+  @DisplayName("Should leave a launched process running when pausing it where no pidfd names it")
+  void shouldLeaveALaunchedProcessRunningWhenPausingItWhereNoPidfdNamesIt() throws IOException {
+    var process =
+        launcher.launch(
+            List.of("bash", "-c", "while :; do printf x; sleep 0.01; done"), UUID.randomUUID());
+    try {
+      var output = process.getInputStream();
+      launcher.pause(process);
+      var before = output.available();
+
+      await().atMost(OUTCOME_LIMIT).until(() -> output.available() > before);
     } finally {
       process.destroyForcibly();
     }
