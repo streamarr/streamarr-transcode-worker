@@ -295,16 +295,25 @@ public class FfmpegCommandBuilder {
   private static void addSourceStreamsOutput(
       List<String> cmd, TranscodeDecision decision, EncoderInput input) {
     var source = input.sourceInputIndex();
-    var audio = decision.audioDecision();
     cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
-    addAudioStreamSelection(cmd, audio, source);
-    cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
-    if (audio.mode() == AudioMode.TRANSCODE) {
-      cmd.addAll(List.of("-map", audioMap(audio, source), "-c:2", "pcm_f32le"));
-    }
-
+    addSourceAudioStreams(cmd, decision.audioDecision(), source);
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
+  }
+
+  // The exclusions undo both maps of a named stream that is no audio stream, and the PCM encoder
+  // applies only to an audio stream, so the producer still refuses the job for its sound track.
+  private static void addSourceAudioStreams(List<String> cmd, AudioDecision audio, int source) {
+    if (audio.mode() != AudioMode.TRANSCODE) {
+      addAudioStreamSelection(cmd, audio, source);
+      cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
+      return;
+    }
+
+    var audioMap = audioMap(audio, source);
+    cmd.addAll(List.of("-map", audioMap, "-map", audioMap));
+    addNamedAudioStreamExclusions(cmd, audio, source);
+    cmd.addAll(List.of("-c", "copy", "-copypriorss", "1", "-c:a:1", "pcm_f32le"));
   }
 
   // The copy's muxer replaces each video packet's duration with the gap to the next packet's
