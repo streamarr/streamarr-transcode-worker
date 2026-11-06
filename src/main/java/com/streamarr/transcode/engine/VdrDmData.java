@@ -25,6 +25,10 @@ record VdrDmData(
   // The fewest bits that a CM v4.0 block list and the CRC32 with the final byte take together: a
   // level 254 block of two bytes, the CRC32 and the final byte.
   private static final int FEWEST_BITS_WITH_CMV40_BLOCKS = 56;
+  // The pinned decoder reads each list's count as an Exp-Golomb code of at most 31 and keeps at
+  // most 32 blocks, so a longer list never plays; the bound also keeps a list of empty blocks, nine
+  // bits each, from allocating a block per nine bits of input.
+  private static final long MOST_BLOCKS_IN_A_LIST = 31;
   private static final int MATRIX_COEFFICIENTS = 9;
   private static final int OFFSETS = 3;
 
@@ -168,6 +172,14 @@ record VdrDmData(
 
   private static List<ExtensionBlock> parseBlocks(RpuBitReader reader) {
     var count = reader.unsignedExpGolomb();
+    if (count > MOST_BLOCKS_IN_A_LIST) {
+      throw new DolbyVisionRpuException(
+          "an extension block list of "
+              + count
+              + " blocks where the decoder reads at most "
+              + MOST_BLOCKS_IN_A_LIST);
+    }
+
     reader.alignmentZeroBits();
     var blocks = new ArrayList<ExtensionBlock>();
     for (var block = 0; block < count; block++) {

@@ -6,7 +6,9 @@ package com.streamarr.transcode.engine;
  */
 final class RpuBitReader {
 
-  private static final int LONGEST_EXP_GOLOMB_RUN = 32;
+  // The syntax codes ue(v) values up to 2^32 - 2, which take 31 leading zeros; a longer run codes
+  // a value that no 32-bit field and no write of this port holds.
+  private static final int LONGEST_EXP_GOLOMB_RUN = 31;
   private static final int WIDEST_FIELD = 32;
 
   private final byte[] bytes;
@@ -43,13 +45,21 @@ final class RpuBitReader {
     return bits(1) == 1;
   }
 
-  /** ue(v): a run of zero bits, a one bit, then as many value bits as the run held. */
+  /**
+   * ue(v): a run of zero bits, a one bit, then as many value bits as the run held.
+   *
+   * @throws DolbyVisionRpuException when the run codes a value above 2^32 - 2, the largest that the
+   *     syntax defines, so that every value read is one {@link RpuBitWriter} writes
+   */
   long unsignedExpGolomb() {
     var leadingZeros = 0;
     while (!flag()) {
       leadingZeros++;
       if (leadingZeros > LONGEST_EXP_GOLOMB_RUN) {
-        throw new DolbyVisionRpuException("an Exp-Golomb code runs past 32 bits");
+        throw new DolbyVisionRpuException(
+            "an Exp-Golomb code of more than "
+                + LONGEST_EXP_GOLOMB_RUN
+                + " leading zeros, past the largest value the syntax defines");
       }
     }
 

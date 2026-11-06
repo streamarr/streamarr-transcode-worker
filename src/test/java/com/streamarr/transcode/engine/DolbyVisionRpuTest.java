@@ -105,6 +105,12 @@ class DolbyVisionRpuTest {
         Arguments.of("compressed DM metadata", SyntheticRpus.profile7().compressedDm()),
         Arguments.of("no DM metadata", SyntheticRpus.profile7().withoutDmMetadata()),
         Arguments.of("the previous RPU's mapping", SyntheticRpus.profile7().previousRpu(0)),
+        Arguments.of(
+            "a previous RPU id of 4294967294, the largest value a ue(v) codes",
+            SyntheticRpus.profile7().previousRpu(4_294_967_294L)),
+        Arguments.of(
+            "a block list of 31 extension blocks, as many as the decoder reads",
+            SyntheticRpus.profile7().emptyBlocks(31)),
         Arguments.of("a profile 8 RPU", SyntheticRpus.profile7().withoutResidual()));
   }
 
@@ -195,11 +201,14 @@ class DolbyVisionRpuTest {
         .isEqualTo(HEX.formatHex(SyntheticRpus.convertedPreviousRpu()));
   }
 
+  // The refusal covers the write as well: a value the parser keeps is one the writer codes, so a
+  // malformed RPU never fails the copy as anything but a conversion failure.
   @ParameterizedTest(name = "{0}")
   @MethodSource("unconvertibleRpus")
-  @DisplayName("Should refuse an RPU that it cannot parse or convert")
-  void shouldRefuseAnRpuThatItCannotParseOrConvert(String name, byte[] escaped) {
-    assertThatThrownBy(() -> DolbyVisionRpu.parse(ByteBuffer.wrap(escaped)).convertedToProfile81())
+  @DisplayName("Should refuse an RPU that it cannot parse, convert and write")
+  void shouldRefuseAnRpuThatItCannotParseConvertAndWrite(String name, byte[] escaped) {
+    assertThatThrownBy(
+            () -> DolbyVisionRpu.parse(ByteBuffer.wrap(escaped)).convertedToProfile81().write())
         .isInstanceOf(DolbyVisionRpuException.class);
   }
 
@@ -232,6 +241,20 @@ class DolbyVisionRpuTest {
                 .coefficientLog2Denom(2_147_483_648L)
                 .fractionBits(0)
                 .escaped()),
+        Arguments.of(
+            "a block list of 32 extension blocks, above the 31 that the decoder reads",
+            SyntheticRpus.profile7().emptyBlocks(32).escaped()),
+        Arguments.of(
+            "a previous RPU id of 4294967295, above the largest value a ue(v) codes",
+            SyntheticRpus.profile7().previousRpu(4_294_967_295L).escaped()),
+        Arguments.of(
+            "a piece of mapping_idc 2", SyntheticRpus.profile7().lumaMappingIdc(2).escaped()),
+        Arguments.of(
+            "a piece of mapping_idc 4294967296, which is 0 in 32 bits",
+            SyntheticRpus.profile7().lumaMappingIdc(4_294_967_296L).escaped()),
+        Arguments.of(
+            "a piece of mapping_idc 4294967297, which is 1 in 32 bits",
+            SyntheticRpus.profile7().lumaMappingIdc(4_294_967_297L).escaped()),
         Arguments.of("a profile 5 RPU", SyntheticRpus.profile7().profile5().escaped()));
   }
 

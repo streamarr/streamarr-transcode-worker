@@ -722,6 +722,19 @@ class SegmentAssemblerBitstreamRewriteTest {
             "an RPU in a NAL unit with temporal id 1, which the decoder skips",
             sample(aud(), slice(0), withSecondHeaderByte(felRpu, 0x02))),
         Arguments.of(
+            "an RPU with a block list of 32 extension blocks of no bytes",
+            sample(aud(), slice(0), SyntheticRpus.profile7().emptyBlocks(32).nalUnit())),
+        Arguments.of(
+            "an RPU that names previous RPU 4294967295, which no ue(v) writes",
+            sample(
+                aud(), slice(0), SyntheticRpus.profile7().previousRpu(4_294_967_295L).nalUnit())),
+        Arguments.of(
+            "an RPU with a piece of mapping_idc 4294967296, which is 0 in 32 bits",
+            sample(
+                aud(),
+                slice(0),
+                SyntheticRpus.profile7().lumaMappingIdc(4_294_967_296L).nalUnit())),
+        Arguments.of(
             "a profile 5 RPU",
             sample(aud(), slice(0), SyntheticRpus.profile7().profile5().nalUnit())));
   }
