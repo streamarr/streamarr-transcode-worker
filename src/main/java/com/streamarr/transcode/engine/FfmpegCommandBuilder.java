@@ -485,19 +485,26 @@ public class FfmpegCommandBuilder {
     }
 
     cmd.addAll(List.of("-map", audioMap(audio, input)));
-    if (namesAudioStream(audio)) {
-      var exclusion = "-" + input + ":";
-      cmd.addAll(
-          List.of(
-              "-map",
-              exclusion + "s",
-              "-map",
-              exclusion + "d",
-              "-map",
-              exclusion + "t",
-              "-map",
-              exclusion + "disp:attached_pic"));
+    addNamedAudioStreamExclusions(cmd, audio, input);
+  }
+
+  private static void addNamedAudioStreamExclusions(
+      List<String> cmd, AudioDecision audio, int input) {
+    if (!namesAudioStream(audio)) {
+      return;
     }
+
+    var exclusion = "-" + input + ":";
+    cmd.addAll(
+        List.of(
+            "-map",
+            exclusion + "s",
+            "-map",
+            exclusion + "d",
+            "-map",
+            exclusion + "t",
+            "-map",
+            exclusion + "disp:attached_pic"));
   }
 
   private static boolean namesAudioStream(AudioDecision audio) {
