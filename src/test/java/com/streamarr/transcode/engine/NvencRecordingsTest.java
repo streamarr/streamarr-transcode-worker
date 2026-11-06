@@ -115,6 +115,19 @@ class NvencRecordingsTest {
           + " and its GOP restart, when the worker marks an NVENC encoder keyframe-verified")
   void
       shouldHoldEveryExtendedRecordingAtEveryDefaultLadderRungWithItsReplacementPairAndItsGopRestartWhenTheWorkerMarksAnNvencEncoderKeyframeVerified() {
+    var required =
+        NVENC_ENCODERS.stream()
+            .filter(FfmpegCommandBuilder::isKeyframeVerified)
+            .flatMap(encoder -> DEFAULT_LADDER_RUNGS.stream().map(rung -> encoder + "-" + rung))
+            .toList();
+
+    assertThat(required).as("the keyframe-verified NVENC encoders' rungs").isNotEmpty();
+    assertHoldsTheExtendedRecordingsOf(required);
+  }
+
+  // Each prefix needs its extended recording from the start, its replacement pair and its
+  // missed-keyframe recording's GOP restart.
+  private static void assertHoldsTheExtendedRecordingsOf(List<String> prefixes) {
     var document = committedRecordings();
     var recorded = new ArrayList<String>();
     var withGopRestart = new ArrayList<String>();
@@ -129,19 +142,12 @@ class NvencRecordingsTest {
     document
         .get("initializationSegmentPairs")
         .forEach(pair -> paired.add(pair.get("replacement").asString()));
-    var required =
-        NVENC_ENCODERS.stream()
-            .filter(FfmpegCommandBuilder::isKeyframeVerified)
-            .flatMap(encoder -> DEFAULT_LADDER_RUNGS.stream().map(rung -> encoder + "-" + rung))
-            .toList();
-
-    assertThat(required).as("the keyframe-verified NVENC encoders' rungs").isNotEmpty();
     assertThat(recorded)
-        .containsAll(required.stream().map(prefix -> prefix + "-extended-first").toList());
+        .containsAll(prefixes.stream().map(prefix -> prefix + "-extended-first").toList());
     assertThat(paired)
-        .containsAll(required.stream().map(prefix -> prefix + "-extended-replacement").toList());
+        .containsAll(prefixes.stream().map(prefix -> prefix + "-extended-replacement").toList());
     assertThat(withGopRestart)
-        .containsAll(required.stream().map(prefix -> prefix + "-extended-missed").toList());
+        .containsAll(prefixes.stream().map(prefix -> prefix + "-extended-missed").toList());
   }
 
   private static JsonNode committedRecordings() {
