@@ -68,13 +68,17 @@ final class ProcessSignals {
       return Optional.empty();
     }
 
-    sendThroughPidfd(pidfd, SIGSTOP);
+    if (sendThroughPidfd(pidfd, SIGSTOP) < 0) {
+      close(pidfd);
+      return Optional.empty();
+    }
+
     return Optional.of(new PidfdPause(pidfd));
   }
 
-  // pidfd_send_signal(2) fails only for a child that has exited, which needs no signal.
-  private static void sendThroughPidfd(long pidfd, long signal) throws Throwable {
-    long _ = (long) PIDFD_SEND_SIGNAL.invokeExact(SYS_PIDFD_SEND_SIGNAL, pidfd, signal, 0L, 0L);
+  // Negative when the child has exited or the kernel refuses the signal.
+  private static long sendThroughPidfd(long pidfd, long signal) throws Throwable {
+    return (long) PIDFD_SEND_SIGNAL.invokeExact(SYS_PIDFD_SEND_SIGNAL, pidfd, signal, 0L, 0L);
   }
 
   private static void close(long pidfd) throws Throwable {
@@ -116,7 +120,8 @@ final class ProcessSignals {
       invoke(
           () -> {
             try {
-              sendThroughPidfd(pidfd, SIGCONT);
+              // A child that SIGSTOP reached can refuse SIGCONT only by having exited.
+              long _ = sendThroughPidfd(pidfd, SIGCONT);
             } finally {
               close(pidfd);
             }

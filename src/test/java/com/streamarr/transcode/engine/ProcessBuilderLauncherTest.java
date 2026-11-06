@@ -7,6 +7,7 @@ import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDI
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
@@ -154,6 +155,19 @@ class ProcessBuilderLauncherTest {
 
   @Test
   @EnabledOnOs(OS.LINUX)
+  @DisplayName("Should report no pause when the kernel refuses the stop signal")
+  void shouldReportNoPauseWhenTheKernelRefusesTheStopSignal() {
+    // An unprivileged worker may open a pidfd for init but may not signal it.
+    assumeFalse("root".equals(System.getProperty("user.name")));
+    var init = ProcessHandle.of(1).orElseThrow();
+
+    var paused = launcher.pause(new ProcessNamingPid(init.pid(), init));
+
+    assertThat(paused).isEmpty();
+  }
+
+  @Test
+  @EnabledOnOs(OS.LINUX)
   @DisplayName(
       "Should leave the process that took a child's pid alone when the child is reaped before it"
           + " is paused")
@@ -163,7 +177,7 @@ class ProcessBuilderLauncherTest {
     assertThat(child.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
     var successor = launcher.launch(List.of("sleep", "60"), UUID.randomUUID());
     try {
-      var paused = launcher.pause(new ReapedChildWhosePidWasTaken(child, successor.pid()));
+      var paused = launcher.pause(new ProcessNamingPid(successor.pid(), child.toHandle()));
 
       assertThat(paused).isEmpty();
       await()
@@ -392,19 +406,21 @@ class ProcessBuilderLauncherTest {
 
   // A child that the kernel has reaped, whose pid another process took before the JDK recorded
   // the exit: Process.isAlive still answers true, and the pid names the successor.
-  private static final class ReapedChildWhosePidWasTaken extends Process {
+  // A process that names this pid and answers liveness through this handle, which may belong to
+  // another process: a reaped child whose pid was taken, or a process the worker did not start.
+  private static final class ProcessNamingPid extends Process {
 
-    private final Process reaped;
-    private final long successorPid;
+    private final long pid;
+    private final ProcessHandle handle;
 
-    private ReapedChildWhosePidWasTaken(Process reaped, long successorPid) {
-      this.reaped = reaped;
-      this.successorPid = successorPid;
+    private ProcessNamingPid(long pid, ProcessHandle handle) {
+      this.pid = pid;
+      this.handle = handle;
     }
 
     @Override
     public long pid() {
-      return successorPid;
+      return pid;
     }
 
     @Override
@@ -414,7 +430,7 @@ class ProcessBuilderLauncherTest {
 
     @Override
     public ProcessHandle toHandle() {
-      return reaped.toHandle();
+      return handle;
     }
 
     @Override
@@ -444,7 +460,7 @@ class ProcessBuilderLauncherTest {
 
     @Override
     public void destroy() {
-      // The child has exited.
+      // The test never destroys a process that it did not start.
     }
   }
 
