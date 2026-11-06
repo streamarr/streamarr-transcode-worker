@@ -52,13 +52,13 @@ final class ProcessSignals {
       return Optional.empty();
     }
 
-    return invoke(() -> stopThroughPidfd(process));
+    return stopThroughPidfd(process);
   }
 
   // A child whose handle is alive after the pidfd opened still held its pid then, so the pidfd
   // names the child. The handle compares the process's start time, which Process.isAlive does not.
-  private static Optional<PausedProcess> stopThroughPidfd(Process process) throws Throwable {
-    var pidfd = (long) PIDFD_OPEN.invokeExact(SYS_PIDFD_OPEN, process.pid(), 0L);
+  private static Optional<PausedProcess> stopThroughPidfd(Process process) {
+    var pidfd = openPidfd(process.pid());
     if (pidfd < 0) {
       return Optional.empty();
     }
@@ -76,29 +76,40 @@ final class ProcessSignals {
     return Optional.of(new PidfdPause(pidfd));
   }
 
-  // Negative when the child has exited or the kernel refuses the signal.
-  private static long sendThroughPidfd(long pidfd, long signal) throws Throwable {
-    return (long) PIDFD_SEND_SIGNAL.invokeExact(SYS_PIDFD_SEND_SIGNAL, pidfd, signal, 0L, 0L);
-  }
-
-  private static void close(long pidfd) throws Throwable {
-    int _ = (int) CLOSE.invokeExact(Math.toIntExact(pidfd));
-  }
-
   @SuppressWarnings("java:S1181") // MethodHandle.invokeExact declares Throwable.
-  private static Optional<PausedProcess> invoke(NativeCall call) {
+  private static long openPidfd(long pid) {
     try {
-      return call.run();
-    } catch (RuntimeException | Error e) {
-      throw e;
+      return (long) PIDFD_OPEN.invokeExact(SYS_PIDFD_OPEN, pid, 0L);
     } catch (Throwable e) {
-      throw new IllegalStateException("The signal could not be sent", e);
+      throw unchecked(e);
     }
   }
 
-  @FunctionalInterface
-  private interface NativeCall {
-    Optional<PausedProcess> run() throws Throwable;
+  // Negative when the child has exited or the kernel refuses the signal.
+  @SuppressWarnings("java:S1181") // MethodHandle.invokeExact declares Throwable.
+  private static long sendThroughPidfd(long pidfd, long signal) {
+    try {
+      return (long) PIDFD_SEND_SIGNAL.invokeExact(SYS_PIDFD_SEND_SIGNAL, pidfd, signal, 0L, 0L);
+    } catch (Throwable e) {
+      throw unchecked(e);
+    }
+  }
+
+  @SuppressWarnings("java:S1181") // MethodHandle.invokeExact declares Throwable.
+  private static void close(long pidfd) {
+    try {
+      int _ = (int) CLOSE.invokeExact(Math.toIntExact(pidfd));
+    } catch (Throwable e) {
+      throw unchecked(e);
+    }
+  }
+
+  private static RuntimeException unchecked(Throwable e) {
+    return switch (e) {
+      case RuntimeException runtime -> runtime;
+      case Error error -> throw error;
+      default -> new IllegalStateException("The signal could not be sent", e);
+    };
   }
 
   // Resumes once, and closes the pidfd with that resume.
@@ -117,17 +128,12 @@ final class ProcessSignals {
         return;
       }
 
-      invoke(
-          () -> {
-            try {
-              // A child that SIGSTOP reached can refuse SIGCONT only by having exited.
-              long _ = sendThroughPidfd(pidfd, SIGCONT);
-            } finally {
-              close(pidfd);
-            }
-
-            return Optional.empty();
-          });
+      try {
+        // A child that SIGSTOP reached can refuse SIGCONT only by having exited.
+        long _ = sendThroughPidfd(pidfd, SIGCONT);
+      } finally {
+        close(pidfd);
+      }
     }
   }
 
