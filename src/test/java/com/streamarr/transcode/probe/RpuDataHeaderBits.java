@@ -26,6 +26,7 @@ record RpuDataHeaderBits(
     long elBitDepthMinus8,
     long vdrBitDepthMinus8,
     boolean spatialResamplingFilter,
+    int dmCompression,
     boolean elSpatialResamplingFilter,
     boolean disableResidual) {
 
@@ -85,7 +86,7 @@ record RpuDataHeaderBits(
           .unsignedExpGolomb(elBitDepthMinus8)
           .unsignedExpGolomb(vdrBitDepthMinus8)
           .flag(spatialResamplingFilter)
-          .put(3, 0)
+          .put(3, dmCompression)
           .flag(elSpatialResamplingFilter)
           .flag(disableResidual);
     }

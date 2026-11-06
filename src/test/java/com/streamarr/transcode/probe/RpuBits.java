@@ -107,6 +107,18 @@ record RpuBits(
 
   private void writeDisplayManagement(Bits bits) {
     bits.unsignedExpGolomb(0).unsignedExpGolomb(0).unsignedExpGolomb(0);
+    if (header.dmCompression() == 0) {
+      writeColorMetadata(bits);
+    }
+
+    writeExtensionBlocks(bits, extensionBlocks.size(), extensionBlocks);
+    if (secondGroupBlockCount > 0) {
+      writeExtensionBlocks(bits, secondGroupBlockCount, secondGroupBlocks);
+    }
+  }
+
+  // The color metadata of an uncompressed DM payload.
+  private static void writeColorMetadata(Bits bits) {
     for (var matrixValue = 0; matrixValue < 9; matrixValue++) {
       bits.put(16, 0);
     }
@@ -121,10 +133,6 @@ record RpuBits(
 
     bits.put(16, 0).put(16, 0).put(16, 0).put(32, 0).put(5, 12).put(2, 0).put(2, 0).put(2, 0);
     bits.put(12, 62).put(12, 3696).put(10, 42);
-    writeExtensionBlocks(bits, extensionBlocks.size(), extensionBlocks);
-    if (secondGroupBlockCount > 0) {
-      writeExtensionBlocks(bits, secondGroupBlockCount, secondGroupBlocks);
-    }
   }
 
   private static void writeExtensionBlocks(Bits bits, long count, List<ExtensionBlock> blocks) {

@@ -328,12 +328,9 @@ final class DolbyVisionRpuReader {
     for (long block = 0; block < blocks; block++) {
       var length = reader.unsignedExpGolomb();
       var level = reader.bits(8);
-      // FFmpeg ignores a static block, such as level 6, in a compressed DM payload.
+      requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
+      // FFmpeg parses a static block, such as level 6, of a compressed DM payload but ignores it.
       var isReadable = header.displayManagementCompression() == 0;
-      if (isReadable) {
-        requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
-      }
-
       if (level == LEVEL_6 && isReadable && level6.isEmpty()) {
         reader.bits(16);
         reader.bits(16);

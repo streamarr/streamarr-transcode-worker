@@ -154,8 +154,9 @@ class FfprobeExecutorRpuFactsTest {
           + " FFmpeg does")
   void shouldParseAnExtensionBlockOfItsMinimumLengthAndRejectOneAByteShorter(
       int level, int group, int minimumBytes) {
-    var whole = dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes)), group);
-    var shorter = dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes - 1)), group);
+    var whole = dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes)), group, 0);
+    var shorter =
+        dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes - 1)), group, 0);
 
     assertThat(whole.getEnhancementLayer())
         .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL);
@@ -163,6 +164,24 @@ class FfprobeExecutorRpuFactsTest {
     assertThat(shorter.getEnhancementLayer())
         .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_UNSPECIFIED);
     assertThat(shorter.hasRpuContentLightLevel()).isFalse();
+  }
+
+  @ParameterizedTest(name = "level {0} in group {1}, at least {2} bytes")
+  @MethodSource("blockMinimums")
+  @DisplayName(
+      "Should reject an extension block a byte shorter than its minimum when the DM payload is"
+          + " compressed")
+  void shouldRejectAnExtensionBlockAByteShorterThanItsMinimumWhenTheDmPayloadIsCompressed(
+      int level, int group, int minimumBytes) {
+    var whole = dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes)), group, 1);
+    var shorter =
+        dolbyVisionWithBlock(new ExtensionBlock(level, zeros(minimumBytes - 1)), group, 1);
+
+    assertThat(whole.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL);
+    assertThat(whole.hasRpuContentLightLevel()).isFalse();
+    assertThat(shorter.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_UNSPECIFIED);
   }
 
   // FFmpeg 8.1's dovi_rpudec.c: the payload each recognized level needs, by group.
@@ -182,8 +201,10 @@ class FfprobeExecutorRpuFactsTest {
         Arguments.of(254, 2, 2));
   }
 
-  private static DolbyVisionPresent dolbyVisionWithBlock(ExtensionBlock block, int group) {
+  private static DolbyVisionPresent dolbyVisionWithBlock(
+      ExtensionBlock block, int group, int dmCompression) {
     var rpu = RpuBits.profile7(Nlq.identity()).extensionBlock(ExtensionBlock.level6(1_000, 400));
+    rpu.header(rpu.build().header().toBuilder().dmCompression(dmCompression).build());
     if (group == 1) {
       rpu.extensionBlock(block);
     }
