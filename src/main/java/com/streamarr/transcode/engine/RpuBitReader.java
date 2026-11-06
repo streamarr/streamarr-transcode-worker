@@ -59,10 +59,18 @@ final class RpuBitReader {
     return -(code / 2);
   }
 
-  /** The next bytes, from the current bit position, which need not lie on a byte boundary. */
-  byte[] bytes(int count) {
-    var read = new byte[count];
-    for (var index = 0; index < count; index++) {
+  /**
+   * The next bytes, from the current bit position, which need not lie on a byte boundary.
+   *
+   * @throws DolbyVisionRpuException when the bytes end first, before any byte is allocated for them
+   */
+  byte[] bytes(long count) {
+    if (count > bitsRemaining() / 8) {
+      throw new DolbyVisionRpuException("the RPU ends before its syntax does");
+    }
+
+    var read = new byte[(int) count];
+    for (var index = 0; index < read.length; index++) {
       read[index] = (byte) bits(8);
     }
 

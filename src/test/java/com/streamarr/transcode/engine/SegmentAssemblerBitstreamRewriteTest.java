@@ -713,6 +713,9 @@ class SegmentAssemblerBitstreamRewriteTest {
         Arguments.of("a sample with two RPUs", sample(aud(), slice(0), felRpu, felRpu)),
         Arguments.of("an RPU cut short", sample(aud(), slice(0), rpu(0))),
         Arguments.of(
+            "a NAL unit of one byte beside an RPU",
+            sample(aud(), new byte[] {0, 0, 0, 1, 0x7C}, slice(0), felRpu)),
+        Arguments.of(
             "a profile 5 RPU",
             sample(aud(), slice(0), SyntheticRpus.profile7().profile5().nalUnit())));
   }

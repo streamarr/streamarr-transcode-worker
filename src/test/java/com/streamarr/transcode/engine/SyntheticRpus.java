@@ -106,8 +106,29 @@ final class SyntheticRpus {
     private int vdrRpuProfile = 1;
     private boolean fullRange;
     private int trailingZeroBytes;
+    private OptionalLong firstBlockClaimedBytes = OptionalLong.empty();
+    private byte[] bytesBeforeCrc32 = new byte[0];
 
     private Builder() {}
+
+    /** An RPU whose first extension block claims the length while it holds its five bytes. */
+    Builder firstBlockClaiming(long bytes) {
+      firstBlockClaimedBytes = OptionalLong.of(bytes);
+      return this;
+    }
+
+    /**
+     * Bytes that the syntax does not define, between the alignment after the metadata and the
+     * CRC32.
+     */
+    Builder bytesBeforeCrc32(int... values) {
+      bytesBeforeCrc32 = new byte[values.length];
+      for (var index = 0; index < values.length; index++) {
+        bytesBeforeCrc32[index] = (byte) values[index];
+      }
+
+      return this;
+    }
 
     Builder nlq(Nlq nlq) {
       this.nlq = List.of(nlq, nlq, nlq);
@@ -190,6 +211,10 @@ final class SyntheticRpus {
       }
 
       sink.align();
+      for (var value : bytesBeforeCrc32) {
+        sink.u(value & 0xFF, 8);
+      }
+
       var data = sink.toBytes();
       var out = new ByteArrayOutputStream();
       out.writeBytes(data);
@@ -288,7 +313,7 @@ final class SyntheticRpus {
 
       // CM v2.9: L1, L2, L5 and L6 blocks.
       sink.ue(4).align();
-      sink.ue(5).u(1, 8).u(7, 12).u(3079, 12).u(1500, 12).u(0, 4);
+      sink.ue(firstBlockClaimedBytes.orElse(5)).u(1, 8).u(7, 12).u(3079, 12).u(1500, 12).u(0, 4);
       sink.ue(11).u(2, 8).u(2081, 12).u(2048, 12).u(2048, 12).u(2048, 12).u(2048, 12).u(2048, 12);
       sink.u(2048, 13).u(0, 3);
       sink.ue(7).u(5, 8).u(0, 13).u(0, 13).u(60, 13).u(60, 13).u(0, 4);

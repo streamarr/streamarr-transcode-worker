@@ -173,7 +173,7 @@ record VdrDmData(
     for (var block = 0; block < count; block++) {
       var length = reader.unsignedExpGolomb();
       var level = (int) reader.bits(8);
-      blocks.add(new ExtensionBlock(level, reader.bytes(Math.toIntExact(length))));
+      blocks.add(new ExtensionBlock(level, reader.bytes(length)));
     }
 
     return blocks;

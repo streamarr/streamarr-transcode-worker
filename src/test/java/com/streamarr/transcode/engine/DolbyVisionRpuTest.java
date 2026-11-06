@@ -217,6 +217,30 @@ class DolbyVisionRpuTest {
         Arguments.of("a CRC32 that does not match", wrongCrc),
         Arguments.of("a NAL prefix other than 25", wrongPrefix),
         Arguments.of("a last byte other than 0x80", noFinalByte),
+        Arguments.of(
+            "an extension block that claims more bytes than the RPU holds",
+            SyntheticRpus.profile7().firstBlockClaiming(1_000).escaped()),
+        Arguments.of(
+            "an extension block that claims 2147483648 bytes",
+            SyntheticRpus.profile7().firstBlockClaiming(2_147_483_648L).escaped()),
         Arguments.of("a profile 5 RPU", SyntheticRpus.profile7().profile5().escaped()));
+  }
+
+  // The syntax defines nothing between the alignment after the metadata and the CRC32, and a write
+  // keeps whatever bytes sit there behind the alignment, so a mapping that ends off a byte boundary
+  // does not shift them into the alignment bits.
+  @Test
+  @DisplayName(
+      "Should keep the bytes between the metadata and the CRC32 when the metadata ends off a byte"
+          + " boundary")
+  void shouldKeepTheBytesBetweenTheMetadataAndTheCrc32WhenTheMetadataEndsOffAByteBoundary() {
+    var source = SyntheticRpus.profile7().withoutDmMetadata().bytesBeforeCrc32(0xFF, 0x01);
+    var parsed = DolbyVisionRpu.parse(ByteBuffer.wrap(source.escaped()));
+
+    var converted = DolbyVisionRpu.parse(ByteBuffer.wrap(parsed.convertedToProfile81().write()));
+
+    assertThat(parsed.write()).isEqualTo(source.escaped());
+    assertThat(parsed.trailingBytes()).containsExactly((byte) 0xFF, (byte) 0x01);
+    assertThat(converted.trailingBytes()).containsExactly((byte) 0xFF, (byte) 0x01);
   }
 }
