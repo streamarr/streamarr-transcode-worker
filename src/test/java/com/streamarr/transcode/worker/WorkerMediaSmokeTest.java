@@ -160,6 +160,8 @@ class WorkerMediaSmokeTest {
   // for segment 2 seeks to 12 s when it copies the video and to 6 s when it encodes it, so it
   // starts past the source's first frame either way.
   private static final int SEEKABLE_SOURCE_SECONDS = 18;
+  // The long-GOP MPEG-TS source's audio runs to 40 s, inside segment 6 of 6 s segments.
+  private static final int LONG_FINAL_GOP_SEGMENT_COUNT = 7;
   private static final int SEEKABLE_SOURCE_SEGMENT_COUNT = 3;
   private static final int SLOT_SECONDS = 3;
   // The 3 s slots where the segments of the source with keyframes 10 s apart start.
@@ -6278,6 +6280,78 @@ class WorkerMediaSmokeTest {
         .as("the end of the last source sample, which starts inside segment %d", lastSegment)
         .isGreaterThan(Duration.ofSeconds(lastSegment * 6L))
         .isLessThanOrEqualTo(Duration.ofSeconds((lastSegment + 1) * 6L).plus(ONE_FRAME_AT_24_FPS));
+  }
+
+  // Before an index-less source's keyframe scan finishes, the server reads an attempt past the
+  // video's end back from one period before that end: 14 s here, inside the source's last GOP,
+  // which runs from 10 s to the video's end at 20 s.
+  @Test
+  @DisplayName(
+      "Should hold the video's last picture in every segment of the attempt when a held encode's"
+          + " read-back lies after the last keyframe of a source without an index")
+  void shouldHoldTheLastPictureInEverySegmentWhenAHeldEncodesReadBackLiesAfterTheLastKeyframe()
+      throws Exception {
+    var source = longFinalGopTransportStreamSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, LONG_FINAL_GOP_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getExecutionBuilder().setStartSequenceNumber(4);
+    setSeekPosition(job.getExecutionBuilder(), BigDecimal.valueOf(14));
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.uploads().names())
+        .containsExactly("init.mp4", "segment4.m4s", "segment5.m4s", "segment6.m4s");
+    for (var name : List.of("segment4.m4s", "segment5.m4s", "segment6.m4s")) {
+      assertThat(packetsOf(completion.uploads(), name).stream().filter(Packet::isVideo))
+          .as("the held pictures of %s, 6 s at 24 fps", name)
+          .hasSize(144);
+    }
+
+    assertThat(completion.report().getStreamEndsList())
+        .filteredOn(end -> end.getStreamIndex() == 0)
+        .extracting(
+            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .as("the video's 20 s, which start 21 ms in, after the AAC priming")
+        .singleElement(InstanceOfAssertFactories.DURATION)
+        .isBetween(Duration.ofSeconds(20), Duration.ofSeconds(20).plus(ONE_FRAME_AT_24_FPS));
+  }
+
+  // 20 s of H.264 at 64x36 and 24 fps with IDR keyframes at 0, 2, 4, 6, 8 and 10 s only, and a
+  // 440 Hz tone for 40 s, in MPEG-TS, which carries no index.
+  private static synchronized Path longFinalGopTransportStreamSource() throws Exception {
+    var source = seekableSources.resolve("long-final-gop.ts");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=20",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=48000:duration=40",
+              "-c:v",
+              "libx264",
+              "-g",
+              "1000",
+              "-keyint_min",
+              "1000",
+              "-sc_threshold",
+              "0",
+              "-forced-idr",
+              "1",
+              "-force_key_frames",
+              "0,2,4,6,8,10",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
   }
 
   // With no audio frame to read, the mp4 muxer cannot write the AC-3 or E-AC-3 sample entry: FFmpeg

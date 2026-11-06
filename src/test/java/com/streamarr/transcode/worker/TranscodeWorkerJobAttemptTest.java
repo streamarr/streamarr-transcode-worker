@@ -35,6 +35,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
+import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.FieldOrder;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -43,6 +44,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
 import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
+import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeDecision;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
@@ -56,10 +58,12 @@ import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.engine.CopiedVideoTiming;
 import com.streamarr.transcode.engine.RpuMovingCopies;
+import com.streamarr.transcode.fakes.ScriptedKeyframeSource;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.Mp4Samples;
+import com.streamarr.transcode.fixtures.SteppedClock;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
@@ -2095,6 +2099,357 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should start FFmpeg reading from the keyframe 0.5 s before the video's last keyframe when a"
+          + " held encode's read-back lies after that keyframe")
+  void shouldStartFfmpegReadingFromTheKeyframeBeforeTheLastKeyframeWhenTheReadBackLiesAfterIt()
+      throws Exception {
+    var source =
+        new ScriptedKeyframeSource(ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (command, _) ->
+                isKeyframeScan(command)
+                    ? source.scan(command)
+                    : ScriptedProcessLauncher.runningProcessBuilder().build());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId())).getLast())
+          .as("the encode reads from the decode time of the keyframe at 8 s")
+          .containsSubsequence("-ss", "7.917", "-i");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure, without starting its encode, when a held"
+          + " encode's search finds no keyframe before the read-back")
+  void shouldFailTheAttemptAsATranscodeFailureWhenTheSearchFindsNoKeyframeBeforeTheReadBack()
+      throws Exception {
+    var source = new ScriptedKeyframeSource(List.of(), 20);
+    var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId())))
+          .allMatch(TranscodeWorkerJobAttemptTest::isKeyframeScan);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a startup failure, without starting its encode, when a held"
+          + " encode's keyframe scan exits with an error")
+  void shouldFailTheAttemptAsAStartupFailureWhenAHeldEncodesKeyframeScanExitsWithAnError()
+      throws Exception {
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (_, _) -> ScriptedProcess.builder().output(new byte[0]).exitCode(1).build());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId())))
+          .allMatch(TranscodeWorkerJobAttemptTest::isKeyframeScan);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse a held encode from a seek as an invalid specification, without a keyframe"
+          + " scan, when the job breaks the contract")
+  void shouldRefuseAHeldEncodeFromASeekWithoutAKeyframeScanWhenTheJobBreaksTheContract()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = heldJobReadingBackAfterTheLastKeyframe();
+    job.getExecutionBuilder().clearAdvertisedEnd();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the source bytes that the search has read, and no output end, while a held"
+          + " encode searches for the video's last keyframe")
+  void shouldReportTheSourceBytesThatTheSearchHasReadWhileAHeldEncodeSearches() throws Exception {
+    var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      await().atMost(EVENT_LIMIT).until(() -> !progressReportsOf(connection).isEmpty());
+      assertThat(progressReportsOf(connection).getFirst())
+          .satisfies(
+              progress -> {
+                assertThat(progress.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+                assertThat(progress.getKeyframeSearchBytesRead())
+                    .as("a 1,000-byte video packet and a 300-byte audio packet")
+                    .isEqualTo(1_300);
+                assertThat(progress.hasOutputEnd()).isFalse();
+              });
+      assertThat(eventsOf(connection)).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the attempt stopped and end the scan's FFmpeg when a stop arrives while a"
+          + " held encode searches for the video's last keyframe")
+  void shouldReportTheAttemptStoppedAndEndTheScanWhenAStopArrivesDuringTheSearch()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      var scan = launcher.process(awaitLaunch(launcher, job));
+      scan.pauseReached().get(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
+
+      stopVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STOPPED);
+      await().atMost(EVENT_LIMIT).until(scan::wasDestroyedForcibly);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(1);
+    }
+  }
+
+  // The search reads the source like the encode that follows it, so it is playback work.
+  @Test
+  @DisplayName(
+      "Should close keyframe packet scans while a held encode searches for the video's last"
+          + " keyframe, and reopen them 30 s after a stop ends the search")
+  void shouldCloseKeyframePacketScansWhileAHeldEncodeSearchesAndReopenThem30SAfterAStop()
+      throws Exception {
+    var clock = new SteppedClock();
+    var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher, clock)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      launcher
+          .process(awaitLaunch(launcher, job))
+          .pauseReached()
+          .get(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
+
+      await()
+          .atMost(EVENT_LIMIT)
+          .untilAsserted(
+              () -> assertThat(keyframePacketScanCapacitiesSentTo(connection)).containsExactly(0));
+      stopVariant(connection, job);
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STOPPED);
+      clock.advance(Duration.ofSeconds(30));
+
+      await()
+          .atMost(EVENT_LIMIT)
+          .untilAsserted(
+              () ->
+                  assertThat(keyframePacketScanCapacitiesSentTo(connection)).containsExactly(0, 1));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should reopen keyframe packet scans 30 s after a held encode's search finds no keyframe"
+          + " before the read-back")
+  void shouldReopenKeyframePacketScans30SAfterAHeldEncodesSearchFindsNoKeyframe() throws Exception {
+    var clock = new SteppedClock();
+    var source = new ScriptedKeyframeSource(List.of(), 20);
+    var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher, clock)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+
+      clock.advance(Duration.ofSeconds(30));
+
+      await()
+          .atMost(EVENT_LIMIT)
+          .untilAsserted(
+              () ->
+                  assertThat(keyframePacketScanCapacitiesSentTo(connection)).containsExactly(0, 1));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should reopen keyframe packet scans in the next session 30 s after the session ends while a"
+          + " held encode searches for the video's last keyframe")
+  void shouldReopenKeyframePacketScansInTheNextSession30SAfterTheSessionEndsDuringTheSearch()
+      throws Exception {
+    var clock = new SteppedClock();
+    var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher, clock)) {
+      worker.start("localhost", 1);
+      startVariant(runtime.connection(), job);
+      launcher
+          .process(awaitLaunch(launcher, job))
+          .pauseReached()
+          .get(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      worker.close();
+      worker.start("localhost", 1);
+      var nextSession = runtime.connection();
+      nextSession.registration();
+
+      clock.advance(Duration.ofSeconds(30));
+
+      await()
+          .atMost(EVENT_LIMIT)
+          .untilAsserted(
+              () -> assertThat(keyframePacketScanCapacitiesSentTo(nextSession)).containsExactly(1));
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"worker", "boot"})
+  @DisplayName(
+      "Should refuse a held encode as an invalid specification, before any search or capacity"
+          + " change, when its start names another worker or boot")
+  void shouldRefuseAHeldEncodeBeforeAnySearchWhenItsStartNamesAnotherWorkerOrBoot(String other)
+      throws Exception {
+    var source =
+        new ScriptedKeyframeSource(ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
+    var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      var target = connection.registration().getWorker().toBuilder();
+      if (other.equals("worker")) {
+        target.setWorkerId(toProto(UUID.randomUUID()));
+      } else {
+        target.setBootId(toProto(UUID.randomUUID()));
+      }
+
+      connection.deliver(
+          EstablishWorkerSessionResponse.newBuilder()
+              .setStartVariant(StartVariantCommand.newBuilder().setTarget(target).setJob(job))
+              .build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunched(fromProto(job.getJobAttemptId()))).isFalse();
+      assertThat(keyframePacketScanCapacitiesSentTo(connection)).isEmpty();
+    }
+  }
+
+  // A start that the ended session's stream still delivers arrives after that session's cleanup,
+  // which nothing repeats: a failed stream's cleanup runs once, and close() ends the worker's
+  // reads before the session's start.
+  @ParameterizedTest(name = "the session {0}")
+  @ValueSource(strings = {"closed", "failed"})
+  @DisplayName(
+      "Should launch no search and hold no probe capacity when a held encode's start arrives after"
+          + " its session ended")
+  void shouldLaunchNoSearchAndHoldNoCapacityWhenAHeldEncodesStartArrivesAfterItsSessionEnded(
+      String ending) throws Exception {
+    var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var endedSession = runtime.connection();
+      endedSession.registration();
+      if (ending.equals("failed")) {
+        endedSession.fail("the server went away");
+      } else {
+        worker.close();
+      }
+
+      startVariant(endedSession, job);
+      worker.close();
+      worker.start("localhost", 1);
+
+      assertThat(runtime.connection().registration().getKeyframePacketScanCapacity())
+          .as("the idle keyframe packet scan capacity")
+          .isEqualTo(1);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  private static List<Integer> keyframePacketScanCapacitiesSentTo(
+      ScriptedWorkerRuntime.Connection connection) {
+    return connection.events().stream()
+        .filter(EstablishWorkerSessionRequest::hasProbeCapacityChanged)
+        .map(event -> event.getProbeCapacityChanged().getKeyframePacketScanCapacity())
+        .toList();
+  }
+
+  // A held encode for segment 4, at 24 s, read back from 14 s.
+  private static VariantJob.Builder heldJobReadingBackAfterTheLastKeyframe() {
+    var job = heldAndPaddedJob();
+    job.getExecutionBuilder().setStartSequenceNumber(4).getSeekPositionBuilder().setSeconds(14);
+    return job;
+  }
+
+  private static boolean isKeyframeScan(List<String> command) {
+    return command.contains("-copyinkf");
+  }
+
+  // A scan that reads a non-key video packet and an audio packet, then waits for more source.
+  private static ScriptedProcess searchPausedAfterTwoPackets() {
+    var read =
+        """
+        #tb 0: 1/1000
+        #tb 1: 1/1000
+        0, 13917, 14000, 250, 1000, 0x0a1b2c3d, F=0x0
+        1, 14000, 14000, 250, 300, 0x0a1b2c3d
+        """
+            .getBytes(US_ASCII);
+    var held = "0, 14167, 14250, 250, 1000, 0x0a1b2c3d, F=0x0\n".getBytes(US_ASCII);
+    var output = Arrays.copyOf(read, read.length + held.length);
+    System.arraycopy(held, 0, output, read.length, held.length);
+    return ScriptedProcess.builder().output(output).pauseAfter(read.length).build();
+  }
+
+  private static UUID awaitLaunch(ScriptedProcessLauncher launcher, VariantJob job) {
+    var jobAttemptId = fromProto(job.getJobAttemptId());
+    await().atMost(EVENT_LIMIT).until(() -> launcher.hasLaunched(jobAttemptId));
+    return jobAttemptId;
+  }
+
   // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s: the audio-only
   // fragments 20 to 23 end the output.
   @Test
@@ -2854,6 +3209,10 @@ class TranscodeWorkerJobAttemptTest {
 
   private TranscodeWorker worker(ScriptedProcessLauncher launcher) {
     return workerBuilder(tempDir).runtime(runtime).engine(engine(launcher)).build();
+  }
+
+  private TranscodeWorker worker(ScriptedProcessLauncher launcher, SteppedClock clock) {
+    return workerBuilder(tempDir).runtime(runtime).engine(engine(launcher)).clock(clock).build();
   }
 
   private static EventCase awaitTerminalEvent(

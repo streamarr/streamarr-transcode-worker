@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -84,6 +85,7 @@ public class FfmpegCommandBuilder {
   private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
   private static final String FLUSH_PACKETS = "-flush_packets";
+  private static final String COPY_PRIOR_SEEK_START = "-copypriorss";
 
   // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
   // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
@@ -93,6 +95,13 @@ public class FfmpegCommandBuilder {
   // framecrc of the chosen source streams, so no output copies the source's metadata or chapters.
   private static final List<String> NO_SOURCE_METADATA =
       List.of("-map_metadata", "-1", "-map_chapters", "-1");
+  private static final String STANDARD_OUTPUT = "pipe:1";
+  private static final String FRAMECRC = "framecrc";
+  private static final List<String> FRAMECRC_ON_STANDARD_OUTPUT =
+      List.of("-f", FRAMECRC, STANDARD_OUTPUT);
+  // A keyframe scan's options before its seek: its times lie on the attempt's zero-based timeline.
+  private static final List<String> KEYFRAME_SCAN_OPTIONS =
+      List.of("-nostdin", "-v", "quiet", "-copyts", "-start_at_zero");
   private static final List<String> SOURCE_COPY_OUTPUT =
       List.of(
           "-f",
@@ -105,7 +114,7 @@ public class FfmpegCommandBuilder {
           "1000000",
           FLUSH_PACKETS,
           "1",
-          "pipe:1");
+          STANDARD_OUTPUT);
 
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
@@ -298,7 +307,7 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
     addSourceAudioStreams(cmd, decision.audioDecision(), source);
     cmd.addAll(NO_SOURCE_METADATA);
-    cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
+    cmd.addAll(List.of("-f", FRAMECRC, FLUSH_PACKETS, "1", "pipe:2"));
   }
 
   // The exclusions undo both maps of a named stream that is no audio stream, and the PCM encoder
@@ -306,14 +315,55 @@ public class FfmpegCommandBuilder {
   private static void addSourceAudioStreams(List<String> cmd, AudioDecision audio, int source) {
     if (audio.mode() != AudioMode.TRANSCODE) {
       addAudioStreamSelection(cmd, audio, source);
-      cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
+      cmd.addAll(List.of("-c", "copy", COPY_PRIOR_SEEK_START, "1"));
       return;
     }
 
     var audioMap = audioMap(audio, source);
     cmd.addAll(List.of("-map", audioMap, "-map", audioMap));
     addNamedAudioStreamExclusions(cmd, audio, source);
-    cmd.addAll(List.of("-c", "copy", "-copypriorss", "1", "-c:a:1", "pcm_f32le"));
+    cmd.addAll(List.of("-c", "copy", COPY_PRIOR_SEEK_START, "1", "-c:a:1", "pcm_f32le"));
+  }
+
+  /**
+   * The command that checks where a seek lands in a held encode's search for the video's last
+   * keyframe: it copies the chosen video stream's first packet, beside the chosen audio's, from
+   * where the job attempt's own seek to the position would start reading, to a framecrc on standard
+   * output. It reads the attempt's own streams, so its times lie on the attempt's zero-based
+   * timeline, whose zero is the earliest start among the streams that a command reads.
+   */
+  List<String> buildSeekLandingCommand(
+      Path source, TranscodeDecision decision, Duration seekPosition) {
+    var cmd = new ArrayList<>(List.of(ffmpegPath));
+    cmd.addAll(KEYFRAME_SCAN_OPTIONS);
+    cmd.addAll(List.of("-ss", seekArgument(seekPosition), "-i", source.toString()));
+    addChosenSourceStreams(cmd, decision, 0);
+    cmd.addAll(List.of("-c", "copy", "-copyinkf", COPY_PRIOR_SEEK_START, "1", "-frames:v", "1"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
+    return List.copyOf(cmd);
+  }
+
+  /**
+   * The command of a keyframe scan in a held encode's search for the video's last keyframe (ADR
+   * 0037, early ends): it copies the packets of the chosen video and audio streams, without
+   * decoding them, from the position for the length, to a framecrc on standard output. It reads the
+   * attempt's own streams, so its times lie on the attempt's zero-based timeline.
+   */
+  List<String> buildKeyframeScanCommand(
+      Path source, TranscodeDecision decision, Duration from, Duration length) {
+    var cmd = new ArrayList<>(List.of(ffmpegPath));
+    cmd.addAll(KEYFRAME_SCAN_OPTIONS);
+    if (from.isPositive()) {
+      cmd.addAll(List.of("-ss", seekArgument(from)));
+    }
+
+    cmd.addAll(List.of("-t", seekArgument(length), "-i", source.toString()));
+    addChosenSourceStreams(cmd, decision, 0);
+    cmd.addAll(List.of("-c", "copy", "-copyinkf"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
+    return List.copyOf(cmd);
   }
 
   // The copy's muxer replaces each video packet's duration with the gap to the next packet's
@@ -323,7 +373,7 @@ public class FfmpegCommandBuilder {
   private static void addVideoTimingOutput(List<String> cmd, VideoDecision video) {
     cmd.addAll(List.of("-map", "0:" + video.streamIndex(), "-c:v", "copy"));
     cmd.addAll(NO_SOURCE_METADATA);
-    cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1"));
+    cmd.addAll(List.of("-f", FRAMECRC, FLUSH_PACKETS, "1"));
   }
 
   // The encode of the copy reads the copy's video on its standard input, where FFmpeg reads no
@@ -477,12 +527,17 @@ public class FfmpegCommandBuilder {
   }
 
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
-    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
+    addChosenSourceStreams(cmd, decision, 0);
     var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio, 0);
     if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE && !namesAudioStream(audio)) {
       cmd.addAll(List.of("-map", "-0:s"));
     }
+  }
+
+  private static void addChosenSourceStreams(
+      List<String> cmd, TranscodeDecision decision, int input) {
+    cmd.addAll(List.of("-map", input + ":" + decision.videoDecision().streamIndex()));
+    addAudioStreamSelection(cmd, decision.audioDecision(), input);
   }
 
   // A negative map undoes the maps before it that it matches, so a named subtitle, data,
@@ -1135,7 +1190,7 @@ public class FfmpegCommandBuilder {
             String.join("+", MP4_MOVFLAGS),
             "-frag_duration",
             String.valueOf(TimeUnit.MICROSECONDS.convert(fragmentationTarget)),
-            "pipe:1"));
+            STANDARD_OUTPUT));
   }
 
   @Builder

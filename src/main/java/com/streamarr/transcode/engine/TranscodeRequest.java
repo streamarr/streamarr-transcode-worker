@@ -8,7 +8,7 @@ import java.util.UUID;
 import lombok.Builder;
 import lombok.NonNull;
 
-@Builder
+@Builder(toBuilder = true)
 public record TranscodeRequest(
     @NonNull UUID sessionId,
     UUID attemptId,

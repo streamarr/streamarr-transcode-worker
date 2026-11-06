@@ -282,6 +282,17 @@ final class WorkerVariantJobMapper {
     return OptionalInt.of(audio.getOutputBitDepth());
   }
 
+  /**
+   * Whether the job holds its last frame from a seek position after segment 0, where the engine may
+   * search for the video's last keyframe before it starts (ADR 0037, early ends).
+   */
+  static boolean holdsTheLastFrameFromASeek(VariantJob job) {
+    var execution = job.getExecution();
+    return job.getDecision().getVideo().getHoldLastFrameToAdvertisedEnd()
+        && execution.getStartSequenceNumber() > 0
+        && execution.hasSeekPosition();
+  }
+
   /** Whether the job encodes its audio in a layout that it names. */
   static boolean namesAudioLayout(VariantJob job) {
     return namesLayout(job.getDecision().getAudio());

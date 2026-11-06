@@ -1944,6 +1944,130 @@ class FfmpegCommandBuilderTest {
             "pcm_f32le");
   }
 
+  @Test
+  @DisplayName(
+      "Should copy the chosen video and audio streams' packets, from the position for the length"
+          + " and on the attempt's timeline, to a framecrc on standard output when building a"
+          + " keyframe scan")
+  void shouldCopyTheChosenStreamsPacketsFromThePositionForTheLengthWhenBuildingAKeyframeScan() {
+    var cmd =
+        builder.buildKeyframeScanCommand(
+            Path.of("/media/source.ts"),
+            chosenStreams(),
+            Duration.ofMillis(4_500),
+            Duration.ofSeconds(10));
+
+    assertThat(cmd)
+        .containsExactly(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "quiet",
+            "-copyts",
+            "-start_at_zero",
+            "-ss",
+            "4.5",
+            "-t",
+            "10",
+            "-i",
+            "/media/source.ts",
+            "-map",
+            "0:2",
+            "-map",
+            "0:1?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic",
+            "-c",
+            "copy",
+            "-copyinkf",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "pipe:1");
+  }
+
+  @Test
+  @DisplayName("Should seek nowhere when building a keyframe scan from the start of the timeline")
+  void shouldSeekNowhereWhenBuildingAKeyframeScanFromTheStartOfTheTimeline() {
+    var cmd =
+        builder.buildKeyframeScanCommand(
+            Path.of("/media/source.ts"), chosenStreams(), Duration.ZERO, Duration.ofSeconds(4));
+
+    assertThat(cmd).doesNotContain("-ss").containsSequence("-t", "4", "-i", "/media/source.ts");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy the chosen video stream's first packet, beside the chosen audio's, from where a"
+          + " seek to the position lands and on the attempt's timeline, to a framecrc on standard"
+          + " output when building a seek landing check")
+  void shouldCopyTheVideosFirstPacketFromWhereASeekLandsWhenBuildingASeekLandingCheck() {
+    var cmd =
+        builder.buildSeekLandingCommand(
+            Path.of("/media/source.mp4"), chosenStreams(), Duration.ofMillis(8_000));
+
+    assertThat(cmd)
+        .containsExactly(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "quiet",
+            "-copyts",
+            "-start_at_zero",
+            "-ss",
+            "8",
+            "-i",
+            "/media/source.mp4",
+            "-map",
+            "0:2",
+            "-map",
+            "0:1?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic",
+            "-c",
+            "copy",
+            "-copyinkf",
+            "-copypriorss",
+            "1",
+            "-frames:v",
+            "1",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "pipe:1");
+  }
+
+  // A held encode of the video at index 2 and the audio at index 1. The timeline's zero is the
+  // earliest start of the streams that a command reads, so a scan reads the attempt's own streams.
+  private static TranscodeDecision chosenStreams() {
+    return decision(TranscodeMode.FULL_TRANSCODE)
+        .videoDecision(
+            VideoDecisionFixtures.encodeBuilder()
+                .streamIndex(2)
+                .holdsLastFrameToAdvertisedEnd(true)
+                .build())
+        .audioDecision(audio(TranscodeMode.FULL_TRANSCODE).streamIndex(OptionalInt.of(1)).build())
+        .build();
+  }
+
   // FFmpeg writes each output's metadata to its error output, where the worker reads the framecrc.
   @ParameterizedTest(name = "{0}")
   @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
