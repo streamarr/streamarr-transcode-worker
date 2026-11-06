@@ -38,6 +38,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventC
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.FieldOrder;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptProgress;
 import build.buf.gen.streamarr.transcode.v1.Presence;
@@ -73,6 +74,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -113,6 +115,8 @@ class TranscodeWorkerJobAttemptTest {
   private static final int RACE_ITERATIONS = 100;
   private static final int BURSTS = 10;
   private static final int BURST_SLOTS = 2;
+  private static final long MIB = 1024 * 1024;
+  private static final int ONE_COPY_HEAP_MIB = 1280;
 
   @TempDir Path tempDir;
 
@@ -421,9 +425,9 @@ class TranscodeWorkerJobAttemptTest {
   void shouldRefuseAJobBeyondTheAdvertisedSlotsAsAStartupFailureWithoutLaunchingFfmpeg()
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var first = variantJobBuilder().build();
-    var second = variantJobBuilder().build();
-    var beyond = variantJobBuilder().build();
+    var first = encodeJobBuilder().build();
+    var second = encodeJobBuilder().build();
+    var beyond = encodeJobBuilder().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -457,9 +461,9 @@ class TranscodeWorkerJobAttemptTest {
                 ScriptedProcessLauncher.runningProcessBuilder()
                     .exitTiming(ExitTiming.WHEN_TEST_EXITS)
                     .build());
-    var stopped = variantJobBuilder().build();
-    var running = variantJobBuilder().build();
-    var next = variantJobBuilder().build();
+    var stopped = encodeJobBuilder().build();
+    var running = encodeJobBuilder().build();
+    var next = encodeJobBuilder().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -539,8 +543,99 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // Each copy holds up to 256 MiB of FFmpeg's output in the heap, beside a 512 MiB reserve and the
+  // 256 MiB of each of the worker's two slots.
+  @ParameterizedTest
+  @CsvSource({"1279, 0", "1280, 1", "1535, 1", "1536, 2"})
+  @DisplayName(
+      "Should refuse a copy as a full copy cap and still start an encode when the worker's heap"
+          + " holds no more copies")
+  void shouldRefuseACopyAsAFullCopyCapAndStillStartAnEncodeWhenTheWorkersHeapHoldsNoMoreCopies(
+      int heapMiB, int heldCopies) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var held = IntStream.range(0, heldCopies).mapToObj(_ -> variantJobBuilder().build()).toList();
+    var beyond = variantJobBuilder().build();
+    var encode = encodeJobBuilder().build();
+
+    try (var worker = workerWithHeap(launcher, heapMiB)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      held.forEach(job -> startVariant(connection, job));
+
+      startVariant(connection, beyond);
+      startVariant(connection, encode);
+
+      var expected =
+          new ArrayList<>(Collections.nCopies(heldCopies, EventCase.JOB_ATTEMPT_STARTED));
+      expected.add(EventCase.JOB_ATTEMPT_FAILED);
+      expected.add(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactlyElementsOf(expected);
+      var refusal = failureOf(connection, beyond);
+      assertThat(refusal).isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPY_CAP_REACHED);
+      assertThat(launcher.hasLaunched(fromProto(beyond.getJobAttemptId()))).isFalse();
+      assertThat(launcher.hasLaunched(fromProto(encode.getJobAttemptId()))).isTrue();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should run a copy in the place that a stopped copy freed while its FFmpeg is still quitting")
+  void shouldRunACopyInThePlaceThatAStoppedCopyFreedWhileItsFfmpegIsStillQuitting()
+      throws Exception {
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcessLauncher.runningProcessBuilder()
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var stopped = variantJobBuilder().build();
+    var next = variantJobBuilder().build();
+
+    try (var worker = workerWithHeap(launcher, ONE_COPY_HEAP_MIB)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, stopped);
+      var quitting = processOf(launcher, stopped);
+      stopVariant(connection, stopped);
+      await().atMost(EVENT_LIMIT).until(() -> quitting.stdinText().equals("q"));
+
+      startVariant(connection, next);
+
+      assertThat(quitting.isAlive()).isTrue();
+      assertThat(eventsOf(connection))
+          .containsExactly(EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.hasLaunched(fromProto(next.getJobAttemptId()))).isTrue();
+      quitting.exit();
+      processOf(launcher, next).exit();
+    }
+  }
+
+  private TranscodeWorker workerWithHeap(ScriptedProcessLauncher launcher, int heapMiB) {
+    return workerBuilder(tempDir)
+        .runtime(runtime)
+        .engine(engine(launcher))
+        .maximumHeapBytes(heapMiB * MIB)
+        .build();
+  }
+
+  private static JobAttemptFailure failureOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return connection.events().stream()
+        .filter(EstablishWorkerSessionRequest::hasJobAttemptFailed)
+        .map(EstablishWorkerSessionRequest::getJobAttemptFailed)
+        .filter(failed -> failed.getJobAttemptId().equals(job.getJobAttemptId()))
+        .map(JobAttemptFailed::getFailure)
+        .findFirst()
+        .orElseThrow();
+  }
+
+  // A job attempt that encodes the video, which takes one of the worker's slots.
+  private static VariantJob.Builder encodeJobBuilder() {
+    return variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+  }
+
   private static List<VariantJob> startJobs(ScriptedWorkerRuntime.Connection connection) {
-    var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> variantJobBuilder().build()).toList();
+    var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> encodeJobBuilder().build()).toList();
     for (var job : jobs) {
       startVariant(connection, job);
     }

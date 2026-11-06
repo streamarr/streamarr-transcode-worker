@@ -265,6 +265,60 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   @Test
+  @DisplayName(
+      "Should start two copies and an encode and refuse a second encode when the worker has one"
+          + " slot")
+  void shouldStartTwoCopiesAndAnEncodeAndRefuseASecondEncodeWhenTheWorkerHasOneSlot()
+      throws Exception {
+    var service = new ControllableWorkerService();
+    var launcher = ScriptedProcessLauncher.running();
+    var copy = copyOf(variantJob(), TranscodeMode.TRANSCODE_MODE_REMUX);
+    var copyWithAudioEncode = copyOf(variantJob(), TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var encode = variantJob();
+    var secondEncode = variantJob();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = worker(preparedMediaRoot(), launcher, 1)) {
+      server.start();
+      worker.start("localhost", server.port());
+      // A copy before the encode and one after it: the encode starts beside a copy, and the
+      // second copy starts while the encode holds the only slot.
+      service.sendStart(service.registeredWorker(), copy);
+      service.awaitStarted(copy);
+      service.sendStart(service.registeredWorker(), encode);
+      service.awaitStarted(encode);
+      service.sendStart(service.registeredWorker(), copyWithAudioEncode);
+      service.awaitStarted(copyWithAudioEncode);
+
+      service.sendStart(service.registeredWorker(), secondEncode);
+
+      var failure = service.awaitFailure();
+      assertThat(failure.getJobAttemptId()).isEqualTo(secondEncode.getJobAttemptId());
+      assertThat(failure.getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      assertThat(launcher.hasLaunched(fromProto(secondEncode.getJobAttemptId()))).isFalse();
+      assertThat(List.of(copy, copyWithAudioEncode, encode))
+          .allSatisfy(
+              job ->
+                  assertThat(launcher.process(fromProto(job.getJobAttemptId())).isAlive())
+                      .isTrue());
+    }
+  }
+
+  // The job with its video copied in the mode: a remux, or a copy beside an audio encode.
+  private static VariantJob copyOf(VariantJob job, TranscodeMode mode) {
+    var decision =
+        job.getDecision().toBuilder()
+            .setMode(mode)
+            .setVideo(copiedVideo(ENCODED_RECORDING_CODEC_STRING));
+    if (mode == TranscodeMode.TRANSCODE_MODE_REMUX) {
+      decision.setAudio(AudioDecision.newBuilder().setMode(AudioMode.AUDIO_MODE_COPY));
+    }
+
+    return job.toBuilder().setDecision(decision).build();
+  }
+
+  @Test
   @DisplayName("Should fail startup when the control stream closes before registration is accepted")
   void shouldFailStartupWhenControlStreamClosesBeforeRegistrationIsAccepted() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));

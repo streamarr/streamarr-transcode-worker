@@ -48,7 +48,7 @@ Settings are read from the environment at startup. The three variables in the ex
 | --- | --- | --- |
 | `TRANSCODE_WORKER_CONTROL_PLANE_HOST` | `127.0.0.1` | Server's worker listener host |
 | `TRANSCODE_WORKER_CONTROL_PLANE_PORT` | `9090` | Server's worker listener port |
-| `TRANSCODE_WORKER_SLOTS` | `1` | Number of playback slots advertised to the server: the job attempts that the worker runs at once. Probes never take a playback slot. The worker refuses a job while every slot holds an active job attempt, and holds at most 256 MiB of FFmpeg's output per slot, two segments at the server's 128 MiB cap, plus a 64 KiB read buffer for each FFmpeg process. FFmpeg's own memory, the kernel's buffer for each FFmpeg process's output pipe and gRPC's flow-control window for each upload come on top |
+| `TRANSCODE_WORKER_SLOTS` | `1` | Number of playback slots advertised to the server: the job attempts that encode the video that the worker runs at once. Probes never take a playback slot, and neither does a job attempt that copies the video, with or without an audio encode. The worker refuses an encode while every slot holds an active encode. It holds at most 256 MiB of FFmpeg's output per slot, two segments at the server's 128 MiB cap, and runs as many copies as its maximum heap holds at 256 MiB each after the slots' memory and a 512 MiB reserve; it refuses a copy beyond them with `JOB_ATTEMPT_FAILURE_COPY_CAP_REACHED`. It also holds a 64 KiB read buffer for each FFmpeg process. FFmpeg's own memory, the kernel's buffer for each FFmpeg process's output pipe and gRPC's flow-control window for each upload come on top |
 | `TRANSCODE_WORKER_PROBE_CAPACITY` | unset: adaptive | Fixes the background probe capacity at this positive integer and turns its adaptation off. Unset, the worker adapts the capacity from 1 to the cores available to the JVM, which follow container CPU limits and `-XX:ActiveProcessorCount`. The playback probe capacity stays 2, and keyframe packet scans keep their own capacity. A probe that arrives while its capacity has no free unit fails with `PROBE_FAILURE_NO_FREE_CAPACITY` before ffprobe starts, and the server keeps it queued |
 | `TRANSCODE_WORKER_FFMPEG_PATH` | `ffmpeg` | FFmpeg executable |
 | `TRANSCODE_WORKER_FFPROBE_PATH` | `ffprobe` | ffprobe executable |
@@ -77,6 +77,8 @@ It should report `UTF-8`. To recover, correct the locale and restart the worker.
 ### Health and Shutdown
 
 Spring Boot Actuator serves `/actuator/health/liveness` and `/actuator/health/readiness` on port `9091`. Readiness requires an accepted server session; a worker with all slots occupied remains ready.
+
+`/actuator/metrics/streamarr.worker.copy_fullness` reports the share of the copies that the worker's heap holds that run now, from 0 to 1, and 1 when the heap holds none. An autoscaler can read it, for example KEDA's Metrics API scaler with `valueLocation: measurements.0.value`, to add workers before copies are refused.
 
 At startup the worker waits for the server to accept its session, so the two can start in either order. Losing the server session stops active work and exits the worker process. A deployment supervisor should restart it. During shutdown, the worker asks each FFmpeg process to quit and waits for it to exit.
 

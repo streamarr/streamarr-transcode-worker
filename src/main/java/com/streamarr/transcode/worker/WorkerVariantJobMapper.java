@@ -389,6 +389,12 @@ final class WorkerVariantJobMapper {
     return modeOf(job.getDecision().getMode()).map(TranscodeMode::encodesVideo).orElse(false);
   }
 
+  // Whether the job copies the video, with or without an audio encode; a job that names no mode
+  // copies none.
+  static boolean copiesVideo(VariantJob job) {
+    return modeOf(job.getDecision().getMode()).map(mode -> !mode.encodesVideo()).orElse(false);
+  }
+
   static boolean hasEncoderPreset(VariantJob job) {
     return encoderPresetOf(job.getVariant().getEncoderPreset()).isPresent();
   }

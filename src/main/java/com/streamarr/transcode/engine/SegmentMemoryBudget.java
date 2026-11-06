@@ -5,15 +5,19 @@ import java.util.Deque;
 import java.util.function.BooleanSupplier;
 
 /**
- * The segment memory of one worker: its slot count times each producer's own budget of two segment
- * caps. Every producer reserves each box of FFmpeg's output here as well as within its own budget,
- * and releases the bytes once it holds them no longer, so a stopping producer keeps its share until
- * it has released its segments.
+ * The segment memory that a worker's encodes or its copies share: the number of encodes or copies
+ * that the worker runs at once times each producer's own budget of two segment caps. Every producer
+ * reserves each box of FFmpeg's output here as well as within its own budget, and releases the
+ * bytes once it holds them no longer, so a stopping producer keeps its share until it has released
+ * its segments.
  *
  * <p>Readers that wait for memory reserve it in the order they began to wait, and no reader
  * reserves while another waits, so a waiting reader never waits for a reader that asks after it.
  */
 public final class SegmentMemoryBudget {
+
+  /** The most of FFmpeg's output that one producer holds: two segments at the segment cap. */
+  public static final long PRODUCER_BYTES = Producer.BUDGET_BYTES;
 
   private final long capacityBytes;
 
@@ -31,7 +35,12 @@ public final class SegmentMemoryBudget {
       throw new IllegalArgumentException("Slot count must be positive, got: " + slots);
     }
 
-    return new SegmentMemoryBudget(slots * Producer.BUDGET_BYTES);
+    return new SegmentMemoryBudget(slots * PRODUCER_BYTES);
+  }
+
+  /** The budget of the copies that a worker runs at once, which may be none. */
+  public static SegmentMemoryBudget forCopies(int copies) {
+    return new SegmentMemoryBudget(copies * PRODUCER_BYTES);
   }
 
   // Reserves the bytes when they fit now and no reader waits for memory.
