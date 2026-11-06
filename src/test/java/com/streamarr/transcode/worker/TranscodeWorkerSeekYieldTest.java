@@ -46,6 +46,8 @@ class TranscodeWorkerSeekYieldTest {
 
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final Duration LONG_HOLD = Duration.ofMinutes(5);
+  // Long enough that a yield sent at once after a resume lands inside the rest that follows it.
+  private static final Duration PAUSE = Duration.ofSeconds(1);
 
   @TempDir Path tempDir;
 
@@ -128,6 +130,49 @@ class TranscodeWorkerSeekYieldTest {
       yieldToSeek(connection, LONG_HOLD, steady, otherSteady);
 
       promptly().until(() -> pausedAttempts().isEmpty());
+      exitAll();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a job attempt that a yield resumed running for as long as it was paused when a"
+          + " later yield lists it again")
+  void shouldKeepAJobAttemptThatAYieldResumedRunningForAsLongAsItWasPausedWhenALaterYieldListsIt()
+      throws Exception {
+    try (var worker = worker()) {
+      var connection = startThreeAttempts(worker);
+      yieldToSeek(connection, LONG_HOLD, steady);
+      promptly().until(() -> pausedAttempts().equals(List.of(steady)));
+      await().pollDelay(PAUSE).atMost(EVENT_LIMIT).until(() -> true);
+      yieldToSeek(connection, LONG_HOLD);
+      promptly().until(() -> pausedAttempts().isEmpty());
+
+      yieldToSeek(connection, LONG_HOLD, steady, otherSteady);
+
+      promptly().until(() -> pausedAttempts().equals(List.of(otherSteady)));
+      exitAll();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a job attempt whose hold limit passed running for as long as it was paused, and"
+          + " pause it again after that")
+  void shouldKeepAJobAttemptWhoseHoldLimitPassedRunningForAsLongAsItWasPausedAndPauseItAgainAfter()
+      throws Exception {
+    try (var worker = worker()) {
+      var connection = startThreeAttempts(worker);
+      yieldToSeek(connection, PAUSE, steady);
+      promptly().until(() -> pausedAttempts().equals(List.of(steady)));
+      promptly().until(() -> pausedAttempts().isEmpty());
+
+      yieldToSeek(connection, LONG_HOLD, steady, otherSteady);
+      promptly().until(() -> pausedAttempts().equals(List.of(otherSteady)));
+      await().pollDelay(PAUSE).atMost(EVENT_LIMIT).until(() -> true);
+      yieldToSeek(connection, LONG_HOLD, steady, otherSteady);
+
+      promptly().until(() -> pausedAttempts().equals(List.of(steady, otherSteady)));
       exitAll();
     }
   }
