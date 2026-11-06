@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.lang.ProcessBuilder.Redirect;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
@@ -31,6 +33,8 @@ public class TranscodeCapabilityService {
   private static final List<String> REQUIRED_MP4_MUXER_OPTIONS =
       Stream.concat(Stream.of("-frag_duration"), FfmpegCommandBuilder.MP4_MOVFLAGS.stream())
           .toList();
+
+  private static final long VALIDATION_DEADLINE_SECONDS = 10;
 
   private static final Pattern HW_ENCODER_PATTERN =
       Pattern.compile("^\\s*V\\S+\\s+(\\w+_(?:nvenc|qsv|amf|vaapi|videotoolbox))\\s+");
@@ -55,6 +59,9 @@ public class TranscodeCapabilityService {
   // (ADR 0044), each with its failures since then, so a recheck that a newer failure overtook does
   // not offer it again. The worker offers the software encoder of their families instead.
   private final Map<String, Long> withdrawnHardwareEncoders = new HashMap<>();
+
+  // The outputs beyond 8-bit 4:2:0 SDR whose own test encode each codec family's backend passed.
+  private Map<CodecFamily, Set<EncodeFeature>> encodeFeatures = Map.of();
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
     this.ffmpegPath = ffmpegPath;
@@ -88,14 +95,17 @@ public class TranscodeCapabilityService {
             .build();
     detectedHardwareEncoders = hwEncoders;
     softwareEncoderFamilies = detectSoftwareEncoders();
+    encodeFeatures = detectEncodeFeatures(softwareEncoderFamilies);
     encoders.set(resolveEncoders(hwEncoders, softwareEncoderFamilies));
 
     log.info(
-        "FFmpeg capabilities: GPU={}, encoders={}, accelerator={}, encoder backends={}",
+        "FFmpeg capabilities: GPU={}, encoders={}, accelerator={}, encoder backends={}, encode"
+            + " features={}",
         hasGpu,
         hwEncoders,
         accelerator,
-        encoders.get().values());
+        encoders.get().values(),
+        encodeFeatures);
   }
 
   private void markUnavailable(String reason) {
@@ -106,7 +116,8 @@ public class TranscodeCapabilityService {
 
   /**
    * The encoder backend that jobs of each codec family run, for every codec family whose backend
-   * passed its test encode, with its keyframe-verified trait.
+   * passed its test encode, with its keyframe-verified trait and the encode features whose own test
+   * encodes it passed.
    */
   public List<WorkerVerifiedEncoder> workerVerifiedEncoders() {
     return List.copyOf(encoders.get().values());
@@ -130,7 +141,7 @@ public class TranscodeCapabilityService {
     return softwareEncoderFamilies.stream()
         .sorted()
         .map(TranscodeCapabilityService::softwareBackend)
-        .map(TranscodeCapabilityService::workerVerified)
+        .map(this::workerVerified)
         .toList();
   }
 
@@ -193,7 +204,7 @@ public class TranscodeCapabilityService {
     log.info("Offered encoder backends: {}", encoders.get().values());
   }
 
-  private static Map<CodecFamily, WorkerVerifiedEncoder> resolveEncoders(
+  private Map<CodecFamily, WorkerVerifiedEncoder> resolveEncoders(
       Set<String> hardwareEncoders, Set<CodecFamily> softwareEncoderFamilies) {
     var resolved = new EnumMap<CodecFamily, WorkerVerifiedEncoder>(CodecFamily.class);
     for (var family : CodecFamily.values()) {
@@ -205,7 +216,7 @@ public class TranscodeCapabilityService {
     return Collections.unmodifiableMap(resolved);
   }
 
-  private static Stream<WorkerVerifiedEncoder> usableEncoders(
+  private Stream<WorkerVerifiedEncoder> usableEncoders(
       CodecFamily family, Set<String> hardwareEncoders, Set<CodecFamily> softwareEncoderFamilies) {
     var hardware =
         hardwareEncoders.stream()
@@ -218,7 +229,7 @@ public class TranscodeCapabilityService {
         Stream.of(family)
             .filter(softwareEncoderFamilies::contains)
             .map(TranscodeCapabilityService::softwareBackend);
-    return Stream.concat(hardware, software).map(TranscodeCapabilityService::workerVerified);
+    return Stream.concat(hardware, software).map(this::workerVerified);
   }
 
   private static EncoderBackend hardwareBackend(CodecFamily family, String encoder) {
@@ -233,10 +244,17 @@ public class TranscodeCapabilityService {
         .build();
   }
 
-  private static WorkerVerifiedEncoder workerVerified(EncoderBackend backend) {
+  // Only a software backend lists encode features: the feature test commands model the software
+  // filter chain.
+  private WorkerVerifiedEncoder workerVerified(EncoderBackend backend) {
+    var features =
+        backend.hardware()
+            ? Set.<EncodeFeature>of()
+            : encodeFeatures.getOrDefault(backend.codecFamily(), Set.of());
     return WorkerVerifiedEncoder.builder()
         .backend(backend)
         .keyframeVerified(FfmpegCommandBuilder.isKeyframeVerified(backend.encoder()))
+        .encodeFeatures(features)
         .build();
   }
 
@@ -383,7 +401,8 @@ public class TranscodeCapabilityService {
       var process =
           processFactory.start(ffmpegReadingExitStatusOnly(arguments.toArray(String[]::new)));
       try {
-        return process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
+        return process.waitFor(VALIDATION_DEADLINE_SECONDS, TimeUnit.SECONDS)
+            && process.exitValue() == 0;
       } finally {
         terminateValidation(process);
       }
@@ -394,6 +413,83 @@ public class TranscodeCapabilityService {
     } catch (Exception e) {
       log.debug("Encoder validation failed for {}", encoder, e);
       return false;
+    }
+  }
+
+  // Only a software HEVC or AV1 encoder runs the feature test encodes: the test commands model the
+  // software filter chain, and H.264 encodes only 8-bit SDR. Each runs them whether or not its
+  // family offers a hardware encoder, which a failure during a stream can withdraw (ADR 0044).
+  private Map<CodecFamily, Set<EncodeFeature>> detectEncodeFeatures(
+      Set<CodecFamily> softwareFamilies) {
+    var testedBackends =
+        softwareFamilies.stream()
+            .filter(family -> family != CodecFamily.H264)
+            .sorted()
+            .map(TranscodeCapabilityService::softwareBackend)
+            .toList();
+    if (testedBackends.isEmpty()) {
+      return Map.of();
+    }
+
+    try (var dolbyVisionFrame = DolbyVisionTestFrame.extract()) {
+      var features = new EnumMap<CodecFamily, Set<EncodeFeature>>(CodecFamily.class);
+      for (var backend : testedBackends) {
+        features.put(backend.codecFamily(), detectEncodeFeatures(backend, dolbyVisionFrame.path()));
+      }
+
+      return Collections.unmodifiableMap(features);
+    } catch (IOException e) {
+      log.warn("Encode feature detection could not extract its Dolby Vision test frame", e);
+      return Map.of();
+    }
+  }
+
+  private Set<EncodeFeature> detectEncodeFeatures(EncoderBackend backend, Path dolbyVisionFrame) {
+    return Arrays.stream(EncodeFeature.values())
+        .filter(
+            feature ->
+                passesFeatureTest(
+                    backend.encoder(),
+                    EncodeFeatureCheck.of(feature, backend.codecFamily()),
+                    dolbyVisionFrame))
+        .collect(Collectors.toUnmodifiableSet());
+  }
+
+  private boolean passesFeatureTest(
+      String encoder, EncodeFeatureCheck check, Path dolbyVisionFrame) {
+    if (Thread.currentThread().isInterrupted()) {
+      return false;
+    }
+
+    try {
+      var process =
+          processFactory.start(
+              ffmpegReadingStandardOutput(
+                  check.arguments(encoder, dolbyVisionFrame).toArray(String[]::new)));
+      var output = new CompletableFuture<byte[]>();
+      Thread.ofVirtual().name("encode-feature-test-output").start(() -> readFully(process, output));
+      try {
+        return process.waitFor(VALIDATION_DEADLINE_SECONDS, TimeUnit.SECONDS)
+            && process.exitValue() == 0
+            && check.passes(output.get(VALIDATION_DEADLINE_SECONDS, TimeUnit.SECONDS));
+      } finally {
+        terminateValidation(process);
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      log.debug("Encode feature test interrupted for {}", encoder, e);
+      return false;
+    } catch (Exception e) {
+      log.debug("Encode feature test failed for {}", encoder, e);
+      return false;
+    }
+  }
+
+  private static void readFully(Process process, CompletableFuture<byte[]> output) {
+    try (var stream = process.getInputStream()) {
+      output.complete(stream.readAllBytes());
+    } catch (IOException e) {
+      output.completeExceptionally(e);
     }
   }
 

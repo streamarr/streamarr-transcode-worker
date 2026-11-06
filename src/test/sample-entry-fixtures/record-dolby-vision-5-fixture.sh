@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Regenerates src/test/resources/sample-entries/dolby-vision-5-dvh1.mp4, the Dolby Vision profile 5
-# source of the HDR encode smoke tests, with the images that record-fixtures.sh uses.
+# source of the HDR encode smoke tests, with the images that record-fixtures.sh uses, and its first
+# frame, src/main/resources/com/streamarr/transcode/engine/dolby-vision-5-test-frame.mp4, the input
+# of the worker's own test encode of the Dolby Vision reshape.
 #
 # The source is 6 s of 64x64 testsrc2 video at 24 fps with a keyframe every second, from FFmpeg's
 # lavfi test sources. Nothing comes from a media library. dovi_tool's profile 5 generator writes one
@@ -53,6 +55,13 @@ cd /work
 MP4Box -add profile-5.hevc:dvp=f5:fps=24 -new dolby-vision-5-dvh1.mp4 > /dev/null 2>&1
 CONTAINER
 
+cat > "$WORK/test-frame.sh" <<'CONTAINER'
+set -euo pipefail
+cd /work
+ffmpeg -hide_banner -nostdin -loglevel error -y -i dolby-vision-5-dvh1.mp4 -frames:v 1 -c copy \
+  -strict unofficial -tag:v dvh1 -f mp4 dolby-vision-5-test-frame.mp4
+CONTAINER
+
 # The buildpack launcher prints JVM lines on its own stdout, so every tool writes only to files.
 docker run --rm --user "$(id -u):$(id -g)" --entrypoint /cnb/lifecycle/launcher \
   -v "$WORK":/work "$IMAGE" bash /work/raw.sh > "$WORK/launcher.log" 2>&1 \
@@ -62,6 +71,11 @@ docker run --rm -v "$WORK":/work -e DOVI_TOOL_VERSION="$DOVI_TOOL_VERSION" \
   -e DOVI_TOOL_SHA256_x86_64="$DOVI_TOOL_SHA256_x86_64" \
   "$ALPINE" sh -c 'apk add --no-cache bash > /dev/null && bash /work/dolby-vision.sh'
 docker run --rm --platform linux/amd64 -v "$WORK":/work "$GPAC" bash /work/mux.sh
+docker run --rm --user "$(id -u):$(id -g)" --entrypoint /cnb/lifecycle/launcher \
+  -v "$WORK":/work "$IMAGE" bash /work/test-frame.sh > "$WORK/launcher.log" 2>&1 \
+  || { cat "$WORK/launcher.log"; exit 1; }
 
 cp "$WORK/dolby-vision-5-dvh1.mp4" "$FIXTURES/dolby-vision-5-dvh1.mp4"
+cp "$WORK/dolby-vision-5-test-frame.mp4" \
+  "$HERE/../../main/resources/com/streamarr/transcode/engine/dolby-vision-5-test-frame.mp4"
 echo "recorded into $FIXTURES"

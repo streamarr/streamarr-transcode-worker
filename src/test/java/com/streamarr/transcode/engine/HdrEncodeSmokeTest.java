@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import java.io.IOException;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
@@ -203,6 +205,23 @@ class HdrEncodeSmokeTest {
             "max_content=0",
             "max_average=0")
         .doesNotContain("Dolby Vision", "DOVI");
+  }
+
+  @Test
+  @DisplayName(
+      "Should list every encode feature of the software HEVC and AV1 encoders when the worker"
+          + " detects its capabilities with the locked FFmpeg")
+  void shouldListEveryEncodeFeatureOfTheSoftwareHevcAndAv1EncodersWithTheLockedFfmpeg() {
+    var service = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
+
+    service.detectCapabilities();
+
+    assertThat(service.workerVerifiedEncoders())
+        .extracting(encoder -> encoder.backend().encoder(), WorkerVerifiedEncoder::encodeFeatures)
+        .containsExactlyInAnyOrder(
+            tuple("libx264", Set.of()),
+            tuple("libx265", Set.of(EncodeFeature.values())),
+            tuple("libsvtav1", Set.of(EncodeFeature.values())));
   }
 
   @Test

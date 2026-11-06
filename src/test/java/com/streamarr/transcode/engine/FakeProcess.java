@@ -12,7 +12,11 @@ class FakeProcess extends Process {
   private final int exitCode;
 
   FakeProcess(String stdout, int exitCode) {
-    this.inputStream = new ByteArrayInputStream(stdout.getBytes(StandardCharsets.UTF_8));
+    this(stdout.getBytes(StandardCharsets.UTF_8), exitCode);
+  }
+
+  FakeProcess(byte[] stdout, int exitCode) {
+    this.inputStream = new ByteArrayInputStream(stdout);
     this.exitCode = exitCode;
   }
 
