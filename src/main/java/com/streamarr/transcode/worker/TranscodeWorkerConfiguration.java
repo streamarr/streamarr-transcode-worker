@@ -17,7 +17,8 @@ public record TranscodeWorkerConfiguration(
     Duration uploadReadinessTimeout,
     Duration uploadAcknowledgementTimeout,
     Duration sessionAcceptanceTimeout,
-    Duration audioStreamReadTimeout) {
+    Duration audioStreamReadTimeout,
+    Duration hardwareEncoderRecheckInterval) {
 
   static final Duration DEFAULT_UPLOAD_READINESS_TIMEOUT = Duration.ofSeconds(30);
   static final Duration DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(60);
@@ -25,6 +26,8 @@ public record TranscodeWorkerConfiguration(
   static final Duration DEFAULT_SESSION_ACCEPTANCE_TIMEOUT = Duration.ofMinutes(5);
   // ffprobe reads a healthy source's first audio stream within a second.
   static final Duration DEFAULT_AUDIO_STREAM_READ_TIMEOUT = Duration.ofSeconds(30);
+  // A withdrawn hardware encoder's test encode takes under a second.
+  static final Duration DEFAULT_HARDWARE_ENCODER_RECHECK_INTERVAL = Duration.ofMinutes(1);
 
   public TranscodeWorkerConfiguration {
     if (availableSlots < 1) {
@@ -45,6 +48,10 @@ public record TranscodeWorkerConfiguration(
 
     if (audioStreamReadTimeout == null) {
       audioStreamReadTimeout = DEFAULT_AUDIO_STREAM_READ_TIMEOUT;
+    }
+
+    if (hardwareEncoderRecheckInterval == null) {
+      hardwareEncoderRecheckInterval = DEFAULT_HARDWARE_ENCODER_RECHECK_INTERVAL;
     }
   }
 }
