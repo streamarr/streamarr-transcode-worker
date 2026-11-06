@@ -124,6 +124,7 @@ final class SyntheticRpus {
     private long affectedDmMetadataId = 0;
     private long currentDmMetadataId = 0;
     private int signalBitDepth = 12;
+    private boolean floatingPoint;
 
     private Builder() {}
 
@@ -184,6 +185,15 @@ final class SyntheticRpus {
 
     Builder currentDmMetadataId(long value) {
       currentDmMetadataId = value;
+      return this;
+    }
+
+    /**
+     * coefficient_data_type 1: no denominator, no integer parts, and every fraction a 32-bit float.
+     */
+    Builder floatingPointCoefficients() {
+      floatingPoint = true;
+      fractionBits = 32;
       return this;
     }
 
@@ -325,7 +335,9 @@ final class SyntheticRpus {
 
     private void writeHeader(BitSink sink) {
       sink.u(RPU_TYPE, 6).u(RPU_FORMAT, 11).u(vdrRpuProfile, 4).u(0, 4).bit(1);
-      sink.bit(0).u(0, 2).ue(coefficientLog2Denom).u(1, 2).bit(fullRange ? 1 : 0);
+      sink.bit(0);
+      writeCoefficientDataType(sink);
+      sink.u(1, 2).bit(fullRange ? 1 : 0);
       sink.ue(baseLayerBitDepthMinus8).ue(enhancementLayerBitDepthField).ue(vdrBitDepthMinus8);
       sink.bit(0).u(compressedDm ? 1 : 0, 3);
       sink.bit(enhancementLayerFilter ? 1 : 0).bit(residual ? 0 : 1);
@@ -336,6 +348,28 @@ final class SyntheticRpus {
       }
 
       sink.bit(0);
+    }
+
+    private void writeCoefficientDataType(BitSink sink) {
+      if (floatingPoint) {
+        sink.u(1, 2);
+        return;
+      }
+
+      sink.u(0, 2).ue(coefficientLog2Denom);
+    }
+
+    // A coefficient's integer part, which only fixed-point coefficients carry.
+    private void integerPart(BitSink sink, long value) {
+      if (!floatingPoint) {
+        sink.se(value);
+      }
+    }
+
+    private void nlqIntegerPart(BitSink sink, long value) {
+      if (!floatingPoint) {
+        sink.ue(value);
+      }
     }
 
     private void writeMapping(BitSink sink) {
@@ -381,26 +415,33 @@ final class SyntheticRpus {
 
     private void writeIdentityPolynomial(BitSink sink, long mappingIdc) {
       sink.ue(mappingIdc).ue(0).bit(0);
-      sink.se(0).u(0, fractionBits);
-      sink.se(1).u(0, fractionBits);
+      integerPart(sink, 0);
+      sink.u(0, fractionBits);
+      integerPart(sink, 1);
+      sink.u(0, fractionBits);
     }
 
     // mapping_idc 1, third order: a constant and 3 x 7 coefficients, signed integer parts first.
     private void writeMmr(BitSink sink, int component) {
       sink.ue(1).u(2, 2);
-      sink.se(-component).u(MMR_COEFFICIENT_FRACTION, fractionBits);
+      integerPart(sink, -component);
+      sink.u(MMR_COEFFICIENT_FRACTION, fractionBits);
       for (var order = 0; order < 3; order++) {
         for (var coefficient = 0; coefficient < 7; coefficient++) {
-          sink.se((coefficient % 3) - 1 + order).u(MMR_COEFFICIENT_FRACTION, fractionBits);
+          integerPart(sink, (coefficient % 3) - 1 + order);
+          sink.u(MMR_COEFFICIENT_FRACTION, fractionBits);
         }
       }
     }
 
     private void writeNlq(BitSink sink, Nlq parameters) {
       sink.u(parameters.offset(), BL_BIT_DEPTH);
-      sink.ue(parameters.vdrInMaxInteger()).u(parameters.vdrInMax(), fractionBits);
-      sink.ue(parameters.slopeInteger()).u(parameters.slope(), fractionBits);
-      sink.ue(parameters.thresholdInteger()).u(parameters.threshold(), fractionBits);
+      nlqIntegerPart(sink, parameters.vdrInMaxInteger());
+      sink.u(parameters.vdrInMax(), fractionBits);
+      nlqIntegerPart(sink, parameters.slopeInteger());
+      sink.u(parameters.slope(), fractionBits);
+      nlqIntegerPart(sink, parameters.thresholdInteger());
+      sink.u(parameters.threshold(), fractionBits);
     }
 
     private void writeDmData(BitSink sink) {
