@@ -1,0 +1,92 @@
+package com.streamarr.transcode.engine;
+
+/**
+ * Reads the bits of an RPU's bytes, most significant first, as the RPU syntax tables do: fixed
+ * widths up to 32 bits, ue(v) and se(v) Exp-Golomb codes, and whole bytes at any bit position.
+ */
+final class RpuBitReader {
+
+  private static final int LONGEST_EXP_GOLOMB_RUN = 32;
+
+  private final byte[] bytes;
+  private int position;
+
+  RpuBitReader(byte[] bytes) {
+    this.bytes = bytes;
+  }
+
+  /**
+   * @throws DolbyVisionRpuException when the bytes end first
+   */
+  long bits(int count) {
+    if (count > bitsRemaining()) {
+      throw new DolbyVisionRpuException("the RPU ends before its syntax does");
+    }
+
+    var value = 0L;
+    for (var bit = 0; bit < count; bit++) {
+      value = (value << 1) | ((bytes[position >> 3] >> (7 - (position & 7))) & 1);
+      position++;
+    }
+
+    return value;
+  }
+
+  boolean flag() {
+    return bits(1) == 1;
+  }
+
+  /** ue(v): a run of zero bits, a one bit, then as many value bits as the run held. */
+  long unsignedExpGolomb() {
+    var leadingZeros = 0;
+    while (!flag()) {
+      leadingZeros++;
+      if (leadingZeros > LONGEST_EXP_GOLOMB_RUN) {
+        throw new DolbyVisionRpuException("an Exp-Golomb code runs past 32 bits");
+      }
+    }
+
+    return (1L << leadingZeros) - 1 + bits(leadingZeros);
+  }
+
+  /** se(v): the odd codes are the positive values, the even codes the negative ones. */
+  long signedExpGolomb() {
+    var code = unsignedExpGolomb();
+    if ((code & 1) == 1) {
+      return (code + 1) / 2;
+    }
+
+    return -(code / 2);
+  }
+
+  /** The next bytes, from the current bit position, which need not lie on a byte boundary. */
+  byte[] bytes(int count) {
+    var read = new byte[count];
+    for (var index = 0; index < count; index++) {
+      read[index] = (byte) bits(8);
+    }
+
+    return read;
+  }
+
+  /**
+   * Skips to the next byte boundary.
+   *
+   * @throws DolbyVisionRpuException when a skipped bit is set, which an alignment bit never is
+   */
+  void alignmentZeroBits() {
+    while (!isByteAligned()) {
+      if (flag()) {
+        throw new DolbyVisionRpuException("an alignment bit is set");
+      }
+    }
+  }
+
+  boolean isByteAligned() {
+    return (position & 7) == 0;
+  }
+
+  int bitsRemaining() {
+    return bytes.length * 8 - position;
+  }
+}
