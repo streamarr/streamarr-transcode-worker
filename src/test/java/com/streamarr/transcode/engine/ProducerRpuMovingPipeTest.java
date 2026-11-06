@@ -912,6 +912,7 @@ class ProducerRpuMovingPipeTest {
         .intervals(SegmentIntervals.onPlainGrid(recording.period()))
         .startSequenceNumber(recording.startSequenceNumber())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .pauses(new ProducerPauses())
         .sink(sink)
         .clock(MonotonicClock.system());
   }

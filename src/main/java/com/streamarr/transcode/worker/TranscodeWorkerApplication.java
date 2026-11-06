@@ -6,6 +6,7 @@ import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.lang.ProcessBuilder.Redirect;
 import java.nio.file.Path;
@@ -59,7 +60,7 @@ public class TranscodeWorkerApplication {
   }
 
   @Bean(destroyMethod = "close")
-  TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings)
+  TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings, MeterRegistry meterRegistry)
       throws IOException, InterruptedException {
     var capabilities = new TranscodeCapabilityService(settings.ffmpegPath(), ProcessBuilder::start);
     capabilities.detectCapabilities();
@@ -78,6 +79,7 @@ public class TranscodeWorkerApplication {
             .launcher(new ProcessBuilderLauncher())
             .encoderStallTimeout(settings.encoderStallTimeout())
             .build();
+    ProducerPauseMeters.bind(meterRegistry, engine.producerPauses());
     return TranscodeWorker.builder()
         .configuration(settings.workerConfiguration())
         .engine(engine)

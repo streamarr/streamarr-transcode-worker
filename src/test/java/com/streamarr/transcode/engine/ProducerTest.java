@@ -185,6 +185,7 @@ class ProducerTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .pauses(new ProducerPauses())
         .sink(new RecordingSegmentSink());
   }
 
@@ -4452,6 +4453,7 @@ class ProducerTest {
             VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .paddedAudioEnd(Optional.empty())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .pauses(new ProducerPauses())
         .sink(sink)
         .clock(MonotonicClock.system());
   }

@@ -75,6 +75,8 @@ public final class Producer {
 
   private final SegmentSink sink;
   private final SegmentMemoryBudget memoryBudget;
+  private final ProducerPauses pauses;
+  private final UUID jobAttemptId;
   private final Duration stallTimeout;
   private final StallWatchdog watchdog;
   private final ProductionTimer productionTimer;
@@ -120,6 +122,8 @@ public final class Producer {
     this.assembler = settings.assembler();
     this.sink = settings.sink();
     this.memoryBudget = settings.memoryBudget();
+    this.pauses = settings.pauses();
+    this.jobAttemptId = settings.jobAttemptId();
     this.threadName = "producer-" + settings.jobAttemptId();
     this.sourceEndRule = settings.sourceEndRule();
     this.startSequenceNumber = settings.startSequenceNumber();
@@ -149,6 +153,7 @@ public final class Producer {
    * @param copiesAudio whether the attempt copies the source's audio packets, which the producer
    *     places whole in the segment whose interval holds their start
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
+   * @param pauses the tally of pauses and holds that every producer of the engine keeps
    * @param clock the clock that times each media segment's production
    * @throws TranscodeException when FFmpeg cannot be started
    */
@@ -168,6 +173,7 @@ public final class Producer {
       boolean requiresSoundTrack,
       @NonNull Optional<Duration> paddedAudioEnd,
       @NonNull SegmentMemoryBudget memoryBudget,
+      @NonNull ProducerPauses pauses,
       @NonNull SegmentSink sink,
       @NonNull MonotonicClock clock) {
     var settings =
@@ -186,6 +192,7 @@ public final class Producer {
                     .build())
             .sink(sink)
             .memoryBudget(memoryBudget)
+            .pauses(pauses)
             .stallTimeout(stallTimeout)
             .clock(clock)
             .sourceEndRule(
@@ -294,6 +301,8 @@ public final class Producer {
 
       ffmpegPaused = true;
       pausedAtNanos = clock.nanoTime();
+      pauses.seekPaused();
+      log.debug("Paused job attempt {} for a seek", jobAttemptId);
       return true;
     }
   }
@@ -310,6 +319,7 @@ public final class Producer {
     productionTimer.pause();
     watchdog.pause();
     pausedProcesses = stopped;
+    pauses.stopped();
     return true;
   }
 
@@ -330,6 +340,8 @@ public final class Producer {
     var resumedAt = clock.nanoTime();
     deliveredSinceResume = false;
     resumes++;
+    pauses.seekResumed();
+    log.debug("Resumed job attempt {} after a seek's pause", jobAttemptId);
     if (heldBack) {
       owedRunNanos = resumedAt - pausedAtNanos;
       return;
@@ -364,6 +376,8 @@ public final class Producer {
       heldBack = true;
       owedRunNanos = remainingRunNanos();
       restEndsAtNanos = OptionalLong.empty();
+      pauses.held();
+      log.debug("Held back job attempt {}", jobAttemptId);
       return true;
     }
   }
@@ -382,6 +396,8 @@ public final class Producer {
     }
 
     heldBack = false;
+    pauses.holdReleased();
+    log.debug("Released the hold of job attempt {}", jobAttemptId);
     if (ffmpegPaused) {
       return;
     }
@@ -404,6 +420,7 @@ public final class Producer {
   private void continueFfmpegProcesses() {
     pausedProcesses.forEach(PausedProcess::resume);
     pausedProcesses = List.of();
+    pauses.continued();
     watchdog.resume();
     productionTimer.resume();
   }
@@ -1049,6 +1066,7 @@ public final class Producer {
       SegmentAssembler assembler,
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
+      ProducerPauses pauses,
       Duration stallTimeout,
       MonotonicClock clock,
       SourceEndRule sourceEndRule,

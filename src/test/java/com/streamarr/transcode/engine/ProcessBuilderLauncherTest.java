@@ -479,6 +479,7 @@ class ProcessBuilderLauncherTest {
             VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .paddedAudioEnd(Optional.empty())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .pauses(new ProducerPauses())
         .sink(sink)
         .clock(MonotonicClock.system());
   }
