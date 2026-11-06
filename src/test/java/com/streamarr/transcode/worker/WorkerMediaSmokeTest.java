@@ -88,6 +88,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -3883,10 +3884,10 @@ class WorkerMediaSmokeTest {
   @Test
   @DisplayName(
       "Should upload the start-0 attempt's video packets for every media segment when a"
-          + " stream-copy replacement attempt that encodes its audio holds its first segment's"
-          + " keyframe inside FFmpeg's first fragment")
+          + " stream-copy replacement attempt that encodes its audio writes two keyframes into"
+          + " FFmpeg's first fragment")
   void
-      shouldUploadTheStartZeroAttemptsVideoPacketsWhenAReplacementAttemptHoldsItsFirstSegmentsKeyframeInsideFfmpegsFirstFragment()
+      shouldUploadTheStartZeroAttemptsVideoPacketsWhenACopyReplacementWritesTwoKeyframesIntoFfmpegsFirstFragment()
           throws Exception {
     var source = keyframeBeforeBoundarySource();
     var fromStart = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
@@ -3899,9 +3900,9 @@ class WorkerMediaSmokeTest {
     var replacementUploads =
         execute(engine(softwareCapabilities(), launcher), source.getParent(), replacement.build());
 
-    // The seek lands on the keyframe at 10.010 s while the encoded audio starts at 12 s, and FFmpeg
-    // writes nothing until every track has a sample, so its first fragment holds the keyframe at
-    // 12.012 s too.
+    // The attempt reads from one period early. Its seek lands on the keyframe at 4.004 s while the
+    // encoded audio starts just after 6 s, and FFmpeg writes nothing until every track has a
+    // sample, so its first fragment holds the keyframe at 6.006 s too.
     var output = Mp4Samples.read(launcher.outputOf(fromProto(replacement.getJobAttemptId())));
     var videoTrackId = output.videoTrack().trackId();
     assertThat(output.fragments().getFirst().samples())
@@ -6941,6 +6942,59 @@ class WorkerMediaSmokeTest {
     assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
   }
 
+  // Segment 3 starts at 2,700,012/90,000 s, 30.0001333... s, which falls between two samples of the
+  // 48 kHz source: sample 1,440,006.4. The replacement's audio must open on sample 1,440,007, the
+  // first at or after that start, as a lower variant that starts beside a copy does. A trim at the
+  // start rounded to a microsecond, 30.000134 s, rounds to sample 1,440,006, before the start.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"aac", "ac3", "libopus", "flac"})
+  @DisplayName(
+      "Should open the replacement's audio on the first sample at or after its first segment's"
+          + " exact start and leave no gap after the start attempt's audio")
+  void shouldOpenTheReplacementsAudioOnTheFirstSampleAtOrAfterItsFirstSegmentsExactStart(
+      String codec) throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            exactStartGapAudioJob(source, codec).build());
+    var replacementJob = exactStartGapAudioJob(source, codec);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(3))));
+    var sample = new BigFraction(1, replaced.audioTrack().timescale());
+    var firstSampleAtOrAfterTheStart =
+        sample.ticksIn(new BigFraction(2_700_012, MPEG_TS_TICKS_PER_SECOND).ceilingIn(sample));
+    assertThat(replaced.audioTrack().timescale()).isEqualTo(48_000);
+    assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
+        .as("the replacement's audio opens on the first sample at or after the exact start")
+        .isEqualTo(firstSampleAtOrAfterTheStart);
+    var before = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(2))));
+    var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
+    assertThat(lastAudioBefore.end())
+        .as("the start attempt's segment 2 audio reaches the replacement's, by less than a frame")
+        .isGreaterThanOrEqualTo(firstSampleAtOrAfterTheStart)
+        .isLessThan(firstSampleAtOrAfterTheStart + lastAudioBefore.duration());
+  }
+
+  // The gap source's job on exact starts in place of slots 0, 3, 6 and 10: segment 3 starts 12
+  // ticks of 1/90,000 s after 30 s.
+  private static VariantJob.Builder exactStartGapAudioJob(Path source, String codec) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartTicks(List.of(0L, 810_000L, 1_620_000L, 2_700_012L))
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder().setNumerator(1).setDenominator(MPEG_TS_TICKS_PER_SECOND));
+    return job;
+  }
+
   // FLAC and ALAC are lossless, so the replacement's audio decodes to the start attempt's samples
   // only when its frames carry the source's samples from the listed start on, at the times that
   // the start attempt gives them. Timestamps alone would also pass audio taken from a frame
@@ -7441,6 +7495,374 @@ class WorkerMediaSmokeTest {
 
     private boolean isWithin(Duration from, Duration until) {
       return presentationTime.compareTo(from) >= 0 && presentationTime.compareTo(until) < 0;
+    }
+  }
+
+  @ParameterizedTest(name = "encoded at {0}/1001 fps")
+  @ValueSource(ints = {30_000, 24_000})
+  @DisplayName(
+      "Should start each encoded segment on the first output frame at or after the copied"
+          + " segment's exact start when an encode and a copy of an MPEG-TS source carry the copy's"
+          + " exact starts")
+  void shouldStartEachEncodedSegmentOnTheFirstOutputFrameAtOrAfterTheCopiedSegmentsExactStart(
+      int frameRateNumerator) throws Exception {
+    var source = exactStartMpegTsSource();
+    var starts = exactStarts(source);
+    var copy = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
+    var encode = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE, starts);
+    encode
+        .getExecutionBuilder()
+        .setOutputFrameRate(
+            Fraction.newBuilder().setNumerator(frameRateNumerator).setDenominator(1001));
+    var engine = engine(softwareCapabilities());
+
+    var copied = execute(engine, source.getParent(), copy.build());
+    var encoded = execute(engine, source.getParent(), encode.build());
+
+    assertThat(copied.names()).containsExactlyElementsOf(uploadNames(starts.size()));
+    assertThat(encoded.names()).containsExactlyElementsOf(uploadNames(starts.size()));
+    for (var number = 0; number < starts.size(); number++) {
+      var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
+      var copiedStart = firstVideoSampleOf(copied, number);
+      var encodedStart = firstVideoSampleOf(encoded, number);
+      var frame = new BigFraction(1001, frameRateNumerator);
+      assertThat(copiedStart)
+          .as("copied segment %d opens at its exact start", number)
+          .isEqualTo(start);
+      assertThat(encodedStart)
+          .as("encoded segment %d opens on the first output frame at or after its start", number)
+          .isEqualTo(start.ceilingIn(frame));
+      assertThat(encodedStart.minus(copiedStart))
+          .as("encoded segment %d starts less than one output frame after the copied one", number)
+          .isLessThan(frame);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should open every copied segment at its listed keyframe and split the audio at the exact"
+          + " starts when a copy of an MPEG-TS source with audio carries exact starts")
+  void shouldOpenEveryCopiedSegmentAtItsListedKeyframeWhenAnMpegTsCopyWithAudioCarriesExactStarts()
+      throws Exception {
+    var source = exactStartMpegTsSourceWithAudio();
+    var starts = exactStarts(source);
+    var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
+    job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_COPY);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(starts.size()));
+    assertThat(firstVideoSampleOf(uploads, 0))
+        .as("segment 0 opens at the first keyframe, after the AAC priming that starts the timeline")
+        .isGreaterThan(new BigFraction(0, 1));
+    assertAudioStartsInsideItsExactInterval(uploads, 0, starts);
+    for (var number = 1; number < starts.size(); number++) {
+      assertThat(firstVideoSampleOf(uploads, number))
+          .as("segment %d opens at its listed keyframe", number)
+          .isEqualTo(new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND));
+      assertAudioStartsInsideItsExactInterval(uploads, number, starts);
+    }
+  }
+
+  // A replacement attempt that copies the video seeks to its first segment's keyframe, whose exact
+  // start lies between two samples of the 48 kHz audio. Its encoded audio must open on the first
+  // sample at or after that start, where the start attempt's audio reaches, so the junction has no
+  // gap. AC-3, E-AC-3 and Opus encoders need samples before that start for their lead, with or
+  // without the server's keyframe position.
+  @ParameterizedTest(name = "{0}, server position {1}")
+  @CsvSource({
+    "aac, true",
+    "ac3, true",
+    "eac3, true",
+    "libopus, true",
+    "ac3, false",
+    "eac3, false",
+    "libopus, false"
+  })
+  @DisplayName(
+      "Should open a copy's encoded audio on the first sample at or after each segment's exact"
+          + " start when a replacement attempt copies the video and encodes the audio")
+  void shouldOpenACopysEncodedAudioOnTheFirstSampleAtOrAfterEachExactStartWhenAReplacementStarts(
+      String codec, boolean sendsTheServersPosition) throws Exception {
+    var source = exactStartMpegTsSourceWithAudio();
+    var starts = exactStarts(source);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            copyEncodingAudioJob(source, starts, codec).build());
+
+    for (var number = 1; number < starts.size(); number++) {
+      var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
+      var replacementJob = copyEncodingAudioJob(source, starts, codec);
+      replacementJob.getExecutionBuilder().setStartSequenceNumber(number);
+      if (sendsTheServersPosition) {
+        replacementJob
+            .getExecutionBuilder()
+            .setSeekPositionSeconds(Math.toIntExact(new BigFraction(1, 1).ticksIn(start)));
+        setSeekPosition(
+            replacementJob.getExecutionBuilder(),
+            new BigDecimal(starts.get(number))
+                .divide(BigDecimal.valueOf(MPEG_TS_TICKS_PER_SECOND), 9, RoundingMode.CEILING));
+      }
+
+      var replacement =
+          execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+      var replaced =
+          Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(number))));
+      var sample = new BigFraction(1, replaced.audioTrack().timescale());
+      var firstSampleAtOrAfterTheStart = sample.ticksIn(start.ceilingIn(sample));
+      assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
+          .as("segment %d's audio opens on the first sample at or after its exact start", number)
+          .isEqualTo(firstSampleAtOrAfterTheStart);
+      var before =
+          Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(number - 1))));
+      var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
+      assertThat(lastAudioBefore.end())
+          .as("segment %d's audio in the start attempt reaches the replacement's", number - 1)
+          .isGreaterThanOrEqualTo(firstSampleAtOrAfterTheStart)
+          .isLessThan(firstSampleAtOrAfterTheStart + lastAudioBefore.duration());
+    }
+  }
+
+  // A copy of the source's video on its exact starts that encodes its audio in stereo.
+  private static VariantJob.Builder copyEncodingAudioJob(
+      Path source, List<Long> starts, String codec) {
+    var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE, starts);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec(codec)
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000);
+    return job;
+  }
+
+  // Segment 0's audio may start before zero with the AAC priming frame; the last segment's audio
+  // runs to the end of the media.
+  private static void assertAudioStartsInsideItsExactInterval(
+      MediaUploads uploads, int number, List<Long> starts) {
+    var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
+    var audioTimescale = movie.audioTrack().timescale();
+    var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
+    var end =
+        Optional.of(number + 1)
+            .filter(next -> next < starts.size())
+            .map(next -> new BigFraction(starts.get(next), MPEG_TS_TICKS_PER_SECOND));
+    assertThat(movie.samplesOf(movie.audioTrack()))
+        .extracting(sample -> new BigFraction(sample.presentationTime(), audioTimescale))
+        .as("segment %d's audio starts inside its exact interval", number)
+        .isNotEmpty()
+        .allMatch(time -> number == 0 || time.compareTo(start) >= 0)
+        .allMatch(time -> end.isEmpty() || time.compareTo(end.orElseThrow()) < 0);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"mkv", "avi"})
+  @DisplayName(
+      "Should open every copied segment at its listed keyframe when a copy carries exact starts in"
+          + " the source's own time base")
+  void shouldOpenEveryCopiedSegmentAtItsListedKeyframeWhenACopyCarriesExactStartsInItsTimeBase(
+      String container) throws Exception {
+    var source = exactStartSource(container);
+    var timeBase = videoTimeBase(source);
+    var starts = exactStarts(source);
+    var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
+    job.getExecutionBuilder()
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder()
+                .setNumerator(timeBase.numerator().intValueExact())
+                .setDenominator(timeBase.denominator().intValueExact()));
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(starts.size()));
+    for (var number = 0; number < starts.size(); number++) {
+      assertThat(firstVideoSampleOf(uploads, number))
+          .as("segment %d opens at its listed keyframe", number)
+          .isEqualTo(timeBase.times(starts.get(number)));
+    }
+  }
+
+  // The job copies or encodes the source on 3 s slots with the given exact starts, which the
+  // caller lists in the source video stream's time base: 1/90000 unless it sets another.
+  private static VariantJob.Builder exactStartJob(
+      Path source, TranscodeMode mode, List<Long> starts) {
+    var job = seekableSourceJob(source, mode);
+    job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(starts.size())
+        .addAllSegmentStartTicks(starts)
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder().setNumerator(1).setDenominator(MPEG_TS_TICKS_PER_SECOND));
+    return job;
+  }
+
+  // The first video sample of the segment, which must be a keyframe, at its exact time in seconds.
+  private static BigFraction firstVideoSampleOf(MediaUploads uploads, int number) {
+    var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
+    var first = movie.samplesOf(movie.videoTrack()).getFirst();
+    assertThat(first.isSync()).as("segment %d opens at a keyframe", number).isTrue();
+    return new BigFraction(first.presentationTime(), movie.videoTrack().timescale());
+  }
+
+  // The server's exact starts for the source: 0, then each later keyframe's presentation tick on
+  // the zero-based timeline, as ADR 0032 stores it, that presents at least 2 s after the previous
+  // start and 2 s before the end of the media.
+  private static List<Long> exactStarts(Path source) throws Exception {
+    var timeBase = videoTimeBase(source);
+    var origin = earliestStreamStart(source);
+    var end = timeBase.ticksIn(mediaDuration(source));
+    var twoSeconds = timeBase.ticksIn(new BigFraction(2, 1));
+    var starts = new ArrayList<Long>();
+    starts.add(0L);
+    var keyframes =
+        ffprobe(VIDEO_KEYFRAME_PTS, source)
+            .lines()
+            .map(line -> line.split(","))
+            .filter(parts -> parts[2].startsWith("K"))
+            .mapToLong(parts -> presentationTick(parts) - origin)
+            .toArray();
+    for (var tick : keyframes) {
+      if (tick >= starts.getLast() + twoSeconds && tick <= end - twoSeconds) {
+        starts.add(tick);
+      }
+    }
+
+    return List.copyOf(starts);
+  }
+
+  private static final List<String> VIDEO_KEYFRAME_PTS =
+      List.of("-select_streams", "v:0", "-show_entries", "packet=pts,dts,flags");
+
+  // AVI packets carry only a decode time, which equals the presentation time without B-frames.
+  private static long presentationTick(String[] packet) {
+    if (packet[0].equals("N/A")) {
+      return Long.parseLong(packet[1]);
+    }
+
+    return Long.parseLong(packet[0]);
+  }
+
+  // The earliest start of the source's streams in ticks of its video time base, which
+  // -start_at_zero subtracts; every stream of these sources shares that time base.
+  private static long earliestStreamStart(Path source) throws Exception {
+    return ffprobe(List.of("-show_entries", "stream=start_pts"), source)
+        .lines()
+        .map(String::strip)
+        .filter(line -> !line.isEmpty())
+        .mapToLong(line -> Long.parseLong(line.replace(",", "")))
+        .min()
+        .orElseThrow();
+  }
+
+  private static BigFraction mediaDuration(Path source) throws Exception {
+    var seconds = new BigDecimal(ffprobe(List.of("-show_entries", "format=duration"), source));
+    return new BigFraction(
+        seconds.unscaledValue().longValueExact(),
+        BigInteger.TEN.pow(seconds.scale()).longValueExact());
+  }
+
+  private static BigFraction videoTimeBase(Path source) throws Exception {
+    var parts =
+        ffprobe(List.of("-select_streams", "v:0", "-show_entries", "stream=time_base"), source)
+            .lines()
+            .findFirst()
+            .orElseThrow()
+            .split("/");
+    return new BigFraction(Long.parseLong(parts[0]), Long.parseLong(parts[1]));
+  }
+
+  // An H.264 source at 30000/1001 fps with a keyframe every 101 frames, 3.37003... s, which is not
+  // a whole number of microseconds and falls between two frames at 24000/1001 fps, and no B-frames,
+  // so that every frame lies on the 30000/1001 grid from zero.
+  private static Path exactStartMpegTsSource() throws Exception {
+    return exactStartSource("exact-starts.ts", List.of(), List.of("-f", "mpegts"));
+  }
+
+  // The same video with AAC audio, whose priming starts the timeline before the first frame, so
+  // that its keyframes fall on no slot boundary.
+  private static Path exactStartMpegTsSourceWithAudio() throws Exception {
+    return exactStartSource(
+        "exact-starts-audio.ts",
+        List.of("-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5"),
+        List.of("-c:a", "aac", "-f", "mpegts"));
+  }
+
+  // The same video in Matroska, whose time base is 1/1000, or AVI, whose time base is the frame
+  // rate's inverse, 1001/30000.
+  private static Path exactStartSource(String container) throws Exception {
+    return exactStartSource("exact-starts." + container, List.of(), List.of());
+  }
+
+  private static synchronized Path exactStartSource(
+      String name, List<String> audioInput, List<String> output) throws Exception {
+    var source = seekableSources.resolve(name);
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var arguments =
+        Stream.of(
+                List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=30000/1001"),
+                audioInput,
+                List.of("-t", "14", "-c:v", "libx264", "-bf", "0"),
+                List.of("-x264-params", "keyint=101:min-keyint=101:scenecut=0"),
+                output)
+            .flatMap(List::stream)
+            .toList();
+    runFfmpeg(arguments, source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  private static final int MPEG_TS_TICKS_PER_SECOND = 90_000;
+
+  // An exact non-negative fraction of seconds.
+  private record BigFraction(BigInteger numerator, BigInteger denominator)
+      implements Comparable<BigFraction> {
+
+    BigFraction(long numerator, long denominator) {
+      this(BigInteger.valueOf(numerator), BigInteger.valueOf(denominator));
+    }
+
+    BigFraction {
+      var divisor = numerator.gcd(denominator);
+      numerator = numerator.divide(divisor);
+      denominator = denominator.divide(divisor);
+    }
+
+    BigFraction times(long ticks) {
+      return new BigFraction(numerator.multiply(BigInteger.valueOf(ticks)), denominator);
+    }
+
+    BigFraction minus(BigFraction other) {
+      return new BigFraction(
+          numerator.multiply(other.denominator).subtract(other.numerator.multiply(denominator)),
+          denominator.multiply(other.denominator));
+    }
+
+    // The first whole multiple of the step at or after this time.
+    BigFraction ceilingIn(BigFraction step) {
+      var steps = numerator.multiply(step.denominator);
+      var size = denominator.multiply(step.numerator);
+      var count = steps.add(size).subtract(BigInteger.ONE).divide(size);
+      return new BigFraction(step.numerator.multiply(count), step.denominator);
+    }
+
+    // This time base's ticks in a time, rounded down.
+    long ticksIn(BigFraction time) {
+      return time.numerator
+          .multiply(denominator)
+          .divide(time.denominator.multiply(numerator))
+          .longValueExact();
+    }
+
+    @Override
+    public int compareTo(BigFraction other) {
+      return numerator.multiply(other.denominator).compareTo(other.numerator.multiply(denominator));
     }
   }
 

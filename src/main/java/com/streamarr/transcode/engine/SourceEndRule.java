@@ -2,7 +2,6 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.SourceEnd.EndedEarly;
 import com.streamarr.transcode.engine.SourceEnd.StreamEnd;
-import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -33,11 +32,13 @@ record SourceEndRule(
     @NonNull VideoDecision video,
     boolean copiesAudio) {
 
-  private static final long NANOSECONDS_PER_SECOND = Duration.ofSeconds(1).toNanos();
-
   SourceEnd reportOn(List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     var ends =
-        streams.stream().map(stream -> new StreamEnd(stream.sourceIndex(), stream.end())).toList();
+        streams.stream()
+            .map(
+                stream ->
+                    new StreamEnd(stream.sourceIndex(), stream.end().truncatedToNanoseconds()))
+            .toList();
     var endedEarly =
         lastSegmentWithSourceMedia(streams, lastDeliveredMediaSegment)
             .filter(segment -> segment >= 0 && segment < mediaSegmentCount - 1L)
@@ -48,10 +49,7 @@ record SourceEndRule(
   private Optional<Long> lastSegmentWithSourceMedia(
       List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     if (video instanceof VideoDecision.Encode encode && encode.holdsLastFrameToAdvertisedEnd()) {
-      return streams.stream()
-          .map(this::lastSourceInstant)
-          .max(Comparator.naturalOrder())
-          .map(this::segmentAt);
+      return streams.stream().map(this::segmentOfLastSourceInstant).max(Comparator.naturalOrder());
     }
 
     if (lastDeliveredMediaSegment.isPresent()) {
@@ -62,44 +60,48 @@ record SourceEndRule(
         streams.stream().filter(stream -> stream.sourceIndex() == video.streamIndex()).findFirst();
     return switch (video) {
       case VideoDecision.Copy _ ->
-          videoStream.flatMap(ObservedSourceStream::lastKeyframeStart).map(this::segmentAt);
-      case VideoDecision.Encode _ ->
-          videoStream.map(SourceEndRule::lastCoveredInstant).map(this::segmentAt);
+          videoStream.flatMap(ObservedSourceStream::lastKeyframeStart).map(intervals::numberAt);
+      case VideoDecision.Encode _ -> videoStream.map(this::segmentOfLastCoveredInstant);
     };
   }
 
   private EndedEarly endedEarlyIn(long segment, List<ObservedSourceStream> streams) {
-    var segmentEnd =
-        Duration.ofNanos(intervals.endOf(segment, NANOSECONDS_PER_SECOND).orElseThrow());
+    var segmentEnd = intervals.endTimeOf(segment).orElseThrow();
     var streamsWithMediaAfter =
         streams.stream()
             .filter(stream -> stream.sourceIndex() != video.streamIndex())
-            .filter(stream -> lastSourceInstant(stream).compareTo(segmentEnd) >= 0)
+            .filter(stream -> hasSourceMediaFrom(stream, segmentEnd))
             .map(ObservedSourceStream::sourceIndex)
             .sorted()
             .toList();
     return new EndedEarly(Math.toIntExact(segment), streamsWithMediaAfter);
   }
 
-  private Duration lastSourceInstant(ObservedSourceStream stream) {
-    if (copiesAudio && stream.sourceIndex() != video.streamIndex()) {
-      return stream.lastStart();
+  private long segmentOfLastSourceInstant(ObservedSourceStream stream) {
+    if (placesWholeByStart(stream)) {
+      return intervals.numberAt(stream.lastStart());
     }
 
-    return lastCoveredInstant(stream);
+    return segmentOfLastCoveredInstant(stream);
   }
 
-  // The last nanosecond that the stream's last sample covers; its start when it lasts no time.
-  private static Duration lastCoveredInstant(ObservedSourceStream stream) {
-    var beforeEnd = stream.end().minusNanos(1);
-    if (beforeEnd.compareTo(stream.lastStart()) < 0) {
-      return stream.lastStart();
+  // The last instant that the stream's last sample covers lies just before its end, or at its
+  // start when it lasts no time.
+  private long segmentOfLastCoveredInstant(ObservedSourceStream stream) {
+    return Math.max(
+        intervals.numberJustBefore(stream.end()), intervals.numberAt(stream.lastStart()));
+  }
+
+  private boolean hasSourceMediaFrom(ObservedSourceStream stream, MediaTime time) {
+    if (placesWholeByStart(stream)) {
+      return stream.lastStart().compareTo(time) >= 0;
     }
 
-    return beforeEnd;
+    return stream.end().compareTo(time) > 0 || stream.lastStart().compareTo(time) >= 0;
   }
 
-  private long segmentAt(Duration presentationTime) {
-    return intervals.numberAt(presentationTime.toNanos(), NANOSECONDS_PER_SECOND);
+  // The producer places a copied audio packet whole by its start.
+  private boolean placesWholeByStart(ObservedSourceStream stream) {
+    return copiesAudio && stream.sourceIndex() != video.streamIndex();
   }
 }

@@ -1,38 +1,44 @@
 package com.streamarr.transcode.engine;
 
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.function.IntPredicate;
 import lombok.NonNull;
 
 /**
  * The media segments' intervals on ADR 0037's zero-based timeline of slots, each one period long.
  * On the plain grid segment N's interval is slot N. On a segment list, segment N's interval runs
- * from its listed start slot up to the next segment's, so one segment can span several slots. The
- * last listed segment's audio ends at the job's advertised end, and runs to the end of the media
- * only in a job that carries none; its video runs to the end of the media either way, so a keyframe
- * past the advertised end opens no segment that the playlist does not advertise.
+ * from its listed start up to the next segment's, so one segment can span several slots; a list
+ * gives each start as a slot or as an exact presentation time in ticks of a time base. The last
+ * listed segment's audio ends at the job's advertised end, and runs to the end of the media only in
+ * a job that carries none; its video runs to the end of the media either way, so a keyframe past
+ * the advertised end opens no segment that the playlist does not advertise.
  */
 final class SegmentIntervals {
 
   private final int periodSeconds;
-  // Each segment's start slot, strictly increasing from 0; empty on the plain grid.
-  private final long[] startSlots;
+  // Each segment's start in ticks of the start time base, strictly increasing from 0; empty on the
+  // plain grid.
+  private final long[] starts;
+  private final TimeBase startTimeBase;
   // Where the last listed segment's audio ends; empty when it runs to the end of the media.
   private final Optional<Duration> listEnd;
 
-  private SegmentIntervals(int periodSeconds, long[] startSlots, Optional<Duration> listEnd) {
+  private SegmentIntervals(
+      int periodSeconds, long[] starts, TimeBase startTimeBase, Optional<Duration> listEnd) {
     this.periodSeconds = periodSeconds;
-    this.startSlots = startSlots;
+    this.starts = starts;
+    this.startTimeBase = startTimeBase;
     this.listEnd = listEnd;
   }
 
   /** The intervals of a plain grid whose every segment lasts this many seconds. */
   static SegmentIntervals onPlainGrid(int periodSeconds) {
     requirePositive(periodSeconds);
-    return new SegmentIntervals(periodSeconds, new long[0], Optional.empty());
+    return new SegmentIntervals(
+        periodSeconds, new long[0], slotsOf(periodSeconds), Optional.empty());
   }
 
   /**
@@ -43,7 +49,28 @@ final class SegmentIntervals {
   static SegmentIntervals onSegmentList(int periodSeconds, @NonNull List<Long> startSlots) {
     requirePositive(periodSeconds);
     return new SegmentIntervals(
-        periodSeconds, startSlots.stream().mapToLong(Long::longValue).toArray(), Optional.empty());
+        periodSeconds,
+        startSlots.stream().mapToLong(Long::longValue).toArray(),
+        slotsOf(periodSeconds),
+        Optional.empty());
+  }
+
+  /**
+   * The intervals of a list of exact segment starts on slots that last this many seconds, the plain
+   * grid's period, which a replacement attempt's seek still counts in.
+   */
+  static SegmentIntervals onExactStarts(int periodSeconds, @NonNull ExactSegmentStarts starts) {
+    requirePositive(periodSeconds);
+    return new SegmentIntervals(
+        periodSeconds,
+        starts.ticks().stream().mapToLong(Long::longValue).toArray(),
+        starts.timeBase(),
+        Optional.empty());
+  }
+
+  // A slot is one tick of a time base whose ticks each last one period.
+  private static TimeBase slotsOf(int periodSeconds) {
+    return new TimeBase(periodSeconds, 1);
   }
 
   /**
@@ -56,7 +83,7 @@ final class SegmentIntervals {
       return this;
     }
 
-    return new SegmentIntervals(periodSeconds, startSlots, Optional.of(advertisedEnd));
+    return new SegmentIntervals(periodSeconds, starts, startTimeBase, Optional.of(advertisedEnd));
   }
 
   private static void requirePositive(int periodSeconds) {
@@ -70,29 +97,97 @@ final class SegmentIntervals {
    * first; on a list, every time from the last listed start on is in the last listed segment.
    */
   long numberAt(long presentationTime, long timescale) {
-    var slot = Math.floorDiv(presentationTime, periodSeconds * timescale);
-    if (slot < 0 || isPlainGrid()) {
-      return slot;
+    if (presentationTime < 0 || isPlainGrid()) {
+      return Math.floorDiv(presentationTime, periodSeconds * timescale);
     }
 
-    // The segment whose start slot is the last at or before the slot.
-    var found = Arrays.binarySearch(startSlots, slot);
-    if (found >= 0) {
-      return found;
-    }
-
-    var insertionPoint = -(found + 1);
-    return insertionPoint - 1L;
+    return lastSegmentWhoseStart(
+        index -> startsAtOrBefore(starts[index], presentationTime, timescale));
   }
 
-  /** Where segment {@code number}'s interval starts, in ticks of this timescale. */
-  long startOf(long number, long timescale) {
-    var slot = number;
-    if (!isPlainGrid()) {
-      slot = startSlots[Math.toIntExact(number)];
+  /**
+   * The number of the segment whose interval holds this time, negative before the first; on a list,
+   * every time from the last listed start on is in the last listed segment.
+   */
+  long numberAt(MediaTime time) {
+    if (time.ticks() < 0 || isPlainGrid()) {
+      return time.floorIn(slotsOf(periodSeconds));
     }
 
-    return Math.multiplyExact(slot, periodSeconds * timescale);
+    return lastSegmentWhoseStart(index -> startTimeOf(index).compareTo(time) <= 0);
+  }
+
+  /**
+   * The number of the segment whose interval holds the instants just before this time, as the last
+   * instant that a sample ending at this time covers.
+   */
+  long numberJustBefore(MediaTime time) {
+    if (time.ticks() <= 0 || isPlainGrid()) {
+      return time.ceilIn(slotsOf(periodSeconds)) - 1;
+    }
+
+    return lastSegmentWhoseStart(index -> startTimeOf(index).compareTo(time) < 0);
+  }
+
+  // The last listed segment whose start passes the test, which segment 0's start, 0, passes.
+  private long lastSegmentWhoseStart(IntPredicate test) {
+    var low = 0;
+    var high = starts.length - 1;
+    while (low < high) {
+      var middle = (low + high + 1) >>> 1;
+      if (test.test(middle)) {
+        low = middle;
+        continue;
+      }
+
+      high = middle - 1;
+    }
+
+    return low;
+  }
+
+  // Compares the start, in ticks of the start time base, with the presentation time, in ticks of
+  // the timescale, exactly, so that neither is rounded.
+  private boolean startsAtOrBefore(long start, long presentationTime, long timescale) {
+    return new MediaTime(start, startTimeBase)
+            .compareTo(new MediaTime(presentationTime, new TimeBase(1, timescale)))
+        <= 0;
+  }
+
+  /** Where segment {@code number}'s interval starts, at its first tick of this timescale. */
+  long startOf(long number, long timescale) {
+    var start = startTimeOf(number);
+    return firstTickAtOrAfter(start.ticks(), start.timeBase(), timescale);
+  }
+
+  /** Where segment {@code number}'s interval starts on the zero-based timeline, exactly. */
+  MediaTime startTimeOf(long number) {
+    if (isPlainGrid()) {
+      return new MediaTime(number, slotsOf(periodSeconds));
+    }
+
+    return new MediaTime(starts[Math.toIntExact(number)], startTimeBase);
+  }
+
+  /**
+   * The shortest interval between two consecutive listed starts, or one period when that is shorter
+   * or the grid is plain.
+   */
+  MediaTime shortestInterval() {
+    var shortest = new MediaTime(1, slotsOf(periodSeconds));
+    for (var index = 1; index < starts.length; index++) {
+      var interval = new MediaTime(starts[index] - starts[index - 1], startTimeBase);
+      if (interval.compareTo(shortest) < 0) {
+        shortest = interval;
+      }
+    }
+
+    return shortest;
+  }
+
+  // Throws ArithmeticException rather than wrap when the tick does not fit a long.
+  private static long firstTickAtOrAfter(long start, TimeBase timeBase, long timescale) {
+    return new MediaTime(start, timeBase).ceilIn(new TimeBase(1, timescale));
   }
 
   /**
@@ -101,15 +196,32 @@ final class SegmentIntervals {
    * segment runs to the end of the media, and for a number past the list.
    */
   OptionalLong endOf(long number, long timescale) {
-    if (isPlainGrid() || number + 1 < startSlots.length) {
+    if (isPlainGrid() || number + 1 < starts.length) {
       return OptionalLong.of(startOf(number + 1, timescale));
     }
 
-    if (number + 1 > startSlots.length || listEnd.isEmpty()) {
+    if (number + 1 > starts.length || listEnd.isEmpty()) {
       return OptionalLong.empty();
     }
 
     return OptionalLong.of(MediaTicks.firstTickAtOrAfter(listEnd.get(), timescale));
+  }
+
+  /**
+   * Where segment {@code number}'s interval ends on the zero-based timeline, exactly: for the last
+   * listed segment, the advertised end, where its audio ends; empty when that segment runs to the
+   * end of the media, and for a number past the list.
+   */
+  Optional<MediaTime> endTimeOf(long number) {
+    if (isPlainGrid() || number + 1 < starts.length) {
+      return Optional.of(startTimeOf(number + 1));
+    }
+
+    if (number + 1 > starts.length) {
+      return Optional.empty();
+    }
+
+    return listEnd.map(MediaTime::of);
   }
 
   /**
@@ -119,7 +231,7 @@ final class SegmentIntervals {
    */
   long numberOfAudioSampleAt(long presentationTime, long timescale) {
     if (startsAtOrAfterTheListsEnd(presentationTime, timescale)) {
-      return startSlots.length;
+      return starts.length;
     }
 
     return numberAt(presentationTime, timescale);
@@ -132,6 +244,6 @@ final class SegmentIntervals {
   }
 
   private boolean isPlainGrid() {
-    return startSlots.length == 0;
+    return starts.length == 0;
   }
 }

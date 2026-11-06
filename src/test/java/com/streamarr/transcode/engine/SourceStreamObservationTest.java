@@ -83,15 +83,15 @@ class SourceStreamObservationTest {
         .containsExactly(
             ObservedSourceStream.builder()
                 .sourceIndex(2)
-                .lastStart(Duration.ofMillis(160))
-                .end(Duration.ofMillis(200))
-                .lastKeyframeStart(Optional.of(Duration.ofMillis(120)))
+                .lastStart(MediaTime.of(Duration.ofMillis(160)))
+                .end(MediaTime.of(Duration.ofMillis(200)))
+                .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(120))))
                 .build(),
             ObservedSourceStream.builder()
                 .sourceIndex(1)
-                .lastStart(Duration.ofNanos(21_333_333))
-                .end(Duration.ofNanos(32_000_000))
-                .lastKeyframeStart(Optional.of(Duration.ofNanos(21_333_333)))
+                .lastStart(new MediaTime(1024, new TimeBase(1, 48_000)))
+                .end(MediaTime.of(Duration.ofNanos(32_000_000)))
+                .lastKeyframeStart(Optional.of(new MediaTime(1024, new TimeBase(1, 48_000))))
                 .build());
   }
 
@@ -119,15 +119,15 @@ class SourceStreamObservationTest {
         .containsExactly(
             ObservedSourceStream.builder()
                 .sourceIndex(0)
-                .lastStart(Duration.ofMillis(11_958))
-                .end(Duration.ofMillis(12_000))
-                .lastKeyframeStart(Optional.of(Duration.ofMillis(11_958)))
+                .lastStart(MediaTime.of(Duration.ofMillis(11_958)))
+                .end(MediaTime.of(Duration.ofMillis(12_000)))
+                .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(11_958))))
                 .build(),
             ObservedSourceStream.builder()
                 .sourceIndex(1)
-                .lastStart(Duration.ofNanos(11_993_500_000L))
-                .end(Duration.ofNanos(11_993_750_000L))
-                .lastKeyframeStart(Optional.of(Duration.ofMillis(11_994)))
+                .lastStart(new MediaTime(575_688, new TimeBase(1, 48_000)))
+                .end(new MediaTime(575_700, new TimeBase(1, 48_000)))
+                .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(11_994))))
                 .build());
   }
 
@@ -150,9 +150,9 @@ class SourceStreamObservationTest {
         .containsExactly(
             ObservedSourceStream.builder()
                 .sourceIndex(1)
-                .lastStart(Duration.ofNanos(11_989_333_333L))
-                .end(Duration.ofMillis(11_995))
-                .lastKeyframeStart(Optional.of(Duration.ofNanos(11_989_333_333L)))
+                .lastStart(new MediaTime(575_488, new TimeBase(1, 48_000)))
+                .end(MediaTime.of(Duration.ofMillis(11_995)))
+                .lastKeyframeStart(Optional.of(new MediaTime(575_488, new TimeBase(1, 48_000))))
                 .build());
   }
 
@@ -177,9 +177,9 @@ class SourceStreamObservationTest {
         .containsExactly(
             ObservedSourceStream.builder()
                 .sourceIndex(2)
-                .lastStart(Duration.ofMillis(40))
-                .end(Duration.ofMillis(80))
-                .lastKeyframeStart(Optional.of(Duration.ZERO))
+                .lastStart(MediaTime.of(Duration.ofMillis(40)))
+                .end(MediaTime.of(Duration.ofMillis(80)))
+                .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ZERO)))
                 .build());
   }
 
@@ -209,9 +209,9 @@ class SourceStreamObservationTest {
         .containsExactly(
             ObservedSourceStream.builder()
                 .sourceIndex(2)
-                .lastStart(Duration.ZERO)
-                .end(Duration.ofMillis(40))
-                .lastKeyframeStart(Optional.of(Duration.ZERO))
+                .lastStart(MediaTime.of(Duration.ZERO))
+                .end(MediaTime.of(Duration.ofMillis(40)))
+                .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ZERO)))
                 .build());
   }
 
@@ -257,7 +257,7 @@ class SourceStreamObservationTest {
     assertThat(observation.streams())
         .singleElement()
         .extracting(ObservedSourceStream::end)
-        .isEqualTo(Duration.ofMillis(80));
+        .isEqualTo(MediaTime.of(Duration.ofMillis(80)));
   }
 
   @Test
@@ -275,7 +275,7 @@ class SourceStreamObservationTest {
         .satisfies(
             stream -> {
               assertThat(stream.sourceIndex()).isEqualTo(2);
-              assertThat(stream.end()).isEqualTo(Duration.ofMillis(854));
+              assertThat(stream.end()).isEqualTo(MediaTime.of(Duration.ofMillis(854)));
             });
   }
 
@@ -297,9 +297,9 @@ class SourceStreamObservationTest {
         .containsExactly(
             ObservedSourceStream.builder()
                 .sourceIndex(2)
-                .lastStart(Duration.ofMillis(120))
-                .end(Duration.ofMillis(160))
-                .lastKeyframeStart(Optional.of(Duration.ofMillis(120)))
+                .lastStart(MediaTime.of(Duration.ofMillis(120)))
+                .end(MediaTime.of(Duration.ofMillis(160)))
+                .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(120))))
                 .build());
   }
 
@@ -356,9 +356,9 @@ class SourceStreamObservationTest {
         .containsExactly(
             ObservedSourceStream.builder()
                 .sourceIndex(2)
-                .lastStart(Duration.ZERO)
-                .end(Duration.ofMillis(40))
-                .lastKeyframeStart(Optional.of(Duration.ZERO))
+                .lastStart(MediaTime.of(Duration.ZERO))
+                .end(MediaTime.of(Duration.ofMillis(40)))
+                .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ZERO)))
                 .build());
   }
 

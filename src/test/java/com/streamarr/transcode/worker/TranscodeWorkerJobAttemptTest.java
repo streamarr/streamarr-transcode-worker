@@ -107,6 +107,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 class TranscodeWorkerJobAttemptTest {
 
   // Keyframes 10 s apart on 3 s slots: segments start at slots 0, 3, 6 and 10.
+  // The 10.01 s keyframes of the recording 10-copy-gop-exceeds-period in its 1/24000 time base.
+  private static final List<Long> TEN_SECOND_KEYFRAME_TICKS = List.of(0L, 240_240L, 480_480L);
   private static final List<Integer> TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS =
       List.of(0, 3, 6, 10);
 
@@ -1879,16 +1881,15 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // A copy that encodes its audio reads from one period earlier, for its audio encoder's lead.
   @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_AUDIO_TRANSCODE"})
+  @CsvSource({"TRANSCODE_MODE_REMUX, 30", "TRANSCODE_MODE_AUDIO_TRANSCODE, 24"})
   @DisplayName(
-      "Should seek a stream copy to its start sequence number's boundary when the job's seek"
+      "Should seek a stream copy from its start sequence number's boundary when the job's seek"
           + " position names another time")
   void
-      shouldSeekAStreamCopyToItsStartSequenceNumbersBoundaryWhenTheJobsSeekPositionNamesAnotherTime(
-          TranscodeMode mode) throws Exception {
+      shouldSeekAStreamCopyFromItsStartSequenceNumbersBoundaryWhenTheJobsSeekPositionNamesAnotherTime(
+          TranscodeMode mode, String expectedSeek) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(mode);
     job.getExecutionBuilder()
@@ -1903,7 +1904,7 @@ class TranscodeWorkerJobAttemptTest {
 
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
-          .containsSubsequence("-ss", "30", "-i");
+          .containsSubsequence("-ss", expectedSeek, "-i");
     }
   }
 
@@ -2047,14 +2048,201 @@ class TranscodeWorkerJobAttemptTest {
         Arguments.of("a decreasing entry", List.of(0, 6, 3, 10)));
   }
 
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_AUDIO_TRANSCODE"})
+  @Test
   @DisplayName(
-      "Should seek a stream copy to the server's keyframe position when the job carries one")
-  void shouldSeekAStreamCopyToTheServersKeyframePositionWhenTheJobCarriesOne(TranscodeMode mode)
+      "Should split the copy's audio at each segment's exact start and ignore the slot list when"
+          + " the job carries exact segment starts")
+  void shouldSplitTheCopysAudioAtEachSegmentsExactStartWhenTheJobCarriesExactSegmentStarts()
       throws Exception {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var jobBuilder = copyJobBuilderFor(recording);
+    // Keyframes at 0 s, 10.01 s and 20.02 s, in ticks of the copy's 1/24000 time base. The slot
+    // list would start segment 1's audio at slot 1, 6 s.
+    jobBuilder
+        .getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(recording.period())
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartSlots(List.of(0, 1, 3))
+        .addAllSegmentStartTicks(TEN_SECOND_KEYFRAME_TICKS)
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(24_000));
+    var job = jobBuilder.build();
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(recording.file()))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      var uploads = uploadsOf(connection, job);
+      assertThat(uploads)
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+      var first = Mp4Samples.read(uploadedBytes(List.of(uploads.getFirst(), uploads.get(1))));
+      assertThat(first.samplesOf(first.audioTrack()))
+          .extracting(Mp4Samples.Sample::presentationTime)
+          .as("segment 0's audio runs past slot 1 up to segment 1's exact start, 10.01 s")
+          .anyMatch(start -> start >= 6 * 48_000)
+          .allMatch(start -> start < 480_480);
+      var second = Mp4Samples.read(uploadedBytes(List.of(uploads.getFirst(), uploads.get(2))));
+      assertThat(second.samplesOf(second.videoTrack()).getFirst().presentationTime())
+          .as("segment 1 opens at its keyframe")
+          .isEqualTo(TEN_SECOND_KEYFRAME_TICKS.get(1));
+      assertThat(second.samplesOf(second.audioTrack()))
+          .extracting(Mp4Samples.Sample::presentationTime)
+          .as("segment 1's audio starts from 10.01 s and before 20.02 s")
+          .isNotEmpty()
+          .allMatch(start -> start >= 480_480 && start < 960_960);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should force an encode's keyframes on the output frames at or after the exact starts when"
+          + " the job carries exact segment starts")
+  void shouldForceAnEncodesKeyframesOnTheOutputFramesAtOrAfterTheExactStartsOfTheJob()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    // Frame 100 at 30000/1001 fps presents at the MPEG-TS tick 300,300, 3.3366666... s.
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(30_000).setDenominator(1001))
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, 300_300L))
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(90_000));
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-force_key_frames:0", "0,3.336666");
+    }
+  }
+
+  // The server sends a plain grid's starts as whole seconds in time base 1/1. Each row names one
+  // argument that the starts decide: the seek, the forced keyframes and the GOP.
+  @ParameterizedTest(name = "{0}: {1} {2}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, -ss, 6",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, -ss, 3",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, -force_key_frames:0, '6,9'",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, -g:v:0, 73"
+  })
+  @DisplayName(
+      "Should launch the same FFmpeg command as for the slot list when the job carries a plain"
+          + " grid's starts in whole seconds")
+  void shouldLaunchTheSameCommandAsForTheSlotListWhenTheJobCarriesAPlainGridsStartsInSeconds(
+      TranscodeMode mode, String option, String value) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var onSlots = laterSegmentJobOnAThreeSecondGrid(mode);
+    onSlots.getExecutionBuilder().addAllSegmentStartSlots(List.of(0, 1, 2, 3));
+    var onSeconds = laterSegmentJobOnAThreeSecondGrid(mode);
+    onSeconds
+        .getExecutionBuilder()
+        .addAllSegmentStartTicks(List.of(0L, 3L, 6L, 9L))
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(1));
+    var slotsAttempt = fromProto(onSlots.getJobAttemptId());
+    var secondsAttempt = fromProto(onSeconds.getJobAttemptId());
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, onSlots.build());
+      startVariant(connection, onSeconds.build());
+
+      promptly()
+          .until(() -> launcher.hasLaunched(slotsAttempt) && launcher.hasLaunched(secondsAttempt));
+      var slotCommand = launcher.command(slotsAttempt);
+      assertThat(slotCommand).containsSequence(option, value);
+      assertThat(launcher.command(secondsAttempt)).isEqualTo(slotCommand);
+    }
+  }
+
+  private static VariantJob.Builder laterSegmentJobOnAThreeSecondGrid(TranscodeMode mode) {
+    var job = variantJobBuilder(mode);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .setStartSequenceNumber(2);
+    return job;
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("exactSegmentStartsThatBreakTheContract")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its exact segment starts break the"
+          + " contract")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsExactSegmentStartsBreakTheContract(
+      String breach, List<Long> ticks, Optional<Fraction> timeBase) throws Exception {
+    var job = variantJobBuilder();
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(6)
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartTicks(ticks);
+    timeBase.ifPresent(job.getExecutionBuilder()::setSegmentStartTimeBase);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> exactSegmentStartsThatBreakTheContract() {
+    var ticks = TEN_SECOND_KEYFRAME_TICKS;
+    var timeBase =
+        Optional.of(Fraction.newBuilder().setNumerator(1).setDenominator(24_000).build());
+    return Stream.of(
+        Arguments.of("starts without a time base", ticks, Optional.empty()),
+        Arguments.of("a time base without starts", List.of(), timeBase),
+        Arguments.of(
+            "a time base with a zero numerator",
+            ticks,
+            Optional.of(Fraction.newBuilder().setDenominator(24_000).build())),
+        Arguments.of(
+            "a time base with a zero denominator",
+            ticks,
+            Optional.of(Fraction.newBuilder().setNumerator(1).build())),
+        Arguments.of("fewer entries than media segments", List.of(0L, 240_240L), timeBase),
+        Arguments.of(
+            "more entries than media segments",
+            List.of(0L, 240_240L, 480_480L, 720_720L),
+            timeBase),
+        Arguments.of("a first entry after 0", List.of(1L, 240_240L, 480_480L), timeBase),
+        Arguments.of("a repeated entry", List.of(0L, 240_240L, 240_240L), timeBase),
+        Arguments.of("a decreasing entry", List.of(0L, 480_480L, 240_240L), timeBase),
+        Arguments.of(
+            "an entry beyond a signed 64-bit count", List.of(0L, 240_240L, -1L), timeBase));
+  }
+
+  @ParameterizedTest(name = "advertised end at 20 s and {0} ns")
+  @ValueSource(ints = {19_999_999, 20_000_000})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its advertised end does not lie"
+          + " after the last exact segment start")
+  void shouldRefuseTheJobWhenItsAdvertisedEndDoesNotLieAfterTheLastExactSegmentStart(
+      int advertisedEndNanos) throws Exception {
+    var job = heldAndPaddedJob();
+    // Segment 2 starts at 20.02 s.
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(6)
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartTicks(TEN_SECOND_KEYFRAME_TICKS)
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(24_000))
+        .getAdvertisedEndBuilder()
+        .setSeconds(20)
+        .setNanos(advertisedEndNanos);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  // A copy that encodes its audio reads from one period before the position, for its audio
+  // encoder's lead.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"TRANSCODE_MODE_REMUX, 31.28125", "TRANSCODE_MODE_AUDIO_TRANSCODE, 25.28125"})
+  @DisplayName(
+      "Should seek a stream copy from the server's keyframe position when the job carries one")
+  void shouldSeekAStreamCopyFromTheServersKeyframePositionWhenTheJobCarriesOne(
+      TranscodeMode mode, String expectedSeek) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder();
     job.getDecisionBuilder().setMode(mode);
@@ -2073,7 +2261,7 @@ class TranscodeWorkerJobAttemptTest {
 
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
-          .containsSubsequence("-ss", "31.28125", "-i");
+          .containsSubsequence("-ss", expectedSeek, "-i");
     }
   }
 

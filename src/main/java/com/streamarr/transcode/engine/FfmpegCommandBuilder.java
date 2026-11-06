@@ -477,9 +477,26 @@ public class FfmpegCommandBuilder {
   // enough before the boundary. The seek can still read from an earlier keyframe: for a stream
   // with B-frames, FFmpeg moves the target 3/23 s earlier unless the container seeks by
   // presentation time, as Matroska and MPEG-TS do not. The producer discards what a copy reads
-  // before its first segment as preroll.
+  // before its first segment as preroll. A copy from a later segment that encodes its audio reads
+  // from one period earlier, so that its audio encoder receives the samples of its lead before the
+  // first segment's start, which an AC-3, E-AC-3 or Opus encoder needs.
   private static Duration inputSeekPosition(TranscodeRequest request) {
-    return request.seekPosition().orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
+    var position = request.seekPosition().orElseGet(() -> inputSeekStart(request));
+    if (!copiesVideoBesideEncodedAudioFromALaterSegment(request)) {
+      return position;
+    }
+
+    var earlier = position.minusSeconds(request.targetSegmentDuration());
+    if (earlier.isNegative()) {
+      return Duration.ZERO;
+    }
+
+    return earlier;
+  }
+
+  private static boolean copiesVideoBesideEncodedAudioFromALaterSegment(TranscodeRequest request) {
+    return request.transcodeDecision().transcodeMode() == TranscodeMode.AUDIO_TRANSCODE
+        && request.startSequenceNumber() > 0;
   }
 
   // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.
@@ -496,16 +513,18 @@ public class FfmpegCommandBuilder {
   // between pictures covers the whole period, or unless the demuxer lands after the start, as an
   // MPEG-TS demuxer can, and as an MP4 demuxer does for a target inside a gap whose next keyframe
   // carries a decode time inside it. A stream copy without the server's keyframe position seeks to
-  // its first segment's start.
-  private static long inputSeekSeconds(TranscodeRequest request) {
+  // its first segment's start. An exact start rounds down to nanoseconds, which the seek rounds up
+  // to microseconds.
+  private static Duration inputSeekStart(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
-    var firstSegmentStart = request.segmentIntervals().startOf(firstSegment, 1);
+    var firstSegmentStart =
+        request.segmentIntervals().startTimeOf(firstSegment).truncatedToNanoseconds();
     var mode = request.transcodeDecision().transcodeMode();
     if (!mode.encodesVideo() || firstSegment == 0) {
       return firstSegmentStart;
     }
 
-    return firstSegmentStart - request.targetSegmentDuration();
+    return firstSegmentStart.minusSeconds(request.targetSegmentDuration());
   }
 
   // Where an attempt that encodes video from a later segment starts encoding video: its first
@@ -526,12 +545,25 @@ public class FfmpegCommandBuilder {
   }
 
   private static Optional<Duration> firstSegmentStartOfAnEncode(TranscodeRequest request) {
-    if (!encodesVideo(request) || request.startSequenceNumber() == 0) {
+    if (!encodesVideo(request)) {
+      return Optional.empty();
+    }
+
+    return firstSegmentStartOfALaterAttempt(request);
+  }
+
+  // Where an attempt from a later segment, which encodes its audio whether it encodes or copies
+  // its video, opens that audio: its first segment's start. Empty for an attempt from segment 0.
+  private static Optional<Duration> firstSegmentStartOfALaterAttempt(TranscodeRequest request) {
+    if (request.startSequenceNumber() == 0) {
       return Optional.empty();
     }
 
     return Optional.of(
-        Duration.ofSeconds(request.segmentIntervals().startOf(request.startSequenceNumber(), 1)));
+        request
+            .segmentIntervals()
+            .startTimeOf(request.startSequenceNumber())
+            .truncatedToNanoseconds());
   }
 
   private static boolean encodesVideo(TranscodeRequest request) {
@@ -762,7 +794,7 @@ public class FfmpegCommandBuilder {
     var frames = framesOf(audio.codec());
     var timing = timingFilter(audio, request, frames);
     var shifts =
-        firstSegmentStartOfAnEncode(request)
+        firstSegmentStartOfALaterAttempt(request)
             .flatMap(_ -> frameAlignedShift(frames, request))
             .isPresent();
     if (!audio.padsWithSilenceToAdvertisedEnd() && !shifts) {
@@ -776,17 +808,20 @@ public class FfmpegCommandBuilder {
   // When the attempt reads no source sample, FFmpeg sets the filters up with the stream's own
   // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
   // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
-  // the padding. An attempt that encodes video from a later segment trims its encoded audio
-  // itself, as its seek no longer does. The padding ends after the shift back, on the attempt's own
-  // times. In a named layout's encode these filters follow its own: its resampler and limiter meet
+  // the padding. An attempt from a later segment trims its encoded audio itself, as its seek no
+  // longer does. The padding ends after the shift back, on the attempt's own times. In a named
+  // layout's encode these filters follow its own: its resampler and limiter meet
   // the end of the source instead of silence, its dither never reaches the silence, and no
   // conversion replaces its layout with FFmpeg's default for the channel count.
   private static Optional<String> timingFilter(
       AudioDecision audio, TranscodeRequest request, Optional<AudioFrames> frames) {
     var trimStart = audioTrimStart(frames, request);
-    var start = seekArgument(trimStart.orElseGet(() -> inputSeekPosition(request)));
     var shift =
-        firstSegmentStartOfAnEncode(request).flatMap(_ -> frameAlignedShift(frames, request));
+        firstSegmentStartOfALaterAttempt(request).flatMap(_ -> frameAlignedShift(frames, request));
+    var start =
+        shift
+            .map(_ -> alignedTrimSeconds(request))
+            .orElseGet(() -> seekArgument(trimStart.orElseGet(() -> inputSeekPosition(request))));
     var shiftForward = shift.map(samples -> "asetpts='PTS+" + samples + "',").orElse("");
     var shiftBack = shift.map(samples -> ",asetpts='PTS-" + samples + "'").orElse("");
     if (audio.padsWithSilenceToAdvertisedEnd()) {
@@ -806,12 +841,12 @@ public class FfmpegCommandBuilder {
     return trimStart.map(_ -> shiftForward + "atrim=start=" + start + shiftBack);
   }
 
-  // Where an attempt that encodes video from a later segment trims its encoded audio: at the first
-  // segment's start, between the shifts that align the encoder's frames on it, or, for an encoder
-  // whose frames the worker does not know, where the audio's reach back from that start ends.
+  // Where an attempt from a later segment trims its encoded audio: at the first segment's start,
+  // between the shifts that align the encoder's frames on it, or, for an encoder whose frames the
+  // worker does not know, where the audio's reach back from that start ends.
   private static Optional<Duration> audioTrimStart(
       Optional<AudioFrames> frames, TranscodeRequest request) {
-    var firstSegmentStart = firstSegmentStartOfAnEncode(request);
+    var firstSegmentStart = firstSegmentStartOfALaterAttempt(request);
     if (frames.isPresent()) {
       return firstSegmentStart;
     }
@@ -825,24 +860,65 @@ public class FfmpegCommandBuilder {
   // follows the conversion to that rate. Each shift is a whole number of ticks, so that the two
   // cancel. The whole frames reach back to where the demuxer has delivered audio: the seek's
   // target, when a seek without the server's keyframe position lands on a keyframe at or before it,
-  // or a second after the server's keyframe position, and no more than one segment period. Every
-  // frame from the first segment's start on then starts where the attempt that encodes from the
-  // start writes one, give or take less than a frame, and with no gap. The expressions are quoted,
-  // as a FLAC frame's holds commas. Empty for an encoder whose frames the worker does not know.
+  // or a second after the server's keyframe position, and no more than one segment period. The
+  // lead and the whole frames together fit in that reach, so an exact seek that discards the audio
+  // before its target leaves the encoder its lead. Every frame from the first segment's start on
+  // then starts where the attempt that encodes from the start writes one, give or take less than a
+  // frame, and with no gap. The expressions are quoted, as a FLAC frame's holds commas. Empty for
+  // an encoder whose frames the worker does not know.
   private static Optional<String> frameAlignedShift(
       Optional<AudioFrames> frames, TranscodeRequest request) {
     var seconds = seekArgument(audioReach(request));
+    var toTheTrim = samplesFromTheStartToTheTrim(request);
     return frames.map(
         encoderFrames ->
             "round(("
                 + encoderFrames.lead()
-                + "+floor("
-                + seconds
-                + "*SR/("
+                + "+"
+                + wholeFramesWithin(seconds, encoderFrames)
+                + "*("
                 + encoderFrames.samples()
-                + "))*("
-                + encoderFrames.samples()
-                + "))/SR/TB)");
+                + ")"
+                + toTheTrim
+                + ")/SR/TB)");
+  }
+
+  // An encoder without a lead keeps the expression that the recordings pin.
+  private static String wholeFramesWithin(String seconds, AudioFrames frames) {
+    if (frames.lead().equals("0")) {
+      return "floor(" + seconds + "*SR/(" + frames.samples() + "))";
+    }
+
+    return "max(0,floor((" + seconds + "*SR-(" + frames.lead() + "))/(" + frames.samples() + ")))";
+  }
+
+  // atrim rounds a start in seconds to the nearest sample, which for an exact start between two
+  // samples can fall before it, and the encoder's first frame would then join the segment before.
+  // So the trim cuts at the first whole second at or after the first segment's start, and the shift
+  // grows by the samples from the start's first sample up to that second, as an expression of SR:
+  // the encoder's first frame without priming then starts on the first sample at or after the
+  // start, at any sample rate. Each operand is a whole number below 2^53, so the expression keeps
+  // them exact.
+  private static String alignedTrimSeconds(TranscodeRequest request) {
+    var start = exactFirstSegmentStart(request);
+    if (start.remainder() == 0) {
+      return String.valueOf(start.seconds());
+    }
+
+    return String.valueOf(start.seconds() + 1);
+  }
+
+  private static String samplesFromTheStartToTheTrim(TranscodeRequest request) {
+    var start = exactFirstSegmentStart(request);
+    if (start.remainder() == 0) {
+      return "";
+    }
+
+    return "+SR-ceil(" + start.remainder() + "*SR/" + start.denominator() + ")";
+  }
+
+  private static MediaTime.WholeSeconds exactFirstSegmentStart(TranscodeRequest request) {
+    return request.segmentIntervals().startTimeOf(request.startSequenceNumber()).wholeSeconds();
   }
 
   private static Optional<AudioFrames> framesOf(String encoder) {
@@ -868,7 +944,7 @@ public class FfmpegCommandBuilder {
   // encodes its video from its seek, and its audio reaches back as far, so that the mp4 muxer holds
   // back no pictures until the audio's first packet.
   private static Duration audioReach(TranscodeRequest request) {
-    var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
+    var firstSegmentStart = firstSegmentStartOfALaterAttempt(request).orElseThrow();
     var reach = firstSegmentStart.minus(inputSeekPosition(request));
     if (request.seekPosition().isPresent()) {
       reach = reach.minus(AUDIO_AFTER_THE_KEYFRAME);
@@ -1110,8 +1186,9 @@ public class FfmpegCommandBuilder {
     }
 
     // Rounded down, never up: an encoder that ignores the forced keyframe then still places a
-    // keyframe inside every segment interval, often two, and never skips a segment.
-    return frameRate.wholeFramesIn(request.targetSegmentDuration());
+    // keyframe inside every segment interval, often two, and never skips a segment. Exact starts
+    // can lie closer than a period, down to 2 s apart, so their shortest interval decides.
+    return frameRate.wholeFramesIn(request.segmentIntervals().shortestInterval());
   }
 
   private void addForcedKeyframeArgs(
@@ -1150,9 +1227,12 @@ public class FfmpegCommandBuilder {
   // merged segment's later slots get no forced keyframe; the GOP's keyframes there stay inside it.
   private static ForcedKeyframes forcedKeyframes(TranscodeRequest request, long firstSegment) {
     var intervals = request.segmentIntervals();
-    var times = new StringBuilder().append(intervals.startOf(firstSegment, 1));
+    var frameRate = request.outputFrameRate().orElseThrow();
+    var times =
+        new StringBuilder()
+            .append(forcedKeyframeTime(intervals.startTimeOf(firstSegment), frameRate));
     for (var segment = firstSegment + 1; segment < request.mediaSegmentCount(); segment++) {
-      var next = "," + intervals.startOf(segment, 1);
+      var next = "," + forcedKeyframeTime(intervals.startTimeOf(segment), frameRate);
       if (times.length() + next.length() > LONGEST_ARGUMENT_BYTES) {
         return new ForcedKeyframes(times.toString(), false);
       }
@@ -1161,6 +1241,20 @@ public class FfmpegCommandBuilder {
     }
 
     return new ForcedKeyframes(times.toString(), true);
+  }
+
+  // FFmpeg reads each time in whole microseconds and forces the first frame that presents at or
+  // after it, so a start in whole microseconds names itself. Any other start names the first output
+  // frame at or after it, rounded down to a microsecond: rounding the start up could pass that
+  // frame
+  // when it lies on the start or less than a microsecond after it, and no earlier frame lies within
+  // a microsecond of it.
+  private static String forcedKeyframeTime(MediaTime start, OutputFrameRate frameRate) {
+    var microseconds =
+        start
+            .wholeMicroseconds()
+            .orElseGet(() -> frameRate.firstFrameAtOrAfterInMicroseconds(start));
+    return BigDecimal.valueOf(microseconds, 6).stripTrailingZeros().toPlainString();
   }
 
   static boolean isKeyframeVerified(String encoder) {

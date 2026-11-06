@@ -32,6 +32,39 @@ public record OutputFrameRate(long numerator, long denominator) {
     return frames.longValueExact();
   }
 
+  /**
+   * The presentation time, rounded down to whole microseconds, of the first frame on this rate's
+   * grid from zero that presents at or after the start.
+   */
+  long firstFrameAtOrAfterInMicroseconds(MediaTime start) {
+    var startNumerator =
+        BigInteger.valueOf(start.ticks())
+            .multiply(BigInteger.valueOf(start.timeBase().numerator()))
+            .multiply(BigInteger.valueOf(numerator));
+    var startDenominator =
+        BigInteger.valueOf(start.timeBase().denominator())
+            .multiply(BigInteger.valueOf(denominator));
+    var frame = ceilDivide(startNumerator, startDenominator);
+    return frame
+        .multiply(BigInteger.valueOf(denominator))
+        .multiply(BigInteger.valueOf(1_000_000L))
+        .divide(BigInteger.valueOf(numerator))
+        .longValueExact();
+  }
+
+  private static BigInteger ceilDivide(BigInteger dividend, BigInteger divisor) {
+    var quotient = dividend.divideAndRemainder(divisor);
+    if (quotient[1].signum() > 0) {
+      return quotient[0].add(BigInteger.ONE);
+    }
+
+    return quotient[0];
+  }
+
+  int wholeFramesIn(MediaTime duration) {
+    return Math.toIntExact(duration.floorIn(new TimeBase(denominator, numerator)));
+  }
+
   int wholeFramesIn(int seconds) {
     return frameNumerator(seconds).divide(BigInteger.valueOf(denominator)).intValueExact();
   }
