@@ -4,9 +4,12 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
+import com.streamarr.transcode.probe.DolbyVisionRpuReader.RpuFacts;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -50,11 +53,12 @@ final class Av1MetadataObus implements MetadataWalk {
   private static final long EMDF_PROTECTION = 0x400;
   private static final int LARGEST_EMDF_PAYLOAD = 512;
 
-  // The walk keeps the first payload of each kind and which kinds showed, not every OBU, so that
-  // its memory stays bounded however many OBUs the packets hold.
+  // The walk keeps the first payload of each kind, which kinds showed and a few values from each
+  // RPU, not every OBU, so that its memory stays small however large the OBUs are.
   private final Map<HdrMessage, ByteBuffer> firstPayloads;
   private final Set<HdrMessage> layeredMessages;
   private final Optional<byte[]> firstRpu;
+  private final List<RpuFacts> parsedRpus;
   private final boolean hasLayeredRpu;
   private final boolean readAll;
 
@@ -62,6 +66,7 @@ final class Av1MetadataObus implements MetadataWalk {
     this.firstPayloads = walk.firstPayloads;
     this.layeredMessages = walk.layeredMessages;
     this.firstRpu = Optional.ofNullable(walk.firstRpu);
+    this.parsedRpus = List.copyOf(walk.parsedRpus);
     this.hasLayeredRpu = walk.hasLayeredRpu;
     this.readAll = walk.readAll;
   }
@@ -123,7 +128,7 @@ final class Av1MetadataObus implements MetadataWalk {
                   Presence.PRESENCE_PRESENT,
                   rpu.flatMap(Av1MetadataObus::header),
                   DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)
-              .withParsed(rpu.flatMap(DolbyVisionRpuReader::readWithoutPrefix).stream().toList()));
+              .withParsed(parsedRpus));
     }
 
     if (readAll && !hasLayeredRpu) {
@@ -195,6 +200,7 @@ final class Av1MetadataObus implements MetadataWalk {
     private final Map<HdrMessage, ByteBuffer> firstPayloads = new EnumMap<>(HdrMessage.class);
     private final Set<HdrMessage> layeredMessages = EnumSet.noneOf(HdrMessage.class);
     private byte[] firstRpu;
+    private final List<RpuFacts> parsedRpus = new ArrayList<>();
     private boolean hasLayeredRpu;
     private boolean readAll = true;
 
@@ -316,11 +322,16 @@ final class Av1MetadataObus implements MetadataWalk {
         return;
       }
 
+      var remaining = values.duplicate().position(values.position() + RPU_IDENTIFIER.length);
+      var container = new byte[remaining.remaining()];
+      remaining.get(container);
       if (firstRpu == null) {
-        var container = values.duplicate().position(values.position() + RPU_IDENTIFIER.length);
-        firstRpu = new byte[container.remaining()];
-        container.get(firstRpu);
+        firstRpu = container;
       }
+
+      unwrapped(container)
+          .flatMap(DolbyVisionRpuReader::readWithoutPrefix)
+          .ifPresent(parsedRpus::add);
     }
 
     private void addHdr10Plus(ByteBuffer values, boolean isLayered) {

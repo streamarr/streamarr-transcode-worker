@@ -38,6 +38,11 @@ final class BitReader {
     return (position + 7) / 8;
   }
 
+  /** The count of bits that the reader has not read yet. */
+  long bitsLeft() {
+    return (long) bytes.length * 8 - position;
+  }
+
   /** Moves to the next byte boundary, unless the reader already stands on one. */
   void alignToByte() {
     position = (position + 7) / 8 * 8;
@@ -49,7 +54,7 @@ final class BitReader {
    * @throws TruncatedBitstreamException when the bytes end first
    */
   void skip(long count) {
-    if (count > (long) bytes.length * 8 - position) {
+    if (count > bitsLeft()) {
       throw new TruncatedBitstreamException();
     }
 

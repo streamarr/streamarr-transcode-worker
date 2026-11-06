@@ -41,6 +41,9 @@ final class DolbyVisionRpuReader {
       9 * 16 + 3 * 32 + 9 * 16 + 16 + 16 + 16 + 32 + 5 + 2 + 2 + 2 + 12 + 12 + 10;
   private static final int LEVEL_6 = 6;
   private static final int LEVEL_6_BYTES = 8;
+  // Up to 7 bits of alignment, the 32-bit CRC and the 8-bit terminator.
+  private static final int TRAILER_BITS = 48;
+  private static final int TERMINATOR = 0x80;
 
   private DolbyVisionRpuReader() {}
 
@@ -82,11 +85,47 @@ final class DolbyVisionRpuReader {
       return Optional.empty();
     }
 
-    if (!hasDisplayManagement) {
-      return Optional.of(new RpuFacts(layer.get(), Optional.empty()));
+    var level6 = Optional.of(Optional.<ContentLightLevel>empty());
+    if (hasDisplayManagement) {
+      level6 = displayManagementLevel6(reader, header.get());
     }
 
-    return level6(reader, header.get()).map(level -> new RpuFacts(layer.get(), level));
+    if (level6.isEmpty() || !endsWithTerminator(reader)) {
+      return Optional.empty();
+    }
+
+    return Optional.of(new RpuFacts(layer.get(), level6.get()));
+  }
+
+  /**
+   * The level 6 block of the DM payload, after which FFmpeg reads a second group of extension
+   * blocks when more than the padding, the CRC and the terminator remain.
+   */
+  private static Optional<Optional<ContentLightLevel>> displayManagementLevel6(
+      BitReader reader, Header header) {
+    var level6 = level6(reader, header);
+    if (level6.isPresent() && reader.bitsLeft() > TRAILER_BITS) {
+      skipExtensionBlocks(reader);
+    }
+
+    return level6;
+  }
+
+  private static void skipExtensionBlocks(BitReader reader) {
+    var blocks = reader.unsignedExpGolomb();
+    reader.alignToByte();
+    for (long block = 0; block < blocks; block++) {
+      var length = reader.unsignedExpGolomb();
+      reader.bits(8);
+      reader.skip(length * 8);
+    }
+  }
+
+  /** The 32-bit CRC after the byte alignment, then the 0x80 terminator that FFmpeg requires. */
+  private static boolean endsWithTerminator(BitReader reader) {
+    reader.alignToByte();
+    reader.skip(32);
+    return reader.bits(8) == TERMINATOR;
   }
 
   /**

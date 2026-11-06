@@ -10,7 +10,6 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import com.streamarr.transcode.probe.RpuBits.ExtensionBlock;
 import com.streamarr.transcode.probe.RpuBits.Nlq;
 import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Named;
@@ -126,6 +125,19 @@ class FfprobeExecutorRpuFactsTest {
             "a mapping with two horizontal partitions, which the walk does not cover",
             level6.toBuilder().xPartitionsMinus1(1).build().hevcNalUnit()),
         Named.of(
+            "an RPU that ends before its CRC and terminator",
+            endingAfter(level6, level6.payload().length - 5)),
+        Named.of(
+            "an RPU whose terminator is not 0x80",
+            level6.toBuilder().terminator(0x00).build().hevcNalUnit()),
+        Named.of(
+            "a second group of extension blocks that declares more blocks than the RPU holds",
+            level6.toBuilder()
+                .secondGroupBlockCount(40)
+                .secondGroupBlock(ExtensionBlock.level254())
+                .build()
+                .hevcNalUnit()),
+        Named.of(
             "an rpu_format without bit depths",
             level6.toBuilder()
                 .header(level6.header().toBuilder().rpuFormat(0x112).build())
@@ -148,6 +160,27 @@ class FfprobeExecutorRpuFactsTest {
         RpuBits.profile81().extensionBlock(ExtensionBlock.level6(4_000, 1_000)).build();
 
     var present = dolbyVisionOf(plain, withLevel6, laterLevel6);
+
+    assertThat(present.getRpuContentLightLevel())
+        .isEqualTo(
+            ContentLightLevel.newBuilder()
+                .setMaxContentLightLevel(1_000)
+                .setMaxFrameAverageLightLevel(400)
+                .build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the level 6 values when a second group of extension blocks follows the first")
+  void shouldReportTheLevel6ValuesWhenASecondGroupOfExtensionBlocksFollowsTheFirst() {
+    var rpu =
+        RpuBits.profile81()
+            .extensionBlock(ExtensionBlock.level6(1_000, 400))
+            .secondGroupBlockCount(1)
+            .secondGroupBlock(ExtensionBlock.level254())
+            .build();
+
+    var present = dolbyVisionOf(rpu, rpu, rpu);
 
     assertThat(present.getRpuContentLightLevel())
         .isEqualTo(
@@ -197,8 +230,9 @@ class FfprobeExecutorRpuFactsTest {
     return rpu.toBuilder().header(rpu.header().toBuilder().coefficientDataType(1).build()).build();
   }
 
+  /** The RPU's first bytes as an HEVC RPU NAL unit, with emulation prevention, as hex. */
   private static String endingAfter(RpuBits rpu, int length) {
-    return "7c 01 " + HexFormat.ofDelimiter(" ").formatHex(Arrays.copyOf(rpu.payload(), length));
+    return "7c 01 " + RpuDataHeaderBits.escaped(Arrays.copyOf(rpu.payload(), length));
   }
 
   private static DolbyVisionPresent dolbyVisionOf(RpuBits first, RpuBits second, RpuBits third) {

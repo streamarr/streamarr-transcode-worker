@@ -20,6 +20,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.stream.Stream;
@@ -296,6 +297,29 @@ class FfprobeExecutorAv1MetadataTest {
   @Nested
   @DisplayName("Dolby Vision")
   class DolbyVisionTests {
+
+    @Test
+    @DisplayName(
+        "Should report the level 6 values of a later RPU when the first RPU carries no level 6"
+            + " block")
+    void shouldReportTheLevel6ValuesOfALaterRpuWhenTheFirstRpuCarriesNoLevel6Block() {
+      var withoutLevel6 = RpuBits.profile81().build();
+      var withLevel6 =
+          RpuBits.profile81().extensionBlock(RpuBits.ExtensionBlock.level6(1_000, 400)).build();
+
+      var video =
+          probed(
+              AV1C,
+              temporalUnit(rpuObu(emdfOf(withoutLevel6))),
+              temporalUnit(rpuObu(emdfOf(withLevel6))));
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getRpuContentLightLevel())
+          .isEqualTo(
+              ContentLightLevel.newBuilder()
+                  .setMaxContentLightLevel(1_000)
+                  .setMaxFrameAverageLightLevel(400)
+                  .build());
+    }
 
     @Test
     @DisplayName("Should report the walk's RPU and its header when the frames show none")
@@ -918,6 +942,12 @@ class FfprobeExecutorAv1MetadataTest {
         .header(EMDF_HEADER)
         .rpu(PROFILE_10_0_RPU)
         .protection(EMDF_PROTECTION);
+  }
+
+  /** The RPU, without the 0x19 prefix that only an HEVC RPU NAL unit has, in EMDF. */
+  private static EmdfContainer emdfOf(RpuBits rpu) {
+    var payload = rpu.payload();
+    return profile100Emdf().rpu(hex(Arrays.copyOfRange(payload, 1, payload.length))).build();
   }
 
   /** An RPU metadata OBU, whose values the trailing bits end. */
