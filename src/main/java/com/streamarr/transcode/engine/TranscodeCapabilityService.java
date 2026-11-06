@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -46,7 +47,8 @@ public class TranscodeCapabilityService {
   // Each codec family's worker-verified encoder, resolved after detection and again whenever a
   // hardware encoder is withdrawn or restored, so that every job of a codec family runs the backend
   // that the worker offers.
-  private volatile Map<CodecFamily, WorkerVerifiedEncoder> encoders = Map.of();
+  private final AtomicReference<Map<CodecFamily, WorkerVerifiedEncoder>> encoders =
+      new AtomicReference<>(Map.of());
   private Set<String> detectedHardwareEncoders = Set.of();
   private Set<CodecFamily> softwareEncoderFamilies = Set.of();
   // The hardware encoders that failed during a stream and have not passed their test encode since
@@ -86,14 +88,14 @@ public class TranscodeCapabilityService {
             .build();
     detectedHardwareEncoders = hwEncoders;
     softwareEncoderFamilies = detectSoftwareEncoders();
-    encoders = resolveEncoders(hwEncoders, softwareEncoderFamilies);
+    encoders.set(resolveEncoders(hwEncoders, softwareEncoderFamilies));
 
     log.info(
         "FFmpeg capabilities: GPU={}, encoders={}, accelerator={}, encoder backends={}",
         hasGpu,
         hwEncoders,
         accelerator,
-        encoders.values());
+        encoders.get().values());
   }
 
   private void markUnavailable(String reason) {
@@ -107,7 +109,7 @@ public class TranscodeCapabilityService {
    * passed its test encode, with its keyframe-verified trait.
    */
   public List<WorkerVerifiedEncoder> workerVerifiedEncoders() {
-    return List.copyOf(encoders.values());
+    return List.copyOf(encoders.get().values());
   }
 
   /**
@@ -115,7 +117,9 @@ public class TranscodeCapabilityService {
    * advertises no encoder for the codec family.
    */
   public Optional<EncoderBackend> resolveEncoder(String codecFamily) {
-    return CodecFamily.named(codecFamily).map(encoders::get).map(WorkerVerifiedEncoder::backend);
+    return CodecFamily.named(codecFamily)
+        .map(encoders.get()::get)
+        .map(WorkerVerifiedEncoder::backend);
   }
 
   /**
@@ -185,8 +189,8 @@ public class TranscodeCapabilityService {
   private void resolveOfferedEncoders() {
     var offered = new HashSet<>(detectedHardwareEncoders);
     offered.removeAll(withdrawnHardwareEncoders.keySet());
-    encoders = resolveEncoders(offered, softwareEncoderFamilies);
-    log.info("Offered encoder backends: {}", encoders.values());
+    encoders.set(resolveEncoders(offered, softwareEncoderFamilies));
+    log.info("Offered encoder backends: {}", encoders.get().values());
   }
 
   private static Map<CodecFamily, WorkerVerifiedEncoder> resolveEncoders(

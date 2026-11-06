@@ -2,7 +2,6 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -126,7 +125,7 @@ class HardwareEncoderFaultTest {
         new AttemptOutcome.Failed(
             ProducerFailure.ENCODER_STALLED, "[h264_nvenc @ 0x5581] No capable devices found");
 
-    assertThat(HardwareEncoderFault.of(H264_NVENC, stalled)).isEqualTo(Optional.empty());
+    assertThat(HardwareEncoderFault.of(H264_NVENC, stalled)).isEmpty();
   }
 
   private static AttemptOutcome exitedWith(String errorOutput) {

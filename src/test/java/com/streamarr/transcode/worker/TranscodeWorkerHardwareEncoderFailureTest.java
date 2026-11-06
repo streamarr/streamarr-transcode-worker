@@ -59,12 +59,16 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   private static final String H264_NVENC_ENCODERS =
       "V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n";
   private static final String DEVICE_LOST =
-      "[h264_nvenc @ 0x55d0c8a4e1c0] Failed locking bitstream buffer: device lost (40)\n"
-          + "Error submitting video frame to the encoder\n";
+      """
+      [h264_nvenc @ 0x55d0c8a4e1c0] Failed locking bitstream buffer: device lost (40)
+      Error submitting video frame to the encoder
+      """;
   private static final String SESSION_LIMIT =
-      "[h264_nvenc @ 0x55d0c8a4e1c0] OpenEncodeSessionEx failed: incompatible client key (21):"
-          + " (no details)\n"
-          + "[h264_nvenc @ 0x55d0c8a4e1c0] No capable devices found\n";
+      """
+      [h264_nvenc @ 0x55d0c8a4e1c0] OpenEncodeSessionEx failed: incompatible client key (21): \
+      (no details)
+      [h264_nvenc @ 0x55d0c8a4e1c0] No capable devices found
+      """;
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
 
   @TempDir Path tempDir;
