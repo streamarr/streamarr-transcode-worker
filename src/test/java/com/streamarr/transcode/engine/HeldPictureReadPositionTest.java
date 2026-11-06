@@ -6,7 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import com.streamarr.transcode.fakes.ScriptedKeyframeSource;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -114,6 +116,65 @@ class HeldPictureReadPositionTest {
         .contains(Duration.ofMillis(300).minus(ScriptedKeyframeSource.REORDER_DELAY));
   }
 
+  // The video's first keyframe decodes 83 ms before it presents at 0 s, before the timeline starts.
+  @Test
+  @DisplayName(
+      "Should read from the start of the timeline when the keyframe that the search finds decodes"
+          + " before it")
+  void shouldReadFromTheStartOfTheTimelineWhenTheFoundKeyframeDecodesBeforeIt() throws Exception {
+    var source = new ScriptedKeyframeSource(List.of(Duration.ZERO, Duration.ofSeconds(10)), 20);
+    var engine = engineReading(source);
+
+    var readPosition = engine.heldPictureReadPosition(heldRequest(14, 24), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(Duration.ZERO);
+  }
+
+  // A raw H.264 stream's packets carry decode times alone.
+  @Test
+  @DisplayName(
+      "Should place a keyframe at its decode time when its packet carries no presentation time")
+  void shouldPlaceAKeyframeAtItsDecodeTimeWhenItsPacketCarriesNoPresentationTime()
+      throws Exception {
+    var framecrc =
+        """
+        0, 9000, 9000, 250, 1000, 0x0a1b2c3d
+        #tb 0: 1/1000
+        0, 8000, -9223372036854775808, 250, 1000, 0x0a1b2c3d
+        0, 10000, -9223372036854775808, 250, 1000, 0x0a1b2c3d
+        0, -9223372036854775808, -9223372036854775808, 250, 1000, 0x0a1b2c3d
+        """;
+    var engine =
+        engine(
+            ScriptedProcessLauncher.forCommands(
+                (command, _) ->
+                    ScriptedProcess.builder()
+                        .output(
+                            command.contains("14")
+                                ? new byte[0]
+                                : framecrc.getBytes(StandardCharsets.US_ASCII))
+                        .build()));
+
+    var readPosition = engine.heldPictureReadPosition(heldRequest(14, 24), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(Duration.ofSeconds(8));
+  }
+
+  @Test
+  @DisplayName("Should fail the search when a scan's FFmpeg cannot start")
+  void shouldFailTheSearchWhenAScansFfmpegCannotStart() {
+    var engine =
+        engine(
+            (_, _) -> {
+              throw new IOException("ffmpeg: not found");
+            });
+    var request = heldRequest(14, 24);
+
+    assertThatExceptionOfType(TranscodeException.class)
+        .isThrownBy(() -> engine.heldPictureReadPosition(request, bytesRead::addAndGet))
+        .withCauseInstanceOf(IOException.class);
+  }
+
   @Test
   @DisplayName("Should fail the search when no keyframe lies before the read-back")
   void shouldFailTheSearchWhenNoKeyframeLiesBeforeTheReadBack() throws Exception {
@@ -162,7 +223,8 @@ class HeldPictureReadPositionTest {
             requestFrom(held).seekPosition(Optional.empty()).build()),
         Arguments.of(
             "an encode that does not hold its last frame",
-            requestFrom(held).transcodeDecision(decision(false)).build()));
+            requestFrom(held).transcodeDecision(decision(false)).build()),
+        Arguments.of("an attempt that reads from its first segment's start", heldRequest(24, 24)));
   }
 
   @ParameterizedTest(name = "{0}")
