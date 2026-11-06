@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -122,6 +123,33 @@ class NvencRecordingsTest {
             .toList();
 
     assertThat(required).as("the keyframe-verified NVENC encoders' rungs").isNotEmpty();
+    assertHoldsTheExtendedRecordingsOf(required);
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold the extended recordings at 1080p of every NVENC preset on the preset scale when"
+          + " the worker passes a keyframe-verified NVENC encoder the scale's preset")
+  void
+      shouldHoldTheExtendedRecordingsAt1080pOfEveryNvencPresetOnThePresetScaleWhenTheWorkerPassesAKeyframeVerifiedNvencEncoderTheScalesPreset() {
+    // Every recording at a rung takes Automatic's preset, so its prefix names no preset.
+    var automatic = EncoderPreset.FASTER.nvencPreset();
+    var required =
+        NVENC_ENCODERS.stream()
+            .filter(FfmpegCommandBuilder::isKeyframeVerified)
+            .flatMap(
+                encoder ->
+                    Arrays.stream(EncoderPreset.values())
+                        .map(EncoderPreset::nvencPreset)
+                        .distinct()
+                        .map(
+                            preset ->
+                                preset.equals(automatic)
+                                    ? encoder + "-1080p"
+                                    : encoder + "-1080p-" + preset))
+            .toList();
+
+    assertThat(required).as("the keyframe-verified NVENC encoders' presets").hasSize(12);
     assertHoldsTheExtendedRecordingsOf(required);
   }
 

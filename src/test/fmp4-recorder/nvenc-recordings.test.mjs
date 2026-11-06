@@ -420,6 +420,7 @@ describe('plan', () => {
     const meta = [
       'encoder=hevc_nvenc',
       'rung=360p',
+      'preset=p6',
       'recipe=extended',
       'level=21',
       'tier=main',
@@ -435,6 +436,7 @@ describe('plan', () => {
     assert.deepEqual(planOf(meta), {
       encoder: 'hevc_nvenc',
       rung: '360p',
+      preset: 'p6',
       recipe: 'extended',
       startSequenceNumber: 0,
       gopFrames: 145,

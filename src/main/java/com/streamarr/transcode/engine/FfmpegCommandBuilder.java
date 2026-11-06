@@ -54,6 +54,7 @@ public class FfmpegCommandBuilder {
   private static final EncoderTraits NVENC =
       traits()
           .keyframeVerified(true)
+          .takesNvencPreset(true)
           .fixedGop(true)
           .tenBitPixelFormat(P010)
           .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
@@ -760,11 +761,16 @@ public class FfmpegCommandBuilder {
     return List.of("-tag:v", entry.tag());
   }
 
-  // Hardware encoders take no preset until the preset scale has rows for them (ADR 0044).
+  // A hardware encoder takes a preset only once it has a column in the preset scale (ADR 0044).
   private static void addPresetArgs(List<String> cmd, TranscodeJob job) {
     var traits = traitsOf(job);
     if (traits.takesPresetName()) {
       cmd.addAll(List.of("-preset", job.request().encoderPreset().scaleName()));
+      return;
+    }
+
+    if (traits.takesNvencPreset()) {
+      cmd.addAll(List.of("-preset", job.request().encoderPreset().nvencPreset()));
       return;
     }
 
@@ -1486,6 +1492,7 @@ public class FfmpegCommandBuilder {
       boolean keyframeVerified,
       boolean takesPresetName,
       boolean takesSvtAv1PresetNumber,
+      boolean takesNvencPreset,
       boolean fixedGop,
       boolean disablesSceneCutsByThreshold,
       boolean closesGopsByX265Parameters,

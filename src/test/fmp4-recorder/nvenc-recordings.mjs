@@ -339,6 +339,7 @@ export function planOf(meta) {
   return {
     encoder: values.encoder,
     rung: values.rung,
+    preset: values.preset,
     recipe: values.recipe,
     startSequenceNumber: Number(values.startSequenceNumber),
     gopFrames: Number(values.gopFrames),
