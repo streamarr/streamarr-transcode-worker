@@ -1,6 +1,8 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.encodedRecordingVideo;
@@ -18,6 +20,7 @@ import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
+import build.buf.gen.streamarr.transcode.v1.SegmentUploadLimitReached;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.SubtitleDecision;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
@@ -32,6 +35,8 @@ import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
+import com.google.protobuf.Any;
+import com.google.rpc.Code;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.MonotonicClock;
@@ -39,17 +44,21 @@ import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.ControlPlaneServer;
+import io.grpc.protobuf.StatusProto;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -159,6 +168,31 @@ class TranscodeWorkerUploadProtocolIT {
       assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload the segment again and complete the attempt when the server refuses its upload"
+          + " at the worker's segment upload limit")
+  void shouldUploadTheSegmentAgainAndCompleteTheAttemptWhenServerRefusesItAtTheWorkersLimit()
+      throws Exception {
+    var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
+    Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var service = ControllableUploadService.refusesTheFirstUploadAtTheWorkersLimit();
+    var job = variantJob();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = worker(engine(launcher), mediaRoot)) {
+      server.start();
+      worker.start("localhost", server.port());
+      service.dispatch(job);
+
+      service.awaitCompletion();
+      assertThat(service.refusedUploads).hasValue(1);
+      assertThat(service.acknowledgedSegmentNames)
+          .containsExactlyElementsOf(uploadNames(recording(ENCODED_RECORDING)));
     }
   }
 
@@ -285,9 +319,18 @@ class TranscodeWorkerUploadProtocolIT {
     private final CompletableFuture<Void> uploadCompleted = new CompletableFuture<>();
     private final CompletableFuture<Void> uploadCancelled = new CompletableFuture<>();
     private final CompletableFuture<JobAttemptFailed> failure = new CompletableFuture<>();
+    private final CompletableFuture<Void> completion = new CompletableFuture<>();
+    private final AtomicInteger refusedUploads = new AtomicInteger();
+    private final List<String> acknowledgedSegmentNames = new CopyOnWriteArrayList<>();
 
     private ControllableUploadService(UploadResponseBehavior uploadResponseBehavior) {
       this.uploadResponseBehavior = uploadResponseBehavior;
+    }
+
+    // The service states a segment upload limit of one call, so the worker queues the segment.
+    private static ControllableUploadService refusesTheFirstUploadAtTheWorkersLimit() {
+      return new ControllableUploadService(
+          UploadResponseBehavior.ACKNOWLEDGES_AFTER_REFUSING_THE_FIRST_AT_THE_WORKERS_LIMIT);
     }
 
     private static ControllableUploadService leavesUploadRpcOpen() {
@@ -315,13 +358,18 @@ class TranscodeWorkerUploadProtocolIT {
                 EstablishWorkerSessionResponse.newBuilder()
                     .setSessionAccepted(
                         WorkerSessionAccepted.newBuilder()
-                            .setWorkerSessionId(uuidStatic(UUID.randomUUID())))
+                            .setWorkerSessionId(uuidStatic(UUID.randomUUID()))
+                            .setSegmentUploadLimit(segmentUploadLimit()))
                     .build());
             return;
           }
 
           if (request.hasJobAttemptFailed()) {
             failure.complete(request.getJobAttemptFailed());
+          }
+
+          if (request.hasJobAttemptCompleted()) {
+            completion.complete(null);
           }
 
           // Every job attempt event after the start ends the attempt, apart from progress reports.
@@ -350,10 +398,22 @@ class TranscodeWorkerUploadProtocolIT {
         StreamObserver<UploadSegmentResponse> responseObserver) {
       ((ServerCallStreamObserver<UploadSegmentResponse>) responseObserver)
           .setOnCancelHandler(() -> uploadCancelled.complete(null));
+      if (refusesThisUploadAtTheWorkersLimit()) {
+        responseObserver.onError(StatusProto.toStatusRuntimeException(workerLimitRefusal()));
+        return new IgnoredUploadRequests();
+      }
+
       return new StreamObserver<>() {
+        private String segmentName;
+        private long receivedBytes;
+
         @Override
         public void onNext(UploadSegmentRequest request) {
-          // Uploaded frames are irrelevant; only cancellation matters.
+          if (request.hasMetadata()) {
+            segmentName = request.getMetadata().getSegmentName();
+          }
+
+          receivedBytes += request.getData().size();
         }
 
         @Override
@@ -374,9 +434,44 @@ class TranscodeWorkerUploadProtocolIT {
               responseObserver.onCompleted();
             }
             case CLOSES_WITHOUT_RESPONSE -> responseObserver.onCompleted();
+            case ACKNOWLEDGES_AFTER_REFUSING_THE_FIRST_AT_THE_WORKERS_LIMIT -> {
+              acknowledgedSegmentNames.add(segmentName);
+              responseObserver.onNext(
+                  UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(receivedBytes).build());
+              responseObserver.onCompleted();
+            }
           }
         }
       };
+    }
+
+    private int segmentUploadLimit() {
+      var limit = 0;
+      if (refusesAtTheWorkersLimit()) {
+        limit = 1;
+      }
+
+      return limit;
+    }
+
+    private boolean refusesAtTheWorkersLimit() {
+      return uploadResponseBehavior
+          == UploadResponseBehavior.ACKNOWLEDGES_AFTER_REFUSING_THE_FIRST_AT_THE_WORKERS_LIMIT;
+    }
+
+    // Counts the refusal, so only the first upload is refused.
+    private boolean refusesThisUploadAtTheWorkersLimit() {
+      return refusesAtTheWorkersLimit() && refusedUploads.compareAndSet(0, 1);
+    }
+
+    // The detailed google.rpc.Status shares its simple name with gRPC's Status.
+    @SuppressWarnings("checkstyle:fullyQualifiedName")
+    private static com.google.rpc.Status workerLimitRefusal() {
+      return com.google.rpc.Status.newBuilder()
+          .setCode(Code.RESOURCE_EXHAUSTED_VALUE)
+          .setMessage("Worker segment upload limit reached")
+          .addDetails(Any.pack(SegmentUploadLimitReached.getDefaultInstance()))
+          .build();
     }
 
     private void endAttempt(EventCase ending) {
@@ -384,12 +479,15 @@ class TranscodeWorkerUploadProtocolIT {
           new AssertionError("The worker sent %s before an upload completed".formatted(ending)));
       failure.completeExceptionally(
           new AssertionError("The worker sent %s instead of a failure".formatted(ending)));
+      completion.completeExceptionally(
+          new AssertionError("The worker sent %s instead of a completion".formatted(ending)));
     }
 
     private void endSession() {
       registration.completeExceptionally(sessionEndedBefore("the worker registered"));
       uploadCompleted.completeExceptionally(sessionEndedBefore("an upload completed"));
       failure.completeExceptionally(sessionEndedBefore("the worker reported a failure"));
+      completion.completeExceptionally(sessionEndedBefore("the worker reported a completion"));
     }
 
     private static AssertionError sessionEndedBefore(String expectation) {
@@ -418,6 +516,10 @@ class TranscodeWorkerUploadProtocolIT {
       return failure.get();
     }
 
+    private void awaitCompletion() throws InterruptedException, ExecutionException {
+      completion.get();
+    }
+
     private static Uuid uuidStatic(UUID value) {
       return Uuid.newBuilder()
           .setMostSignificantBits(value.getMostSignificantBits())
@@ -425,10 +527,31 @@ class TranscodeWorkerUploadProtocolIT {
           .build();
     }
 
+    // A refused upload's requests, which may still arrive after the refusal.
+    private static final class IgnoredUploadRequests
+        implements StreamObserver<UploadSegmentRequest> {
+
+      @Override
+      public void onNext(UploadSegmentRequest request) {
+        // The refusal has already ended the call.
+      }
+
+      @Override
+      public void onError(Throwable throwable) {
+        // The refusal has already ended the call.
+      }
+
+      @Override
+      public void onCompleted() {
+        // The refusal has already ended the call.
+      }
+    }
+
     private enum UploadResponseBehavior {
       LEAVES_RPC_OPEN,
       ACKNOWLEDGES_FEWER_BYTES,
-      CLOSES_WITHOUT_RESPONSE
+      CLOSES_WITHOUT_RESPONSE,
+      ACKNOWLEDGES_AFTER_REFUSING_THE_FIRST_AT_THE_WORKERS_LIMIT
     }
   }
 }

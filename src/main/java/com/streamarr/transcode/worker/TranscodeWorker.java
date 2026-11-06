@@ -107,6 +107,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final SegmentMemoryBudget copyMemoryBudget;
   private final ProbeSummary probeSummary;
   private final ProbeCapacities probeCapacities;
+  private final MonotonicClock clock;
   // Changed under this monitor, and concurrent so that copyFullness reads them without it: a start
   // holds the monitor while it resolves the source and launches FFmpeg, which a stalled mount can
   // block.
@@ -117,6 +118,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private ManagedChannel channel;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
+  private final AtomicReference<SegmentUploadLimit> uploadLimit;
   private WorkerProbeSession probeSession;
   private ScheduledExecutorService sessionTimers;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
@@ -136,6 +138,8 @@ public final class TranscodeWorker implements AutoCloseable {
     this.engine = engine;
     this.ffprobe = ffprobe;
     this.runtime = runtime;
+    this.clock = clock;
+    uploadLimit = new AtomicReference<>(new SegmentUploadLimit(0, clock));
     this.probeSummary = probeSummary == null ? new ProbeSummary(clock) : probeSummary;
     this.probeCapacities =
         ProbeCapacities.builder()
@@ -181,6 +185,14 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     return (double) placesInUse(true) / maximumCopies;
+  }
+
+  /**
+   * The segments that wait for one of the upload calls that the server accepts from the worker at
+   * once to end.
+   */
+  public int queuedSegmentUploads() {
+    return uploadLimit.get().queued();
   }
 
   /**
@@ -735,12 +747,58 @@ public final class TranscodeWorker implements AutoCloseable {
   private void uploadSegment(
       VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation)
       throws InterruptedException, ExecutionException, TimeoutException {
-    var upload =
-        new SegmentUpload(
-            configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
-    var metadataBuilder = openUpload(job, upload);
+    var upload = new AtomicReference<>(newSegmentUpload());
+    var turn = uploadLimit.get().turn();
     cancellation.onCancel(
-        () -> upload.cancel(new CancellationException("The job attempt stopped")));
+        () -> {
+          turn.cancel();
+          upload.get().cancel(new CancellationException("The job attempt stopped"));
+        });
+    // A segment that waits for its turn stays the producer's delivery in flight, so its bytes stay
+    // charged to the memory budgets.
+    try (var _ = turn.await(configuration.uploadAcknowledgementTimeout())) {
+      var refusal = sendSegmentUnlessRefusedAtTheLimit(job, upload.get(), segment);
+      while (refusal.isPresent()) {
+        // The next call is in place before the wait, so a stop during the wait also cancels it.
+        upload.set(newSegmentUpload());
+        awaitAgainInItsPlace(turn, refusal.get());
+        refusal = sendSegmentUnlessRefusedAtTheLimit(job, upload.get(), segment);
+      }
+    }
+  }
+
+  private SegmentUpload newSegmentUpload() {
+    return new SegmentUpload(
+        configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
+  }
+
+  // Returns the server's refusal when it refused the call because the worker holds its limit.
+  private Optional<ExecutionException> sendSegmentUnlessRefusedAtTheLimit(
+      VariantJob job, SegmentUpload upload, ProducedSegment segment)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    try {
+      sendSegment(openUpload(job, upload), upload, segment);
+      return Optional.empty();
+    } catch (ExecutionException e) {
+      if (!SegmentUploadLimit.isRefusalAtTheLimit(e.getCause())) {
+        throw e;
+      }
+
+      return Optional.of(e);
+    }
+  }
+
+  private void awaitAgainInItsPlace(SegmentUploadLimit.Turn turn, ExecutionException refusal)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    // A server that states no limit has none to refuse a call at.
+    if (!turn.tryAwaitAgainInItsPlace(configuration.uploadAcknowledgementTimeout())) {
+      throw refusal;
+    }
+  }
+
+  private static void sendSegment(
+      SegmentUploadMetadata.Builder metadataBuilder, SegmentUpload upload, ProducedSegment segment)
+      throws InterruptedException, ExecutionException, TimeoutException {
     metadataBuilder
         .setSegmentName(segment.name())
         .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
@@ -1216,6 +1274,7 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onNext(EstablishWorkerSessionResponse response) {
       if (response.hasSessionAccepted()) {
         workerSession = response.getSessionAccepted();
+        uploadLimit.set(new SegmentUploadLimit(workerSession.getSegmentUploadLimit(), clock));
         sessionAccepted = true;
         accepted.complete(workerSession);
         return;
@@ -1306,7 +1365,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     @Override
-    public void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
+    public synchronized void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
       this.call = call;
       call.setOnReadyHandler(this::signalReadiness);
     }
@@ -1388,9 +1447,13 @@ public final class TranscodeWorker implements AutoCloseable {
       return nanosUntilAcknowledgementDeadline(System.nanoTime());
     }
 
+    // A stop before the call opens has no call to cancel; the producer then never sends on it.
     private synchronized void cancel(Throwable failure) {
       response.completeExceptionally(failure);
-      call.cancel("Segment upload failed", failure);
+      if (call != null) {
+        call.cancel("Segment upload failed", failure);
+      }
+
       notifyAll();
     }
 
