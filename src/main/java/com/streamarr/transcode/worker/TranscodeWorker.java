@@ -125,7 +125,6 @@ public final class TranscodeWorker implements AutoCloseable {
   private final AtomicReference<SegmentUploadLimit> uploadLimit;
   private WorkerProbeSession probeSession;
   private ScheduledExecutorService sessionTimers;
-  private SeekYields seekYields;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
   private CompletableFuture<Void> disconnected;
   private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
@@ -241,7 +240,6 @@ public final class TranscodeWorker implements AutoCloseable {
     sessionTimers =
         Executors.newSingleThreadScheduledExecutor(
             Thread.ofVirtual().name("session-timers").factory());
-    seekYields = new SeekYields();
     sessionTimers.scheduleAtFixedRate(
         this::logProbeSummary,
         PROBE_SUMMARY_INTERVAL.toMillis(),
@@ -265,7 +263,7 @@ public final class TranscodeWorker implements AutoCloseable {
         JOB_ATTEMPT_PROGRESS_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
     disconnected = new CompletableFuture<>();
-    var observer = new WorkerResponseObserver(accepted, probeSession, seekYields);
+    var observer = new WorkerResponseObserver(accepted, probeSession);
     responseObserver.set(observer);
     // Waiting for the channel to become ready lets the worker start before the server listens.
     requests =
@@ -1085,9 +1083,10 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
-  private synchronized void yieldToSeek(YieldToSeekCommand command, SeekYields sessionYields) {
+  private synchronized void yieldToSeek(
+      YieldToSeekCommand command, WorkerResponseObserver session) {
     // A yield from a session that close() ended must not touch the session that replaced it.
-    if (!command.getTarget().equals(identity()) || seekYields != sessionYields) {
+    if (!command.getTarget().equals(identity()) || responseObserver.get() != session) {
       return;
     }
 
@@ -1097,7 +1096,7 @@ public final class TranscodeWorker implements AutoCloseable {
         command.getJobAttemptIdsList().stream()
             .map(ProtoUuid::fromProto)
             .collect(Collectors.toSet());
-    seekYields.yieldTo(
+    session.sessionYields.yieldTo(
         attemptIds,
         holdLimit,
         attemptId ->
@@ -1300,7 +1299,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // Returns the closed session's probes and any attempt that started after the stops began.
   private synchronized Optional<ClosedSession> closeConnection() {
-    responseObserver.set(null);
+    var observer = responseObserver.getAndSet(null);
 
     if (channel == null) {
       return Optional.empty();
@@ -1309,8 +1308,7 @@ public final class TranscodeWorker implements AutoCloseable {
     probeSession.shutdown();
     sessionTimers.shutdownNow();
     sessionTimers = null;
-    seekYields.close();
-    seekYields = null;
+    observer.sessionYields.close();
     var attempts = claimActiveAttempts();
     try {
       if (requests != null) {
@@ -1342,16 +1340,13 @@ public final class TranscodeWorker implements AutoCloseable {
     private final CompletableFuture<WorkerSessionAccepted> accepted;
     private volatile boolean sessionAccepted;
     private final WorkerProbeSession sessionProbes;
-    private final SeekYields sessionYields;
+    private final SeekYields sessionYields = new SeekYields();
     private final CompletableFuture<Void> sessionDisconnected = disconnected;
 
     private WorkerResponseObserver(
-        CompletableFuture<WorkerSessionAccepted> accepted,
-        WorkerProbeSession sessionProbes,
-        SeekYields sessionYields) {
+        CompletableFuture<WorkerSessionAccepted> accepted, WorkerProbeSession sessionProbes) {
       this.accepted = accepted;
       this.sessionProbes = sessionProbes;
-      this.sessionYields = sessionYields;
     }
 
     @Override
@@ -1385,7 +1380,7 @@ public final class TranscodeWorker implements AutoCloseable {
       }
 
       if (response.hasYieldToSeek()) {
-        yieldToSeek(response.getYieldToSeek(), sessionYields);
+        yieldToSeek(response.getYieldToSeek(), this);
         return;
       }
 
