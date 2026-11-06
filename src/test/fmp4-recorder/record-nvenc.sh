@@ -170,6 +170,13 @@ segment_start() {
   printf '%s' "$((SEGMENT_START_SLOTS[$1] * PERIOD))"
 }
 
+# frames_starting_before <seconds>: the frames of FRAME_RATE that start before a whole number of
+# seconds, which is the index of the first frame at or after it (OutputFrameRate).
+frames_starting_before() {
+  local numerator=${FRAME_RATE%/*} denominator=${FRAME_RATE#*/}
+  printf '%s' "$((($1 * numerator + denominator - 1) / denominator))"
+}
+
 # forced_times <first segment> [skipped time]: the forced keyframe times the worker passes, every
 # listed start from the attempt's first segment to the last one, without the skipped time.
 forced_times() {
@@ -210,8 +217,12 @@ plan_recording() {
     *replacement) start=$REPLACEMENT_START; replaces="$encoder-$rung-${variant%replacement}first" ;;
     extended-missed) skipped=$SKIPPED_FORCED_TIME ;;
   esac
+  local video_filter="scale=-2:$height:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=$FRAME_RATE:eof_action=pass"
   if ((start > 0)); then
-    seek=(-ss "$(($(segment_start "$start") - PERIOD))")
+    # The worker's encoded replacement decodes from its seek and trims after fps at the first frame
+    # at or after its first segment's start.
+    seek=(-ss "$(($(segment_start "$start") - PERIOD))" -noaccurate_seek)
+    video_filter+=",trim=start_pts=$(frames_starting_before "$(segment_start "$start")")"
   fi
   local times
   times=$(forced_times "$start" "$skipped")
@@ -235,7 +246,7 @@ replaces=$replaces"
     -map 0:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled
     -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000
     -c:v "$encoder" -tag:v "$tag" -profile:v "$profile" -level:v "$(level_name "$level")" ${tier[@]+"${tier[@]}"}
-    -vf "scale=-2:$height:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p"
+    -vf "$video_filter"
     -b:v "$bitrate" -maxrate "$bitrate" -bufsize "$((bitrate * 2))"
     -r:v:0 "$FRAME_RATE" -forced-idr 1 -force_key_frames:0 "$times" -g:v:0 "$gop" -keyint_min:v:0 "$gop"
     -bf "$B_FRAMES" -rc-lookahead "$LOOKAHEAD_FRAMES"

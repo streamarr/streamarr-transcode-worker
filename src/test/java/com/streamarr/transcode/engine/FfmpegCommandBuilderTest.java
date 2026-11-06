@@ -398,7 +398,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(cmd).isNotEmpty().noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
     assertThat(videoFilter(cmd))
-        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID);
   }
 
   @ParameterizedTest(name = "{1} from {0}")
@@ -419,7 +419,8 @@ class FfmpegCommandBuilderTest {
     assertThat(videoFilter(cmd))
         .isEqualTo(
             "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
-                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT");
+                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT"
+                + FRAME_GRID);
   }
 
   private static Stream<Arguments> nvencToneMappedConversions() {
