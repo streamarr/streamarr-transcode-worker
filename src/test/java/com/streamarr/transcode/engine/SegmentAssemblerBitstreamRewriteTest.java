@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static com.streamarr.transcode.engine.HevcCopies.PREFIX_SEI;
 import static com.streamarr.transcode.engine.HevcCopies.SUFFIX_SEI;
 import static com.streamarr.transcode.engine.HevcCopies.TRAIL_R;
+import static com.streamarr.transcode.engine.HevcCopies.VIDEO_SAMPLE_DURATION;
 import static com.streamarr.transcode.engine.HevcCopies.aud;
 import static com.streamarr.transcode.engine.HevcCopies.enhancementLayer;
 import static com.streamarr.transcode.engine.HevcCopies.fragmentBuilder;
@@ -25,7 +26,6 @@ import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -58,13 +58,10 @@ class SegmentAssemblerBitstreamRewriteTest {
   // A rewrite that drops most of a sample's units allocates the fragment's own copy, the kept
   // units' buffer and the output; a sample's bytes bound each of them, its unit count none.
   private static final int MOST_ALLOCATED_BYTES_PER_SAMPLE_BYTE = 4;
-  // A fragment whose converted RPU grows copies its media data into a longer array a bounded number
-  // of times, and the sample's rewrite takes a few copies of the sample; a fragment's bytes bound
-  // them, its sample count none. The fragment below allocates about 14 times its bytes; a copy
-  // sized by the sample's growth times the remaining samples allocated 632 MB, about 200 times.
-  private static final int MOST_ALLOCATED_BYTES_PER_GROWING_FRAGMENT_BYTE = 40;
-  // A cap above the initialization segment and below a sample that grows by 100 KB.
+  // A cap above the initialization segment, which a rewritten fragment sits just under or over.
   private static final long SMALL_SEGMENT_CAP = 64 * 1024;
+  // An HEVC IDR slice (ITU-T H.265 table 7-1): a random access point, where a decoder starts.
+  private static final int IDR_W_RADL = 19;
   // An SEI rewrite unescapes, parses and escapes each unit again, a few copies of its bytes, and
   // the room for the kept units doubles as they outgrow the sample; a sample's bytes bound each of
   // them, its unit count none. The sample below allocates about 21 times its bytes; one copy of
@@ -673,13 +670,16 @@ class SegmentAssemblerBitstreamRewriteTest {
   @Test
   @DisplayName("Should deliver every sample when the converted RPUs are longer than the source's")
   void shouldDeliverEverySampleWhenTheConvertedRpusAreLongerThanTheSources() throws IOException {
-    var source = SyntheticRpus.profile7().previousRpu(0).nalUnit();
-    var converted = SyntheticRpus.nalUnit(SyntheticRpus.convertedPreviousRpu());
-    assertThat(converted).hasSizeGreaterThan(source.length);
+    var growing = growingRpu().nalUnit();
+    var convertedGrowing = convertedNalUnitOf(growingRpu());
+    assertThat(convertedGrowing).hasSizeGreaterThan(growing.length);
+    var reusing = SyntheticRpus.profile7().previousRpu(0).nalUnit();
+    var convertedReusing = SyntheticRpus.nalUnit(SyntheticRpus.convertedPreviousRpu());
+    assertThat(convertedReusing).hasSizeGreaterThan(reusing.length);
     var fragment =
         fragmentBuilder()
             .startsWithKeyframe(true)
-            .video(0, sample(aud(), slice(0), source), sample(aud(), slice(1), source))
+            .video(0, sample(aud(), slice(0), growing), sample(aud(), slice(1), reusing))
             .audio(0, AUDIO_SAMPLE, AUDIO_SAMPLE)
             .build();
 
@@ -687,53 +687,100 @@ class SegmentAssemblerBitstreamRewriteTest {
 
     assertThat(delivered.video())
         .containsExactly(
-            hex(sample(aud(), slice(0), converted)), hex(sample(aud(), slice(1), converted)));
+            hex(sample(aud(), slice(0), convertedGrowing)),
+            hex(sample(aud(), slice(1), convertedReusing)));
     assertThat(delivered.audio()).containsExactly(hex(AUDIO_SAMPLE), hex(AUDIO_SAMPLE));
   }
 
-  // The fragment's copy was sized by a sample's growth times every remaining sample, audio
-  // included:
-  // a product that ran to hundreds of megabytes, or past an int, for a fragment of a few.
+  // The decoder resolves an RPU that reuses a previous RPU's mapping to the mapping under that
+  // vdr_rpu_id, which it holds from the RPUs since it started, in this fragment or an earlier one.
   @Test
   @DisplayName(
-      "Should deliver the fragment within a few times its bytes when one converted RPU grows by a"
-          + " megabyte ahead of five thousand audio samples")
+      "Should convert an RPU that reuses the previous RPU's mapping when an RPU of an earlier"
+          + " fragment defined it")
+  void shouldConvertAnRpuThatReusesThePreviousRpusMappingWhenAnRpuOfAnEarlierFragmentDefinedIt()
+      throws IOException {
+    var defining =
+        fragmentBuilder()
+            .startsWithKeyframe(true)
+            .video(0, sample(aud(), slice(0), SyntheticRpus.profile7().nalUnit()))
+            .build();
+    var reusing =
+        fragmentBuilder()
+            .startsWithKeyframe(false)
+            .video(
+                VIDEO_SAMPLE_DURATION,
+                sample(aud(), slice(1), SyntheticRpus.profile7().previousRpu(0).nalUnit()))
+            .build();
+
+    var delivered =
+        deliveredSamples(profile7ConversionCopy(), HEVC_SEGMENT, concat(defining, reusing));
+
+    assertThat(delivered.video())
+        .containsExactly(
+            hex(sample(aud(), slice(0), SyntheticRpus.nalUnit(SyntheticRpus.convertedProfile7()))),
+            hex(
+                sample(
+                    aud(), slice(1), SyntheticRpus.nalUnit(SyntheticRpus.convertedPreviousRpu()))));
+  }
+
+  // The decoder falls back to mapping 0 when no RPU defined the mapping a reference names.
+  @Test
+  @DisplayName(
+      "Should convert an RPU that reuses an undefined previous RPU's mapping when an RPU since the"
+          + " random access point defined mapping 0")
   void
-      shouldDeliverTheFragmentWithinAFewTimesItsBytesWhenOneConvertedRpuGrowsByAMegabyteAheadOfFiveThousandAudioSamples()
+      shouldConvertAnRpuThatReusesAnUndefinedPreviousRpusMappingWhenAnRpuSinceTheRandomAccessPointDefinedMapping0()
           throws IOException {
-    var source = SyntheticRpus.profile7().withoutDmMetadata().zeroBytesBeforeCrc32(2_000_000);
-    var unit = source.nalUnitWithoutEmulationPrevention();
-    var audio = Collections.nCopies(5_000, AUDIO_SAMPLE).toArray(byte[][]::new);
+    var reusing = SyntheticRpus.profile7().previousRpu(3);
     var fragment =
         fragmentBuilder()
             .startsWithKeyframe(true)
-            .video(0, sample(aud(), slice(0), unit))
-            .audio(0, audio)
+            .video(
+                0,
+                sample(aud(), slice(0), SyntheticRpus.profile7().nalUnit()),
+                sample(aud(), slice(1), reusing.nalUnit()))
             .build();
-    var initialization = bytesOfInitializationSegment(HEVC_SEGMENT);
-    var output = Mp4Stream.read(Mp4Stream.readerOf(concat(initialization, fragment)));
-    var assembler = assemblerFor(profile7ConversionCopy());
-    var closed = new ArrayList<>(assembler.accept(output.initializationSegment()).closedSegments());
-    var read = output.fragments().getFirst();
-    var thread = (ThreadMXBean) ManagementFactory.getThreadMXBean();
 
-    var before = thread.getCurrentThreadAllocatedBytes();
-    closed.addAll(assembler.accept(read).closedSegments());
-    var allocated = thread.getCurrentThreadAllocatedBytes() - before;
+    var delivered = deliveredSamples(profile7ConversionCopy(), HEVC_SEGMENT, fragment);
 
-    closed.addAll(assembler.finish());
-    var converted =
-        SyntheticRpus.nalUnit(
-            DolbyVisionRpu.parse(ByteBuffer.wrap(source.withoutEmulationPrevention()))
-                .convertedToProfile81()
-                .write());
-    assertThat(converted).hasSizeGreaterThan(unit.length + 900_000);
-    assertThat(allocated)
-        .isLessThan((long) MOST_ALLOCATED_BYTES_PER_GROWING_FRAGMENT_BYTE * fragment.length);
-    var movie = movieOf(initialization, closed);
-    assertThat(hexOf(movie, movie.videoTrack()))
-        .containsExactly(hex(sample(aud(), slice(0), converted)));
-    assertThat(hexOf(movie, movie.audioTrack())).isNotEmpty().containsOnly(hex(AUDIO_SAMPLE));
+    assertThat(delivered.video())
+        .containsExactly(
+            hex(sample(aud(), slice(0), SyntheticRpus.nalUnit(SyntheticRpus.convertedProfile7()))),
+            hex(sample(aud(), slice(1), convertedNalUnitOf(reusing))));
+  }
+
+  // A decoder that starts at a random access point holds no mapping, and one that never saw the
+  // mapping a reference names, nor mapping 0, rejects the RPU; the conversion refuses what it
+  // would reject.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("samplesWhoseRpuReusesAMappingTheDecoderDoesNotHold")
+  @DisplayName(
+      "Should fail the attempt as a conversion failure when an RPU reuses a mapping that the"
+          + " decoder does not hold")
+  void shouldFailTheAttemptAsAConversionFailureWhenAnRpuReusesAMappingThatTheDecoderDoesNotHold(
+      String description, List<byte[]> samples) throws IOException {
+    assertTheAttemptFailsAsAConversionFailure(samples.toArray(byte[][]::new));
+  }
+
+  static Stream<Arguments> samplesWhoseRpuReusesAMappingTheDecoderDoesNotHold() {
+    var reusingMapping0 = SyntheticRpus.profile7().previousRpu(0).nalUnit();
+    var idrSlice = nalUnit(IDR_W_RADL, new byte[] {(byte) 0xAF, 1});
+    return Stream.of(
+        Arguments.of(
+            "the first sample's RPU reuses mapping 0, which no RPU defined",
+            List.of(sample(aud(), slice(0), reusingMapping0))),
+        Arguments.of(
+            "an RPU reuses mapping 0 in the sample of a random access point, after the RPU that"
+                + " defined it",
+            List.of(
+                sample(aud(), slice(0), SyntheticRpus.profile7().nalUnit()),
+                sample(aud(), idrSlice, reusingMapping0))),
+        Arguments.of(
+            "an RPU reuses mapping 3 where the RPU before it defined mapping 5 and none defined 0",
+            List.of(
+                sample(aud(), slice(0), SyntheticRpus.profile7().vdrRpuId(5).nalUnit()),
+                sample(aud(), slice(1), SyntheticRpus.profile7().previousRpu(3).nalUnit()))));
   }
 
   // The room a growing copy keeps beyond its last sample must not count as media data against the
@@ -744,8 +791,9 @@ class SegmentAssemblerBitstreamRewriteTest {
           + " cap")
   void shouldDeliverTheSegmentWhenAConvertedRpuGrowsAFragmentThatSitsJustUnderTheCap()
       throws IOException {
-    var source = SyntheticRpus.profile7().previousRpu(0).nalUnit();
-    var converted = SyntheticRpus.nalUnit(SyntheticRpus.convertedPreviousRpu());
+    var source = growingRpu().nalUnit();
+    var converted = convertedNalUnitOf(growingRpu());
+    assertThat(converted).hasSizeGreaterThan(source.length);
     var picture = nalUnit(TRAIL_R, new byte[56_000]);
     var fragment =
         fragmentBuilder()
@@ -772,13 +820,20 @@ class SegmentAssemblerBitstreamRewriteTest {
           + " data than the cap")
   void shouldRefuseAFragmentAsOverTheCapWhenItsRewrittenSamplesWouldTakeMoreMediaDataThanTheCap()
       throws IOException {
-    var unit =
-        SyntheticRpus.profile7()
-            .withoutDmMetadata()
-            .zeroBytesBeforeCrc32(200_000)
-            .nalUnitWithoutEmulationPrevention();
-    var fragment =
-        fragmentBuilder().startsWithKeyframe(true).video(0, sample(aud(), slice(0), unit)).build();
+    var source = growingRpu().nalUnit();
+    var growth = convertedNalUnitOf(growingRpu()).length - source.length;
+    assertThat(growth).isPositive();
+    // The sample's media data sits under the cap by one byte less than the RPU grows.
+    var withoutPicture = sample(aud(), slice(0), source).length;
+    var pictureBytes =
+        (int) SMALL_SEGMENT_CAP
+            - growth
+            + 1
+            - withoutPicture
+            - nalUnit(TRAIL_R, new byte[0]).length;
+    var sample = sample(aud(), slice(0), nalUnit(TRAIL_R, new byte[pictureBytes]), source);
+    assertThat(sample).hasSize((int) SMALL_SEGMENT_CAP - growth + 1);
+    var fragment = fragmentBuilder().startsWithKeyframe(true).video(0, sample).build();
     var output =
         Mp4Stream.read(
             Mp4Stream.readerOf(concat(bytesOfInitializationSegment(HEVC_SEGMENT), fragment)));
@@ -822,12 +877,17 @@ class SegmentAssemblerBitstreamRewriteTest {
           + " converts to profile 8.1")
   void shouldFailTheAttemptAsAConversionFailureWhenASampleHoldsNoSingleRpuThatConvertsToProfile81(
       String description, byte[] sample) throws IOException {
+    assertTheAttemptFailsAsAConversionFailure(sample);
+  }
+
+  private static void assertTheAttemptFailsAsAConversionFailure(byte[]... samples)
+      throws IOException {
     var output =
         Mp4Stream.read(
             Mp4Stream.readerOf(
                 concat(
                     bytesOfInitializationSegment(HEVC_SEGMENT),
-                    fragmentBuilder().startsWithKeyframe(true).video(0, sample).build())));
+                    fragmentBuilder().startsWithKeyframe(true).video(0, samples).build())));
     var assembler = assemblerFor(profile7ConversionCopy());
     assembler.accept(output.initializationSegment());
     var fragment = output.fragments().getFirst();
@@ -867,6 +927,21 @@ class SegmentAssemblerBitstreamRewriteTest {
         Arguments.of(
             "an RPU with a metadata compression of 2",
             sample(aud(), slice(0), SyntheticRpus.profile7().dmMetadataCompression(2).nalUnit())),
+        Arguments.of(
+            "an RPU with compressed DM metadata, which the converted record declares uncompressed",
+            sample(aud(), slice(0), SyntheticRpus.profile7().compressedDm().nalUnit())),
+        Arguments.of(
+            "an RPU with two bytes between its metadata and its CRC32",
+            sample(
+                aud(),
+                slice(0),
+                SyntheticRpus.profile7()
+                    .withoutDmMetadata()
+                    .bytesBeforeCrc32(0xFF, 0x01)
+                    .nalUnit())),
+        Arguments.of(
+            "an RPU with eight static extension blocks, above the seven that the decoder keeps",
+            sample(aud(), slice(0), SyntheticRpus.profile7().emptyBlocks(8, 0).nalUnit())),
         Arguments.of(
             "an RPU that names previous RPU 16, above the 15 that the decoder reads",
             sample(aud(), slice(0), SyntheticRpus.profile7().previousRpu(16).nalUnit())),
@@ -959,6 +1034,19 @@ class SegmentAssemblerBitstreamRewriteTest {
         .isLessThan((long) MOST_ALLOCATED_BYTES_PER_REWRITTEN_SEI_SAMPLE_BYTE * sample.length);
     assertThat(videoSamplesOf(initialization, closed))
         .containsExactly(hex(concat(aud(), slice(0), repeated(keptSei, 800), converted)));
+  }
+
+  // A profile 8 RPU, whose curves the conversion keeps, grows by the emulation prevention bytes
+  // that the profile 8.1 colour matrices take; a profile 7 RPU's residual and curves go, so it
+  // shrinks by more.
+  private static SyntheticRpus.Builder growingRpu() {
+    return SyntheticRpus.profile7().withoutResidual();
+  }
+
+  // The RPU's NAL unit as the conversion writes it.
+  private static byte[] convertedNalUnitOf(SyntheticRpus.Builder source) {
+    return SyntheticRpus.nalUnit(
+        DolbyVisionRpu.parse(ByteBuffer.wrap(source.escaped())).convertedToProfile81().write());
   }
 
   private static byte[] repeated(byte[] unit, int count) {

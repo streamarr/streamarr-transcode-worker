@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.OptionalInt;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 /**
@@ -32,8 +32,11 @@ final class SyntheticRpus {
   private static final int RPU_TYPE = 2;
   private static final int RPU_FORMAT = 18;
   private static final int FINAL_BYTE = 0x80;
-  // An extension block level that the decoder skips without reading a byte of the block.
+  // A dynamic extension block level that the decoder skips without reading a byte of the block.
   private static final int UNREAD_BLOCK_LEVEL = 200;
+  // A level the decoder keeps as a static block, reserved by the spec, and skips without reading
+  // a byte of the block.
+  private static final int STATIC_UNREAD_BLOCK_LEVEL = 32;
 
   // dovi_tool 2.3.4, `editor` with {"mode": 2}, on profile7(): 323 bytes in, 159 out.
   private static final String CONVERTED_PROFILE_7 =
@@ -94,6 +97,9 @@ final class SyntheticRpus {
     return unit.array();
   }
 
+  /** The blocks of no bytes in one list: static ones under level 32, then dynamic ones. */
+  private record EmptyBlocks(int staticBlocks, int dynamicBlocks) {}
+
   static final class Builder {
     private List<Nlq> nlq = List.of(Nlq.full(), Nlq.full(), Nlq.full());
     private boolean residual = true;
@@ -113,7 +119,8 @@ final class SyntheticRpus {
     private byte[] bytesBeforeCrc32 = new byte[0];
     private long coefficientLog2Denom = COEFFICIENT_LOG2_DENOM;
     private int fractionBits = COEFFICIENT_LOG2_DENOM;
-    private OptionalInt emptyBlocks = OptionalInt.empty();
+    private Optional<EmptyBlocks> cmv29EmptyBlocks = Optional.empty();
+    private Optional<EmptyBlocks> cmv40EmptyBlocks = Optional.empty();
     private long lumaMappingIdc = 0;
     private long vdrRpuId = 0;
     private long xPartitionsMinus1 = 2;
@@ -129,11 +136,26 @@ final class SyntheticRpus {
     private Builder() {}
 
     /**
-     * A CM v2.9 block list of this many blocks of no bytes under a level the decoder does not read,
-     * in place of the usual four blocks.
+     * A CM v2.9 block list of this many dynamic blocks of no bytes under a level the decoder does
+     * not read, in place of the usual four blocks.
      */
     Builder emptyBlocks(int count) {
-      emptyBlocks = OptionalInt.of(count);
+      return emptyBlocks(0, count);
+    }
+
+    /**
+     * A CM v2.9 block list of blocks of no bytes in place of the usual four: that many under level
+     * 32, which the decoder keeps as static, then that many under level 200, which it keeps as
+     * dynamic, reading neither.
+     */
+    Builder emptyBlocks(int staticCount, int dynamicCount) {
+      cmv29EmptyBlocks = Optional.of(new EmptyBlocks(staticCount, dynamicCount));
+      return this;
+    }
+
+    /** A CM v4.0 block list of blocks of no bytes, laid out as {@link #emptyBlocks(int, int)}. */
+    Builder emptyCmv40Blocks(int staticCount, int dynamicCount) {
+      cmv40EmptyBlocks = Optional.of(new EmptyBlocks(staticCount, dynamicCount));
       return this;
     }
 
@@ -222,8 +244,8 @@ final class SyntheticRpus {
     }
 
     /**
-     * Bytes that the syntax does not define, between the alignment after the metadata and the
-     * CRC32.
+     * Bytes between the alignment after the metadata and the CRC32, where the decoder reads the
+     * CRC32 and the final byte.
      */
     Builder bytesBeforeCrc32(int... values) {
       bytesBeforeCrc32 = new byte[values.length];
@@ -231,12 +253,6 @@ final class SyntheticRpus {
         bytesBeforeCrc32[index] = (byte) values[index];
       }
 
-      return this;
-    }
-
-    /** That many zero bytes between the alignment after the metadata and the CRC32. */
-    Builder zeroBytesBeforeCrc32(int count) {
-      bytesBeforeCrc32 = new byte[count];
       return this;
     }
 
@@ -315,14 +331,10 @@ final class SyntheticRpus {
 
     /** The RPU's payload after its NAL unit header, with emulation prevention. */
     byte[] escaped() {
-      return HevcEmulationPrevention.escaped(withoutEmulationPrevention());
+      return HevcEmulationPrevention.escaped(payload());
     }
 
-    /**
-     * The payload as a source that skipped emulation prevention carries it: the parser reads it as
-     * it is, and the write escapes it, so a run of zeros grows the converted RPU.
-     */
-    byte[] withoutEmulationPrevention() {
+    private byte[] payload() {
       var sink = new BitSink();
       sink.u(RPU_NAL_PREFIX, 8);
       writeHeader(sink);
@@ -351,10 +363,6 @@ final class SyntheticRpus {
 
     byte[] nalUnit() {
       return SyntheticRpus.nalUnit(escaped());
-    }
-
-    byte[] nalUnitWithoutEmulationPrevention() {
-      return SyntheticRpus.nalUnit(withoutEmulationPrevention());
     }
 
     private void writeHeader(BitSink sink) {
@@ -475,6 +483,11 @@ final class SyntheticRpus {
       }
 
       writeCmv29Blocks(sink);
+      if (cmv40EmptyBlocks.isPresent()) {
+        writeEmptyBlocks(sink, cmv40EmptyBlocks.get());
+        return;
+      }
+
       if (cmv40) {
         sink.ue(2).align();
         sink.ue(2).u(254, 8).u(0, 8).u(2, 8);
@@ -482,13 +495,21 @@ final class SyntheticRpus {
       }
     }
 
-    private void writeCmv29Blocks(BitSink sink) {
-      if (emptyBlocks.isPresent()) {
-        sink.ue(emptyBlocks.getAsInt()).align();
-        for (var block = 0; block < emptyBlocks.getAsInt(); block++) {
-          sink.ue(0).u(UNREAD_BLOCK_LEVEL, 8);
-        }
+    // A block list: its count, alignment, then each block's length of 0, its level and no bytes.
+    private static void writeEmptyBlocks(BitSink sink, EmptyBlocks blocks) {
+      sink.ue(blocks.staticBlocks() + blocks.dynamicBlocks()).align();
+      for (var block = 0; block < blocks.staticBlocks(); block++) {
+        sink.ue(0).u(STATIC_UNREAD_BLOCK_LEVEL, 8);
+      }
 
+      for (var block = 0; block < blocks.dynamicBlocks(); block++) {
+        sink.ue(0).u(UNREAD_BLOCK_LEVEL, 8);
+      }
+    }
+
+    private void writeCmv29Blocks(BitSink sink) {
+      if (cmv29EmptyBlocks.isPresent()) {
+        writeEmptyBlocks(sink, cmv29EmptyBlocks.get());
         return;
       }
 

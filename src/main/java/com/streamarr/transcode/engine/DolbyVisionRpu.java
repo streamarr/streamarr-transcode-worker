@@ -10,21 +10,17 @@ import lombok.NonNull;
 /**
  * A Dolby Vision RPU of type 2, read from and written to the payload of an HEVC NAL unit of type
  * 62: the NAL prefix 25, the header, the mapping unless the RPU reuses the previous one, the DM
- * metadata when the header announces it, alignment, any further bytes ahead of the CRC32, the CRC32
- * and the final byte 0x80. The parser and writer cover the subset of the syntax that converting a
- * profile 7 RPU to profile 8.1 needs, the way libdovi's mode 2 does: the residual and its NLQ go, a
- * full enhancement layer's mapping gives way to identity curves, the partitions and the DM colour
- * matrices take profile 8.1's values, and the extension blocks stay as they were.
- *
- * @param trailingBytes the bytes between the alignment after the metadata and the CRC32, which the
- *     syntax does not define and a write keeps
+ * metadata when the header announces it, alignment, then the CRC32 and the final byte 0x80, which
+ * the decoder reads right there. The parser and writer cover the subset of the syntax that
+ * converting a profile 7 RPU to profile 8.1 needs, the way libdovi's mode 2 does: the residual and
+ * its NLQ go, a full enhancement layer's mapping gives way to identity curves, the partitions and
+ * the DM colour matrices take profile 8.1's values, and the extension blocks stay as they were.
  */
 @Builder(toBuilder = true)
 record DolbyVisionRpu(
     @NonNull RpuDataHeader header,
     @NonNull Optional<RpuDataMapping> mapping,
-    @NonNull Optional<VdrDmData> dmData,
-    byte @NonNull [] trailingBytes) {
+    @NonNull Optional<VdrDmData> dmData) {
 
   /** What the NLQ parameters of a profile 7 RPU say about its enhancement layer. */
   enum EnhancementLayer {
@@ -46,8 +42,8 @@ record DolbyVisionRpu(
   /**
    * @param escapedPayload the NAL unit's bytes after its 2-byte header, with emulation prevention
    * @throws DolbyVisionRpuException when the bytes are no RPU that this parser reads: too short, a
-   *     last byte other than 0x80, a CRC32 that does not match, a prefix other than 25, or syntax
-   *     that the conversion does not handle
+   *     last byte other than 0x80, a CRC32 that does not match, a prefix other than 25, bytes
+   *     between the syntax and the CRC32, or syntax that the conversion does not handle
    */
   static DolbyVisionRpu parse(ByteBuffer escapedPayload) {
     var bytes = withoutTrailingZeros(HevcEmulationPrevention.unescaped(escapedPayload));
@@ -85,12 +81,22 @@ record DolbyVisionRpu(
 
     rpu.mapping(mapping).dmData(dmData);
     reader.alignmentZeroBits();
+    requireOnlyTheCrc32Ahead(reader);
+    return rpu.build();
+  }
+
+  // The decoder reads the CRC32 and the final byte right after the alignment, so bytes between the
+  // syntax and the CRC32 would displace what it reads.
+  private static void requireOnlyTheCrc32Ahead(RpuBitReader reader) {
     if (reader.bitsRemaining() < CRC32_AND_FINAL_BITS) {
       throw new DolbyVisionRpuException("the RPU's syntax runs into its CRC32");
     }
 
-    return rpu.trailingBytes(reader.bytes((reader.bitsRemaining() - CRC32_AND_FINAL_BITS) / 8))
-        .build();
+    if (reader.bitsRemaining() > CRC32_AND_FINAL_BITS) {
+      throw new DolbyVisionRpuException(
+          (reader.bitsRemaining() - CRC32_AND_FINAL_BITS) / 8
+              + " bytes between the RPU's syntax and its CRC32, where the decoder reads the CRC32");
+    }
   }
 
   /** The RPU's payload after its NAL unit header, with emulation prevention and a fresh CRC32. */
@@ -99,7 +105,7 @@ record DolbyVisionRpu(
     header.write(writer);
     mapping.ifPresent(data -> data.write(writer, header));
     dmData.ifPresent(data -> data.write(writer));
-    writer.alignToByte().bytes(trailingBytes);
+    writer.alignToByte();
     var data = writer.toByteArray();
     writer.bits(RpuCrc32.of(data, 1, data.length), 32).bits(FINAL_BYTE, 8);
     return HevcEmulationPrevention.escaped(writer.toByteArray());
@@ -121,8 +127,9 @@ record DolbyVisionRpu(
    * This RPU converted to profile 8.1 the way libdovi's mode 2 converts it. A profile 8 RPU takes
    * the same changes, which leave its curves as they are.
    *
-   * @throws DolbyVisionRpuException when the RPU serves neither profile 7 nor 8, or its base layer
-   *     is not 10-bit, the only depth the profiles define
+   * @throws DolbyVisionRpuException when the RPU serves neither profile 7 nor 8, its base layer is
+   *     not 10-bit, the only depth the profiles define, or it compresses its DM metadata, which the
+   *     converted copy's record declares uncompressed (ADR 0036)
    */
   DolbyVisionRpu convertedToProfile81() {
     if (!CONVERTIBLE_PROFILES.contains(profile())) {
@@ -133,6 +140,11 @@ record DolbyVisionRpu(
     if (header.baseLayerBitDepthMinus8() != PROFILE_7_BASE_LAYER_BIT_DEPTH_MINUS8) {
       throw new DolbyVisionRpuException(
           "an RPU with a " + header.baseLayerBitDepth() + "-bit base layer");
+    }
+
+    if (header.compressesDmMetadata()) {
+      throw new DolbyVisionRpuException(
+          "compressed DM metadata, which the converted copy's record declares uncompressed");
     }
 
     return toBuilder()

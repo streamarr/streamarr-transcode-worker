@@ -119,8 +119,17 @@ class DolbyVisionRpuTest {
                 .currentDmMetadataId(15)
                 .signalBitDepth(16)),
         Arguments.of(
-            "a block list of 31 extension blocks, as many as the decoder reads",
-            SyntheticRpus.profile7().emptyBlocks(31)),
+            "a block list of 31 extension blocks, as many as the decoder reads, six static and 25"
+                + " dynamic",
+            SyntheticRpus.profile7().emptyBlocks(6, 25)),
+        Arguments.of(
+            "seven static and 25 dynamic extension blocks across both lists, as many as the decoder"
+                + " keeps",
+            SyntheticRpus.profile7().emptyBlocks(7, 24).emptyCmv40Blocks(0, 1)),
+        Arguments.of(
+            "eight static extension blocks under compressed DM metadata, which the decoder parses"
+                + " without keeping",
+            SyntheticRpus.profile7().compressedDm().emptyBlocks(8, 0)),
         Arguments.of("a profile 8 RPU", SyntheticRpus.profile7().withoutResidual()));
   }
 
@@ -310,6 +319,21 @@ class DolbyVisionRpuTest {
             "compressed DM metadata that the RPU does not carry, which the decoder rejects",
             SyntheticRpus.profile7().compressedDm().withoutDmMetadata().escaped()),
         Arguments.of(
+            "compressed DM metadata, which the converted copy's record declares uncompressed",
+            SyntheticRpus.profile7().compressedDm().escaped()),
+        Arguments.of(
+            "two bytes between the metadata and the CRC32, where the decoder reads the CRC32",
+            SyntheticRpus.profile7().withoutDmMetadata().bytesBeforeCrc32(0xFF, 0x01).escaped()),
+        Arguments.of(
+            "eight static extension blocks, above the seven that the decoder keeps",
+            SyntheticRpus.profile7().emptyBlocks(8, 0).escaped()),
+        Arguments.of(
+            "26 dynamic extension blocks across both lists, above the 25 that the decoder keeps",
+            SyntheticRpus.profile7().emptyBlocks(0, 25).emptyCmv40Blocks(0, 1).escaped()),
+        Arguments.of(
+            "an eighth static extension block in the CM v4.0 list after seven in the CM v2.9 list",
+            SyntheticRpus.profile7().emptyBlocks(7, 0).emptyCmv40Blocks(1, 0).escaped()),
+        Arguments.of(
             "a previous RPU id of 4294967295, above the largest value a ue(v) codes",
             SyntheticRpus.profile7().previousRpu(4_294_967_295L).escaped()),
         Arguments.of(
@@ -321,23 +345,5 @@ class DolbyVisionRpuTest {
             "a piece of mapping_idc 4294967297, which is 1 in 32 bits",
             SyntheticRpus.profile7().lumaMappingIdc(4_294_967_297L).escaped()),
         Arguments.of("a profile 5 RPU", SyntheticRpus.profile7().profile5().escaped()));
-  }
-
-  // The syntax defines nothing between the alignment after the metadata and the CRC32, and a write
-  // keeps whatever bytes sit there behind the alignment, so a mapping that ends off a byte boundary
-  // does not shift them into the alignment bits.
-  @Test
-  @DisplayName(
-      "Should keep the bytes between the metadata and the CRC32 when the metadata ends off a byte"
-          + " boundary")
-  void shouldKeepTheBytesBetweenTheMetadataAndTheCrc32WhenTheMetadataEndsOffAByteBoundary() {
-    var source = SyntheticRpus.profile7().withoutDmMetadata().bytesBeforeCrc32(0xFF, 0x01);
-    var parsed = DolbyVisionRpu.parse(ByteBuffer.wrap(source.escaped()));
-
-    var converted = DolbyVisionRpu.parse(ByteBuffer.wrap(parsed.convertedToProfile81().write()));
-
-    assertThat(parsed.write()).isEqualTo(source.escaped());
-    assertThat(parsed.trailingBytes()).containsExactly((byte) 0xFF, (byte) 0x01);
-    assertThat(converted.trailingBytes()).containsExactly((byte) 0xFF, (byte) 0x01);
   }
 }
