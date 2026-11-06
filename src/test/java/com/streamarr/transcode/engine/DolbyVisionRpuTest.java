@@ -223,6 +223,15 @@ class DolbyVisionRpuTest {
         Arguments.of(
             "an extension block that claims 2147483648 bytes",
             SyntheticRpus.profile7().firstBlockClaiming(2_147_483_648L).escaped()),
+        Arguments.of(
+            "a coefficient denominator of 24, above the 23 that the syntax allows",
+            SyntheticRpus.profile7().coefficientLog2Denom(24).fractionBits(24).escaped()),
+        Arguments.of(
+            "a coefficient denominator of 2147483648 beside fraction fields of no bits",
+            SyntheticRpus.profile7()
+                .coefficientLog2Denom(2_147_483_648L)
+                .fractionBits(0)
+                .escaped()),
         Arguments.of("a profile 5 RPU", SyntheticRpus.profile7().profile5().escaped()));
   }
 

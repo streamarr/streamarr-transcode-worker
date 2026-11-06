@@ -108,8 +108,22 @@ final class SyntheticRpus {
     private int trailingZeroBytes;
     private OptionalLong firstBlockClaimedBytes = OptionalLong.empty();
     private byte[] bytesBeforeCrc32 = new byte[0];
+    private long coefficientLog2Denom = COEFFICIENT_LOG2_DENOM;
+    private int fractionBits = COEFFICIENT_LOG2_DENOM;
 
     private Builder() {}
+
+    /** A header that declares the denominator; the fraction fields keep their own width. */
+    Builder coefficientLog2Denom(long value) {
+      coefficientLog2Denom = value;
+      return this;
+    }
+
+    /** The width of every coefficient fraction field, which a malformed RPU can shrink to none. */
+    Builder fractionBits(int count) {
+      fractionBits = count;
+      return this;
+    }
 
     /** An RPU whose first extension block claims the length while it holds its five bytes. */
     Builder firstBlockClaiming(long bytes) {
@@ -231,7 +245,7 @@ final class SyntheticRpus {
 
     private void writeHeader(BitSink sink) {
       sink.u(RPU_TYPE, 6).u(RPU_FORMAT, 11).u(vdrRpuProfile, 4).u(0, 4).bit(1);
-      sink.bit(0).u(0, 2).ue(COEFFICIENT_LOG2_DENOM).u(1, 2).bit(fullRange ? 1 : 0);
+      sink.bit(0).u(0, 2).ue(coefficientLog2Denom).u(1, 2).bit(fullRange ? 1 : 0);
       sink.ue(BL_BIT_DEPTH - 8).ue(2).ue(4).bit(0).u(compressedDm ? 1 : 0, 3);
       sink.bit(enhancementLayerFilter ? 1 : 0).bit(residual ? 0 : 1);
       sink.bit(dmMetadata ? 1 : 0);
@@ -280,29 +294,28 @@ final class SyntheticRpus {
     }
 
     // mapping_idc 0, first order, no linear interpolation, 0 + 1 * x.
-    private static void writeIdentityPolynomial(BitSink sink) {
+    private void writeIdentityPolynomial(BitSink sink) {
       sink.ue(0).ue(0).bit(0);
-      sink.se(0).u(0, COEFFICIENT_LOG2_DENOM);
-      sink.se(1).u(0, COEFFICIENT_LOG2_DENOM);
+      sink.se(0).u(0, fractionBits);
+      sink.se(1).u(0, fractionBits);
     }
 
     // mapping_idc 1, third order: a constant and 3 x 7 coefficients, signed integer parts first.
-    private static void writeMmr(BitSink sink, int component) {
+    private void writeMmr(BitSink sink, int component) {
       sink.ue(1).u(2, 2);
-      sink.se(-component).u(MMR_COEFFICIENT_FRACTION, COEFFICIENT_LOG2_DENOM);
+      sink.se(-component).u(MMR_COEFFICIENT_FRACTION, fractionBits);
       for (var order = 0; order < 3; order++) {
         for (var coefficient = 0; coefficient < 7; coefficient++) {
-          sink.se((coefficient % 3) - 1 + order)
-              .u(MMR_COEFFICIENT_FRACTION, COEFFICIENT_LOG2_DENOM);
+          sink.se((coefficient % 3) - 1 + order).u(MMR_COEFFICIENT_FRACTION, fractionBits);
         }
       }
     }
 
-    private static void writeNlq(BitSink sink, Nlq parameters) {
+    private void writeNlq(BitSink sink, Nlq parameters) {
       sink.u(parameters.offset(), BL_BIT_DEPTH);
-      sink.ue(parameters.vdrInMaxInteger()).u(parameters.vdrInMax(), COEFFICIENT_LOG2_DENOM);
-      sink.ue(parameters.slopeInteger()).u(parameters.slope(), COEFFICIENT_LOG2_DENOM);
-      sink.ue(parameters.thresholdInteger()).u(parameters.threshold(), COEFFICIENT_LOG2_DENOM);
+      sink.ue(parameters.vdrInMaxInteger()).u(parameters.vdrInMax(), fractionBits);
+      sink.ue(parameters.slopeInteger()).u(parameters.slope(), fractionBits);
+      sink.ue(parameters.thresholdInteger()).u(parameters.threshold(), fractionBits);
     }
 
     private void writeDmData(BitSink sink) {
