@@ -30,8 +30,9 @@ final class PacketRpuReader {
       List<NalUnits> samples, NalSyntax syntax, JsonNode stream) {
     var isEveryUnitWalked = !WalkCoverage.missesUnits(stream);
     var isEverySampleDelimitable = !WalkCoverage.missesPacketUnits(stream);
-    var rpus = samples.stream().flatMap(sample -> sample.units().stream()).filter(syntax::isRpu);
-    var firstRpu = rpus.findFirst();
+    var rpus =
+        samples.stream().flatMap(sample -> sample.units().stream()).filter(syntax::isRpu).toList();
+    var firstRpu = rpus.stream().findFirst();
     var isEverySampleComplete = samples.stream().allMatch(NalUnits::complete);
     if (firstRpu.isEmpty() && !(isEverySampleComplete && isEveryUnitWalked)) {
       return Optional.empty();
@@ -50,8 +51,13 @@ final class PacketRpuReader {
       placement = placement(samples.stream().map(sample -> Layout.of(sample, syntax)).toList());
     }
 
+    var parsed =
+        rpus.stream()
+            .flatMap(rpu -> DolbyVisionRpuReader.read(payload(rpu, syntax)).stream())
+            .toList();
     return Optional.of(
-        new RpuObservation(Presence.PRESENCE_PRESENT, header(firstRpu.get(), syntax), placement));
+        new RpuObservation(Presence.PRESENCE_PRESENT, header(firstRpu.get(), syntax), placement)
+            .withParsed(parsed));
   }
 
   /**
@@ -80,8 +86,11 @@ final class PacketRpuReader {
   }
 
   private static Optional<DolbyVisionRpuHeader> header(byte[] rpu, NalSyntax syntax) {
-    return DolbyVisionRpuHeaderReader.read(
-        Arrays.copyOfRange(rpu, syntax.payloadOffset(), rpu.length));
+    return DolbyVisionRpuHeaderReader.read(payload(rpu, syntax));
+  }
+
+  private static byte[] payload(byte[] rpu, NalSyntax syntax) {
+    return Arrays.copyOfRange(rpu, syntax.payloadOffset(), rpu.length);
   }
 
   /**

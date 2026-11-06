@@ -117,11 +117,13 @@ final class Av1MetadataObus implements MetadataWalk {
   @Override
   public Optional<RpuObservation> rpus() {
     if (firstRpu.isPresent()) {
+      var rpu = unwrapped(firstRpu.get());
       return Optional.of(
           new RpuObservation(
-              Presence.PRESENCE_PRESENT,
-              header(firstRpu.get()),
-              DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
+                  Presence.PRESENCE_PRESENT,
+                  rpu.flatMap(Av1MetadataObus::header),
+                  DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)
+              .withParsed(rpu.flatMap(DolbyVisionRpuReader::readWithoutPrefix).stream().toList()));
     }
 
     if (readAll && !hasLayeredRpu) {
@@ -135,11 +137,19 @@ final class Av1MetadataObus implements MetadataWalk {
     return Optional.empty();
   }
 
+  private static Optional<DolbyVisionRpuHeader> header(byte[] rpu) {
+    try {
+      return DolbyVisionRpuHeaderReader.readWithoutPrefix(rpu);
+    } catch (TruncatedBitstreamException _) {
+      return Optional.empty();
+    }
+  }
+
   /**
-   * The header of the RPU that the EMDF container after the T.35 identifier wraps; empty when the
-   * container is not one that FFmpeg opens.
+   * The RPU that the EMDF container after the T.35 identifier wraps; empty when the container is
+   * not one that FFmpeg opens.
    */
-  private static Optional<DolbyVisionRpuHeader> header(byte[] container) {
+  private static Optional<byte[]> unwrapped(byte[] container) {
     var reader = new BitReader(container);
     try {
       if (reader.bits(27) != EMDF_HEADER) {
@@ -160,7 +170,7 @@ final class Av1MetadataObus implements MetadataWalk {
         return Optional.empty();
       }
 
-      return DolbyVisionRpuHeaderReader.readWithoutPrefix(rpu);
+      return Optional.of(rpu);
     } catch (TruncatedBitstreamException _) {
       return Optional.empty();
     }

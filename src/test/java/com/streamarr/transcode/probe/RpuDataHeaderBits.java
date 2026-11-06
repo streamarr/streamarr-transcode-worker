@@ -62,16 +62,19 @@ record RpuDataHeaderBits(
 
   /** The header's bytes up to its rbsp_stop_one_bit, without emulation prevention. */
   byte[] payload() {
-    var bits =
-        new Bits()
-            .put(8, rpuNalPrefix)
-            .put(6, rpuType)
-            .put(11, rpuFormat)
-            .put(4, vdrRpuProfile)
-            .put(4, vdrRpuLevel)
-            .flag(vdrSeqInfoPresent)
-            .flag(chromaResamplingExplicitFilter)
-            .put(2, coefficientDataType);
+    return written(new Bits()).flag(true).bytes();
+  }
+
+  /** Writes the header's fields, from rpu_nal_prefix to disable_residual_flag, into the bits. */
+  Bits written(Bits bits) {
+    bits.put(8, rpuNalPrefix)
+        .put(6, rpuType)
+        .put(11, rpuFormat)
+        .put(4, vdrRpuProfile)
+        .put(4, vdrRpuLevel)
+        .flag(vdrSeqInfoPresent)
+        .flag(chromaResamplingExplicitFilter)
+        .put(2, coefficientDataType);
     if (coefficientDataType == 0) {
       bits.unsignedExpGolomb(coefficientLog2Denom);
     }
@@ -87,13 +90,18 @@ record RpuDataHeaderBits(
           .flag(disableResidual);
     }
 
-    return bits.flag(true).bytes();
+    return bits;
   }
 
   private String escapedPayload() {
+    return escaped(payload());
+  }
+
+  /** The bytes with emulation prevention, as hex. */
+  static String escaped(byte[] payload) {
     var escaped = new StringBuilder();
     var zeros = 0;
-    for (var value : payload()) {
+    for (var value : payload) {
       var unsigned = Byte.toUnsignedInt(value);
       if (zeros >= UNESCAPED_ZERO_RUN && unsigned <= 3) {
         escaped.append(" 03");
@@ -107,7 +115,7 @@ record RpuDataHeaderBits(
     return escaped.toString().trim();
   }
 
-  private static final class Bits {
+  static final class Bits {
 
     private final StringBuilder bits = new StringBuilder();
 
@@ -128,6 +136,15 @@ record RpuDataHeaderBits(
       var codeNum = value + 1;
       var significantBits = 64 - Long.numberOfLeadingZeros(codeNum);
       return put(significantBits - 1, 0).put(significantBits, codeNum);
+    }
+
+    /** Pads with zero bits to the next byte boundary. */
+    Bits align() {
+      while (bits.length() % 8 != 0) {
+        bits.append('0');
+      }
+
+      return this;
     }
 
     byte[] bytes() {
