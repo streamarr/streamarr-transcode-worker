@@ -6236,6 +6236,37 @@ class WorkerMediaSmokeTest {
         .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
   }
 
+  // Segment 12, from 72 s, lies wholly after the source's audio turns from mono to stereo at 70 s,
+  // where its left channel plays 440 Hz and its right 880 Hz.
+  @Test
+  @DisplayName(
+      "Should keep the stereo channels apart after the source's audio turns from mono to stereo"
+          + " when an encode from the start holds the last frame of video that ends before the"
+          + " audio")
+  void shouldKeepTheStereoChannelsApartAfterTheSourcesAudioTurnsFromMonoToStereoWhenAnEncodeHolds()
+      throws Exception {
+    var source = videoEndsBeforeAudioThatTurnsFromMonoToStereoSource();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds(VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT * 6L);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var samples =
+        ByteBuffer.wrap(decodedAudio(uploads.contentOf(List.of("init.mp4", segmentName(12)))))
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .asShortBuffer();
+    assertThat(
+            IntStream.range(0, samples.limit() / 2)
+                .map(frame -> Math.abs(samples.get(2 * frame) - samples.get(2 * frame + 1)))
+                .max()
+                .orElseThrow())
+        .as("the widest difference between segment 12's left and right samples")
+        .isGreaterThan(1_000);
+  }
+
   // The source's last frame starts at 5.983 s, inside segment 0, but FFmpeg's conversion to 24 fps
   // can place the output's last frame at 6 s, inside segment 1.
   @Test
@@ -8230,6 +8261,56 @@ class WorkerMediaSmokeTest {
       var audio = seekableSources.resolve("audio-that-changes-layout.ac3");
       Files.write(audio, Files.readAllBytes(stereo));
       Files.write(audio, Files.readAllBytes(surround), StandardOpenOption.APPEND);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-i",
+              audio.toString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "copy"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source whose video ends before its audio, with AC-3 audio that plays 440 Hz in mono until
+  // 70 s and then 440 Hz on the left and 880 Hz on the right.
+  private static synchronized Path videoEndsBeforeAudioThatTurnsFromMonoToStereoSource()
+      throws Exception {
+    var source = seekableSources.resolve("video-ends-before-audio-that-turns-stereo.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var mono = seekableSources.resolve("mono-before-the-turn.ac3");
+      runFfmpeg(List.of("-f", "lavfi", "-i", "sine=f=440:r=48000:d=70", "-c:a", "ac3"), mono);
+      var stereo = seekableSources.resolve("stereo-after-the-turn.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=440:r=48000:d=14",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=880:r=48000:d=14",
+              "-filter_complex",
+              "[0][1]join=inputs=2:channel_layout=stereo",
+              "-c:a",
+              "ac3"),
+          stereo);
+      var audio = seekableSources.resolve("audio-that-turns-stereo.ac3");
+      Files.write(audio, Files.readAllBytes(mono));
+      Files.write(audio, Files.readAllBytes(stereo), StandardOpenOption.APPEND);
       runFfmpeg(
           List.of(
               "-f",

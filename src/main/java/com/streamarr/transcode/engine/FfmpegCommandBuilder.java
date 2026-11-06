@@ -511,13 +511,16 @@ public class FfmpegCommandBuilder {
   // maps of its two outputs. The video's filters and the audio's, which may be a graph of their own
   // whose one unlabelled input and output these labels name, leave the output's options for the
   // graphs. FFmpeg rebuilds a whole filter graph when the frames of one of its inputs change
-  // format,
-  // and a rebuilt tpad has no picture left to hold once the video has ended. The audio's filters
-  // therefore run in a graph of their own, whose output keeps its first format through a rebuild,
-  // so the graph that holds the picture is never rebuilt for the audio.
+  // format, and a rebuilt tpad has no picture left to hold once the video has ended. The audio's
+  // filters therefore run in a graph of their own, whose output keeps its first format through a
+  // rebuild, so the graph that holds the picture is never rebuilt for the audio. That output takes
+  // the output's channels, which it would otherwise take from the first frames.
   private static void addOneFilterGraphOfBothInputs(List<String> cmd, TranscodeDecision decision) {
     var video = takeOptionValue(cmd, "-vf").orElseThrow();
-    var audio = takeOptionValue(cmd, "-af").orElse("anull");
+    var audio =
+        takeOptionValue(cmd, "-af").orElse("anull")
+            + ",aformat=channel_layouts="
+            + outputChannels(cmd);
     cmd.addAll(
         List.of(
             "-filter_complex",
@@ -544,6 +547,22 @@ public class FfmpegCommandBuilder {
             HELD_AUDIO_LABEL));
   }
 
+  // A named layout's -ch_layout, or -ac's count of channels in no named layout.
+  private static String outputChannels(List<String> cmd) {
+    return optionValue(cmd, "-ch_layout")
+        .or(() -> optionValue(cmd, "-ac").map(count -> count + "c"))
+        .orElseThrow();
+  }
+
+  private static Optional<String> optionValue(List<String> cmd, String option) {
+    var index = cmd.indexOf(option);
+    if (index < 0) {
+      return Optional.empty();
+    }
+
+    return Optional.of(cmd.get(index + 1));
+  }
+
   // A Matroska demuxer that discards the video after a seek drops every audio block until one
   // passes the seek's cue, laced frames that reach past the first segment's start among them. The
   // held encode's audio input keeps its video in use, as the one input did, through a copy to
@@ -551,10 +570,7 @@ public class FfmpegCommandBuilder {
   private static void addAudioInputsVideoInUse(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(
         List.of(
-            "-map",
-            HELD_AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(),
-            "-c",
-            "copy"));
+            "-map", HELD_AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(), "-c", "copy"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "null", "-"));
   }

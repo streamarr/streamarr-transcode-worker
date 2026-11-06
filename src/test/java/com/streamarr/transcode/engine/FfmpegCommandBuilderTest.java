@@ -14,6 +14,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
@@ -708,6 +709,8 @@ class FfmpegCommandBuilderTest {
 
   // A held encode that encodes its audio filters the source's video from its first input, and the
   // audio from its second in a filter graph of its own whose output the video's graph takes in.
+  private static final Pattern HELD_AUDIO_CHANNELS =
+      Pattern.compile(",aformat=channel_layouts=[^,\\[]+\\[filtered_held_audio]$");
   private static final String HELD_VIDEO_GRAPH_OUTPUTS =
       "[held_video];[filtered_held_audio]anull[held_audio]";
 
@@ -720,13 +723,14 @@ class FfmpegCommandBuilderTest {
     return video.substring("[0:0]".length(), video.length() - HELD_VIDEO_GRAPH_OUTPUTS.length());
   }
 
+  // The audio's filters, without the format that keeps the output's channels across the graphs.
   private static String heldAudioFilter(List<String> cmd) {
     var audio = heldAudioGraph(cmd);
     assertThat(audio)
-        .as("the held audio's input and output")
+        .as("the held audio's input, channels and output")
         .startsWith("[1:a:0]")
-        .endsWith("[filtered_held_audio]");
-    return audio.substring("[1:a:0]".length(), audio.length() - "[filtered_held_audio]".length());
+        .containsPattern(HELD_AUDIO_CHANNELS);
+    return audio.substring("[1:a:0]".length()).replaceFirst(HELD_AUDIO_CHANNELS.pattern(), "");
   }
 
   private static String heldAudioGraph(List<String> cmd) {
@@ -3680,12 +3684,15 @@ class FfmpegCommandBuilderTest {
   }
 
   // An attempt from the start that neither pads nor names its layout filters no audio; the graphs
-  // still carry it, so that the audio paces the held pictures.
+  // still carry it, so that the audio paces the held pictures. The first graph's output keeps the
+  // format of its first frames, so it takes the channel count of -ac: a source that turns from
+  // mono to stereo must not stay mono.
   @Test
   @DisplayName(
-      "Should pass the audio through the filter graphs unchanged when an encode from the start holds"
-          + " the last frame and neither pads nor names the audio's layout")
-  void shouldPassTheAudioThroughTheGraphsUnchangedWhenAHoldingEncodeFiltersNoAudio() {
+      "Should keep the output's channel count as the audio enters the held video's graph when an"
+          + " encode from the start holds the last frame and neither pads nor names the audio's"
+          + " layout")
+  void shouldKeepTheOutputsChannelCountAsTheAudioEntersTheHeldVideosGraphWhenItFiltersNoAudio() {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
             .videoDecision(
@@ -3696,7 +3703,8 @@ class FfmpegCommandBuilderTest {
             request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
             "libx264");
 
-    assertThat(heldAudioFilter(cmd)).isEqualTo("anull");
+    assertThat(heldAudioGraph(cmd))
+        .isEqualTo("[1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]");
   }
 
   // A Matroska demuxer that discards the video after a seek drops every audio block until one

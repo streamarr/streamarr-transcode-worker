@@ -21,6 +21,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("FFmpeg Command Builder Audio Layout Tests")
 class FfmpegCommandBuilderAudioLayoutTest {
 
+  private static final Pattern HELD_AUDIO_CHANNELS =
+      Pattern.compile(",aformat=channel_layouts=[^,\\[]+\\[filtered_held_audio]$");
+
   private static final String TUNED_RESAMPLER =
       "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14";
 
@@ -764,6 +767,21 @@ class FfmpegCommandBuilderAudioLayoutTest {
                   + "'");
     }
 
+    @ParameterizedTest(name = "{0} in {1}")
+    @CsvSource({"aac, stereo", "eac3, 5.1"})
+    @DisplayName(
+        "Should keep the named layout as the audio enters the held video's graph when an encode"
+            + " holds the last frame and names its layout")
+    void shouldKeepTheNamedLayoutAsTheAudioEntersTheHeldVideosGraphWhenAnEncodeHolds(
+        String codec, String layout) {
+      var held = VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build();
+
+      var cmd = encodeCommand(encode(codec, layout), held);
+
+      assertThat(heldAudioGraph(cmd))
+          .endsWith(",aformat=channel_layouts=" + layout + "[filtered_held_audio]");
+    }
+
     private List<String> encodeCommand(AudioDecision audio, VideoDecision video) {
       var decision =
           TranscodeDecision.builder()
@@ -917,11 +935,15 @@ class FfmpegCommandBuilderAudioLayoutTest {
   }
 
   // A held encode filters its audio from its second input, in a filter graph of its own that comes
-  // before its video's.
+  // before its video's and ends in the format that keeps the output's channels.
   private static String heldAudioFilter(List<String> cmd) {
+    var graph = heldAudioGraph(cmd);
+    assertThat(graph).startsWith("[1:a:0]").containsPattern(HELD_AUDIO_CHANNELS);
+    return graph.substring("[1:a:0]".length()).replaceFirst(HELD_AUDIO_CHANNELS.pattern(), "");
+  }
+
+  private static String heldAudioGraph(List<String> cmd) {
     assertThat(cmd).doesNotContain("-af");
-    var graph = cmd.get(cmd.indexOf("-filter_complex") + 1);
-    assertThat(graph).startsWith("[1:a:0]").endsWith("[filtered_held_audio]");
-    return graph.substring("[1:a:0]".length(), graph.length() - "[filtered_held_audio]".length());
+    return cmd.get(cmd.indexOf("-filter_complex") + 1);
   }
 }
