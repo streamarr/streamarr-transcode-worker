@@ -274,9 +274,10 @@ public final class FfprobeExecutor {
           new FrameRateRule(streamIndex -> packetTimings(attempt.source(), streamIndex))
               .choose(chosen.get());
       result =
-          result.toBuilder()
-              .setMedia(result.getMedia().toBuilder().setFrameRateRule(frameRate))
-              .build();
+          MaximumFrameRate.withDeclaredRate(
+              result.toBuilder()
+                  .setMedia(result.getMedia().toBuilder().setFrameRateRule(frameRate))
+                  .build());
     }
 
     var probed =

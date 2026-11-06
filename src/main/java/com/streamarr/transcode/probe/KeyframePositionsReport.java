@@ -65,7 +65,12 @@ record KeyframePositionsReport(
             .setSource(source)
             .setKeyframeCount(zeroBased.size());
     var result =
-        withKeyframes(probed.result(), ProbeKeyframes.newBuilder().setPositions(positions));
+        MaximumFrameRate.withMeasuredRate(
+            withKeyframes(probed.result(), ProbeKeyframes.newBuilder().setPositions(positions)),
+            measured.stream()
+                .filter(stream -> stream.streamIndex() == streamIndex)
+                .findFirst()
+                .flatMap(TrackMeasurement::maximumFrameRate));
     if (!isReportable(measured, zeroBased.size())) {
       return ProbeAttemptReport.builder()
           .keyframePositionsParts(parts(probed.result(), zeroBased))

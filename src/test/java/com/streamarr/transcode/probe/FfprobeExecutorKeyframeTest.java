@@ -22,6 +22,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
+import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
@@ -33,14 +34,17 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
+import com.streamarr.transcode.probe.SyntheticMp4.DurationRun;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -1363,6 +1367,121 @@ class FfprobeExecutorKeyframeTest {
     var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
 
     assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
+  @Nested
+  @DisplayName("Maximum Frame Rate Tests")
+  class MaximumFrameRateTests {
+
+    /** Declared rates that agree on nothing, so the frame-rate rule takes no constant rate. */
+    private static final String UNAGREED_RATES =
+        "\"r_frame_rate\":\"50/1\",\"avg_frame_rate\":\"30/1\"";
+
+    @Test
+    @DisplayName(
+        "Should report the rate of the fastest second when an MP4 at 25 fps holds a second at 50"
+            + " fps")
+    void shouldReportTheRateOfTheFastestSecondWhenAnMp4At25FpsHoldsASecondAt50Fps(
+        @TempDir Path directory) throws Exception {
+      var intervals =
+          IntStream.concat(IntStream.concat(repeated(40, 50), repeated(20, 50)), repeated(40, 25))
+              .toArray();
+
+      var video = probedVideo(directory, UNAGREED_RATES, intervals);
+
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(50, 1));
+    }
+
+    @Test
+    @DisplayName(
+        "Should report 60 fps when 1 ms sample times of a 60 fps stream alternate between 16 and"
+            + " 17 ms")
+    void shouldReport60FpsWhen1MsSampleTimesOfA60FpsStreamAlternateBetween16And17Ms(
+        @TempDir Path directory) throws Exception {
+      // A single 16 ms interval alone would give 62.5 fps.
+      var intervals = IntStream.range(0, 120).map(frame -> frame % 3 == 0 ? 16 : 17).toArray();
+
+      var video = probedVideo(directory, UNAGREED_RATES, intervals);
+
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(60, 1));
+    }
+
+    @Test
+    @DisplayName(
+        "Should keep the declared base rate when 1 ms sample times of a constant-rate stream"
+            + " round it to another rate")
+    void shouldKeepTheDeclaredBaseRateWhen1MsSampleTimesOfAConstantRateStreamRoundIt(
+        @TempDir Path directory) throws Exception {
+      // Sample times of 29.97 fps rounded to 1 ms: 24 intervals span 800 or 801 ms, and 800 ms
+      // alone would give exactly 30 fps.
+      var intervals =
+          IntStream.range(0, 120)
+              .map(frame -> Math.round((frame + 1) * 1001 / 30f) - Math.round(frame * 1001 / 30f))
+              .toArray();
+
+      var video =
+          probedVideo(
+              directory,
+              "\"r_frame_rate\":\"30000/1001\",\"avg_frame_rate\":\"30000/1001\"",
+              intervals);
+
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(30_000, 1001));
+    }
+
+    @Test
+    @DisplayName("Should report no maximum for a second video track that the probe does not choose")
+    void shouldReportNoMaximumForASecondVideoTrackThatTheProbeDoesNotChoose(@TempDir Path directory)
+        throws Exception {
+      var ffprobe = twoTrackFfprobe("{\"index\":1,\"codec_type\":\"video\",\"id\":\"0x2\"}");
+
+      var media = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest()).result();
+
+      assertThat(media.getMedia().getStreamsList())
+          .filteredOn(stream -> stream.getIndex() == 1)
+          .singleElement()
+          .satisfies(stream -> assertThat(stream.hasMaximumFrameRate()).isFalse());
+    }
+
+    private static IntStream repeated(int interval, int count) {
+      return IntStream.generate(() -> interval).limit(count);
+    }
+
+    /**
+     * Probes an MP4 whose single video track holds one keyframe sample per interval in 1 ms ticks,
+     * and one more, with these declared rates, and returns its video stream.
+     */
+    private static ProbeStreamInfo probedVideo(
+        Path directory, String declaredRates, int[] intervals) throws IOException {
+      var mp4 = SyntheticMp4.builder().mediaTimescale(1_000);
+      Arrays.stream(intervals).forEach(interval -> mp4.durationRun(new DurationRun(1, interval)));
+      mp4.durationRun(new DurationRun(1, 40));
+      var source = Files.write(directory.resolve("source.mp4"), mp4.build().bytes());
+      var lastTime = Arrays.stream(intervals).sum();
+      var ffprobe =
+          ScriptedFfprobe.builder()
+              .streams(
+                  """
+                  {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+                   "streams":[{"index":0,"codec_type":"video","id":"0x1",%s}]}
+                  """
+                      .formatted(declaredRates))
+              .packet(
+                  BigDecimal.valueOf(lastTime, 3).setScale(6) + "%+#1",
+                  "{\"packets\":[{\"pts\":%d,\"dts\":%d,\"flags\":\"K__\"}]}"
+                      .formatted(lastTime, lastTime))
+              .build();
+
+      var media = ffprobe.executor().probe(source, keyframeRequest()).result().getMedia();
+
+      assertThat(media.getKeyframes().hasPositions())
+          .as("keyframes from the sample table")
+          .isTrue();
+      return media.getStreams(0);
+    }
+
+    private static Fraction fraction(int numerator, int denominator) {
+      return Fraction.newBuilder().setNumerator(numerator).setDenominator(denominator).build();
+    }
   }
 
   @Nested
