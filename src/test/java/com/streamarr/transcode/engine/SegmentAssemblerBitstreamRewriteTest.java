@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.HevcCopies.PREFIX_SEI;
 import static com.streamarr.transcode.engine.HevcCopies.SUFFIX_SEI;
+import static com.streamarr.transcode.engine.HevcCopies.TRAIL_R;
 import static com.streamarr.transcode.engine.HevcCopies.aud;
 import static com.streamarr.transcode.engine.HevcCopies.enhancementLayer;
 import static com.streamarr.transcode.engine.HevcCopies.fragmentBuilder;
@@ -735,6 +736,36 @@ class SegmentAssemblerBitstreamRewriteTest {
     assertThat(hexOf(movie, movie.audioTrack())).isNotEmpty().containsOnly(hex(AUDIO_SAMPLE));
   }
 
+  // The room a growing copy keeps beyond its last sample must not count as media data against the
+  // segment cap: a fragment just under the cap whose RPUs grow by a few bytes still fits.
+  @Test
+  @DisplayName(
+      "Should deliver the segment when a converted RPU grows a fragment that sits just under the"
+          + " cap")
+  void shouldDeliverTheSegmentWhenAConvertedRpuGrowsAFragmentThatSitsJustUnderTheCap()
+      throws IOException {
+    var source = SyntheticRpus.profile7().previousRpu(0).nalUnit();
+    var converted = SyntheticRpus.nalUnit(SyntheticRpus.convertedPreviousRpu());
+    var picture = nalUnit(TRAIL_R, new byte[56_000]);
+    var fragment =
+        fragmentBuilder()
+            .startsWithKeyframe(true)
+            .video(0, sample(aud(), slice(0), picture, source))
+            .build();
+    assertThat((long) fragment.length + converted.length - source.length)
+        .isLessThan(SMALL_SEGMENT_CAP);
+    var initialization = bytesOfInitializationSegment(HEVC_SEGMENT);
+    var output = Mp4Stream.read(Mp4Stream.readerOf(concat(initialization, fragment)));
+    var assembler = assemblerFor(profile7ConversionCopy(), SMALL_SEGMENT_CAP);
+    var closed = new ArrayList<>(assembler.accept(output.initializationSegment()).closedSegments());
+
+    closed.addAll(assembler.accept(output.fragments().getFirst()).closedSegments());
+    closed.addAll(assembler.finish());
+
+    assertThat(videoSamplesOf(initialization, closed))
+        .containsExactly(hex(sample(aud(), slice(0), picture, converted)));
+  }
+
   @Test
   @DisplayName(
       "Should refuse a fragment as over the cap when its rewritten samples would take more media"
@@ -751,15 +782,7 @@ class SegmentAssemblerBitstreamRewriteTest {
     var output =
         Mp4Stream.read(
             Mp4Stream.readerOf(concat(bytesOfInitializationSegment(HEVC_SEGMENT), fragment)));
-    var assembler =
-        SegmentAssembler.builder()
-            .intervals(SegmentIntervals.onPlainGrid(1))
-            .startSequenceNumber(0)
-            .maximumSegmentBytes(SMALL_SEGMENT_CAP)
-            .encodedFrameRate(Optional.empty())
-            .videoDecision(profile7ConversionCopy())
-            .paddedAudioEnd(Optional.empty())
-            .build();
+    var assembler = assemblerFor(profile7ConversionCopy(), SMALL_SEGMENT_CAP);
     assembler.accept(output.initializationSegment());
     var read = output.fragments().getFirst();
 
@@ -990,10 +1013,14 @@ class SegmentAssemblerBitstreamRewriteTest {
   }
 
   private static SegmentAssembler assemblerFor(VideoDecision decision) {
+    return assemblerFor(decision, Mp4Stream.SEGMENT_CAP);
+  }
+
+  private static SegmentAssembler assemblerFor(VideoDecision decision, long maximumSegmentBytes) {
     return SegmentAssembler.builder()
         .intervals(SegmentIntervals.onPlainGrid(1))
         .startSequenceNumber(0)
-        .maximumSegmentBytes(Mp4Stream.SEGMENT_CAP)
+        .maximumSegmentBytes(maximumSegmentBytes)
         .encodedFrameRate(Optional.empty())
         .videoDecision(decision)
         .paddedAudioEnd(Optional.empty())

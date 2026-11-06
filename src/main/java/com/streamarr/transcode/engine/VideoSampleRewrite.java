@@ -140,7 +140,7 @@ final class VideoSampleRewrite {
     }
 
     return Fragment.builder()
-        .boxes(withMediaDataBox(fragment.boxes(), target))
+        .boxes(withMediaDataBox(fragment.boxes(), trimmed(target, mdat, write)))
         .tracks(fragment.tracks())
         .videoSamples(video)
         .audioSamples(audio)
@@ -179,8 +179,9 @@ final class VideoSampleRewrite {
   // own, and ends before the next sample's bytes, which are still to move. A sample that grows past
   // its own end would overwrite them, so from the first such sample on, the samples move into a
   // copy of the array: a quarter longer than the array it replaces, or as long as the sample needs,
-  // and never longer than the segment cap. A copy sized by one sample's growth times the remaining
-  // samples, audio included, ran to hundreds of megabytes for a fragment of three.
+  // and never longer than the segment cap; the copy is trimmed to its samples at the end. A copy
+  // sized by one sample's growth times the remaining samples, audio included, ran to hundreds of
+  // megabytes for a fragment of three.
   private byte[] withRoomAt(byte[] target, byte[] mdat, int write, int length, Sample sample) {
     var end = (long) write + length;
     if (target == mdat && end <= sample.mediaDataPosition() + sample.size()) {
@@ -202,6 +203,16 @@ final class VideoSampleRewrite {
 
     var room = Math.max(end, target.length + (long) target.length / GROWTH_DIVISOR);
     return Arrays.copyOf(target, (int) Math.min(room, maximumMediaDataBytes));
+  }
+
+  // A copy's room beyond its last sample would count as media data against the segment cap, so the
+  // copy ends where its samples do; the fragment's own array keeps the length the reader admitted.
+  private static byte[] trimmed(byte[] target, byte[] mdat, int end) {
+    if (target == mdat || target.length == end) {
+      return target;
+    }
+
+    return Arrays.copyOf(target, end);
   }
 
   private static List<byte[]> withMediaDataBox(List<byte[]> boxes, byte[] mediaDataBox) {
