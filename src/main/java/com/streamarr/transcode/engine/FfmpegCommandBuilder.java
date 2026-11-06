@@ -860,10 +860,12 @@ public class FfmpegCommandBuilder {
   // follows the conversion to that rate. Each shift is a whole number of ticks, so that the two
   // cancel. The whole frames reach back to where the demuxer has delivered audio: the seek's
   // target, when a seek without the server's keyframe position lands on a keyframe at or before it,
-  // or a second after the server's keyframe position, and no more than one segment period. Every
-  // frame from the first segment's start on then starts where the attempt that encodes from the
-  // start writes one, give or take less than a frame, and with no gap. The expressions are quoted,
-  // as a FLAC frame's holds commas. Empty for an encoder whose frames the worker does not know.
+  // or a second after the server's keyframe position, and no more than one segment period. The
+  // lead and the whole frames together fit in that reach, so an exact seek that discards the audio
+  // before its target leaves the encoder its lead. Every frame from the first segment's start on
+  // then starts where the attempt that encodes from the start writes one, give or take less than a
+  // frame, and with no gap. The expressions are quoted, as a FLAC frame's holds commas. Empty for
+  // an encoder whose frames the worker does not know.
   private static Optional<String> frameAlignedShift(
       Optional<AudioFrames> frames, TranscodeRequest request) {
     var seconds = seekArgument(audioReach(request));
@@ -872,15 +874,22 @@ public class FfmpegCommandBuilder {
         encoderFrames ->
             "round(("
                 + encoderFrames.lead()
-                + "+floor("
-                + seconds
-                + "*SR/("
-                + encoderFrames.samples()
-                + "))*("
+                + "+"
+                + wholeFramesWithin(seconds, encoderFrames)
+                + "*("
                 + encoderFrames.samples()
                 + ")"
                 + toTheTrim
                 + ")/SR/TB)");
+  }
+
+  // An encoder without a lead keeps the expression that the recordings pin.
+  private static String wholeFramesWithin(String seconds, AudioFrames frames) {
+    if (frames.lead().equals("0")) {
+      return "floor(" + seconds + "*SR/(" + frames.samples() + "))";
+    }
+
+    return "max(0,floor((" + seconds + "*SR-(" + frames.lead() + "))/(" + frames.samples() + ")))";
   }
 
   // atrim rounds a start in seconds to the nearest sample, which for an exact start between two

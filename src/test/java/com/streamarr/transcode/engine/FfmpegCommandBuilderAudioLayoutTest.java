@@ -727,7 +727,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
 
     // A replacement from segment 10 starts at 60 s and seeks one 6 s period earlier, so the
-    // encoder's input starts the whole frames that fit in 6 s before 60 s, less their priming.
+    // encoder's input starts its lead plus the whole frames that fit with it in 6 s before 60 s.
     @ParameterizedTest(name = "{0} {1}")
     @CsvSource(
         delimiter = ';',
@@ -748,14 +748,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = encodeCommand(audio, held);
 
-      var shift =
-          "round(("
-              + lead
-              + "+floor(6*SR/("
-              + samplesPerFrame
-              + "))*("
-              + samplesPerFrame
-              + "))/SR/TB)";
+      var wholeFrames = "floor(6*SR/(" + samplesPerFrame + "))";
+      if (!lead.equals("0")) {
+        wholeFrames = "max(0,floor((6*SR-(" + lead + "))/(" + samplesPerFrame + ")))";
+      }
+
+      var shift = "round((" + lead + "+" + wholeFrames + "*(" + samplesPerFrame + "))/SR/TB)";
       assertThat(audioFilter(cmd))
           .isEqualTo(
               audioFilter(command(audio, source("dts", "5.1(side)")))

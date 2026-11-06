@@ -7567,14 +7567,23 @@ class WorkerMediaSmokeTest {
   // A replacement attempt that copies the video seeks to its first segment's keyframe, whose exact
   // start lies between two samples of the 48 kHz audio. Its encoded audio must open on the first
   // sample at or after that start, where the start attempt's audio reaches, so the junction has no
-  // gap. AC-3, E-AC-3 and Opus encoders need samples before that start for their lead.
-  @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"aac", "ac3", "eac3", "libopus"})
+  // gap. AC-3, E-AC-3 and Opus encoders need samples before that start for their lead, with or
+  // without the server's keyframe position.
+  @ParameterizedTest(name = "{0}, server position {1}")
+  @CsvSource({
+    "aac, true",
+    "ac3, true",
+    "eac3, true",
+    "libopus, true",
+    "ac3, false",
+    "eac3, false",
+    "libopus, false"
+  })
   @DisplayName(
       "Should open a copy's encoded audio on the first sample at or after each segment's exact"
           + " start when a replacement attempt copies the video and encodes the audio")
   void shouldOpenACopysEncodedAudioOnTheFirstSampleAtOrAfterEachExactStartWhenAReplacementStarts(
-      String codec) throws Exception {
+      String codec, boolean sendsTheServersPosition) throws Exception {
     var source = exactStartMpegTsSourceWithAudio();
     var starts = exactStarts(source);
     var startAttempt =
@@ -7586,14 +7595,16 @@ class WorkerMediaSmokeTest {
     for (var number = 1; number < starts.size(); number++) {
       var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
       var replacementJob = copyEncodingAudioJob(source, starts, codec);
-      replacementJob
-          .getExecutionBuilder()
-          .setStartSequenceNumber(number)
-          .setSeekPositionSeconds(Math.toIntExact(new BigFraction(1, 1).ticksIn(start)));
-      setSeekPosition(
-          replacementJob.getExecutionBuilder(),
-          new BigDecimal(starts.get(number))
-              .divide(BigDecimal.valueOf(MPEG_TS_TICKS_PER_SECOND), 9, RoundingMode.CEILING));
+      replacementJob.getExecutionBuilder().setStartSequenceNumber(number);
+      if (sendsTheServersPosition) {
+        replacementJob
+            .getExecutionBuilder()
+            .setSeekPositionSeconds(Math.toIntExact(new BigFraction(1, 1).ticksIn(start)));
+        setSeekPosition(
+            replacementJob.getExecutionBuilder(),
+            new BigDecimal(starts.get(number))
+                .divide(BigDecimal.valueOf(MPEG_TS_TICKS_PER_SECOND), 9, RoundingMode.CEILING));
+      }
 
       var replacement =
           execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());

@@ -1566,22 +1566,31 @@ class FfmpegCommandBuilderTest {
     }
   }
 
+  // The encoder's lead and its whole frames fit together in the 6 s that the attempt reads before
+  // the first segment's start, so an exact seek that discards the audio before its target still
+  // leaves the encoder its lead.
   @ParameterizedTest(name = "{0}")
   @MethodSource("audioEncoders")
   @DisplayName(
-      "Should start the encoder's input a whole number of frames, less its priming, before the"
-          + " first segment's start, from its seek, when an encoded replacement attempt without the"
-          + " server's keyframe position encodes its audio")
+      "Should start the encoder's input its lead plus the whole frames that fit with it in one"
+          + " period before the first segment's start when an encoded replacement attempt without"
+          + " the server's keyframe position encodes its audio")
   void shouldStartAnEncodedAudioFrameOnTheFirstSegmentsStartWhenAnEncodedReplacementAttemptSeeks(
       AudioEncoderCase encoder) {
     var cmd = command(encodedAudioFromSegment5(encoder.codec()), "libx264");
 
+    var wholeFrames = "floor(6*SR/(" + encoder.samplesPerFrame() + "))";
+    if (!encoder.lead().equals("0")) {
+      wholeFrames =
+          "max(0,floor((6*SR-(" + encoder.lead() + "))/(" + encoder.samplesPerFrame() + ")))";
+    }
+
     var shift =
         "round(("
             + encoder.lead()
-            + "+floor(6*SR/("
-            + encoder.samplesPerFrame()
-            + "))*("
+            + "+"
+            + wholeFrames
+            + "*("
             + encoder.samplesPerFrame()
             + "))/SR/TB)";
     assertThat(cmd)
