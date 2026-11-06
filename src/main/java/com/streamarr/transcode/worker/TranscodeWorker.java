@@ -324,6 +324,11 @@ public final class TranscodeWorker implements AutoCloseable {
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
   private void startVariant(StartVariantCommand command) {
     var job = command.getJob();
+    if (!isRunnableHere(command)) {
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      return;
+    }
+
     if (WorkerVariantJobMapper.namesAudioLayout(job)
         || WorkerVariantJobMapper.holdsTheLastFrameFromASeek(job)) {
       startReading(command);
@@ -505,11 +510,6 @@ public final class TranscodeWorker implements AutoCloseable {
   private synchronized AttemptStart startAttempt(
       StartVariantCommand command, ChosenAudio chosenAudio, Optional<Duration> readPosition) {
     var job = command.getJob();
-    if (!isRunnableHere(command)) {
-      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
-      return new Refused();
-    }
-
     // Only active attempts hold a slot: the server freed a stopped attempt's slot when it sent the
     // stop, and the worker's memory budget charges its producer until it has released its segments.
     if (activeAttempts.size() >= configuration.availableSlots()) {

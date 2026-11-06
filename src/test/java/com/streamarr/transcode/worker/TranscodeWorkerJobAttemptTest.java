@@ -35,6 +35,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
+import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.FieldOrder;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -43,6 +44,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
 import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
+import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeDecision;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
@@ -2335,6 +2337,41 @@ class TranscodeWorkerJobAttemptTest {
           .atMost(EVENT_LIMIT)
           .untilAsserted(
               () -> assertThat(keyframePacketScanCapacitiesSentTo(nextSession)).containsExactly(1));
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"worker", "boot"})
+  @DisplayName(
+      "Should refuse a held encode as an invalid specification, before any search or capacity"
+          + " change, when its start names another worker or boot")
+  void shouldRefuseAHeldEncodeBeforeAnySearchWhenItsStartNamesAnotherWorkerOrBoot(String other)
+      throws Exception {
+    var source =
+        new ScriptedKeyframeSource(ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
+    var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
+    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      var target = connection.registration().getWorker().toBuilder();
+      if (other.equals("worker")) {
+        target.setWorkerId(toProto(UUID.randomUUID()));
+      } else {
+        target.setBootId(toProto(UUID.randomUUID()));
+      }
+
+      connection.deliver(
+          EstablishWorkerSessionResponse.newBuilder()
+              .setStartVariant(StartVariantCommand.newBuilder().setTarget(target).setJob(job))
+              .build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunched(fromProto(job.getJobAttemptId()))).isFalse();
+      assertThat(keyframePacketScanCapacitiesSentTo(connection)).isEmpty();
     }
   }
 
