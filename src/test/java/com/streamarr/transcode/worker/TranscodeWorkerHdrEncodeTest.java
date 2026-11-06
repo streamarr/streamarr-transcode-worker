@@ -44,7 +44,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
@@ -200,17 +200,16 @@ class TranscodeWorkerHdrEncodeTest {
     assertThat(valueOf(command, "-vf")).contains("format=yuv420p,");
   }
 
-  // swscale converts a full-range source only when told to, and the filters then describe every
-  // frame as limited range, so a full-range source's levels would play clipped.
+  // swscale converts a source only into the colour it is told to, and the filters then describe
+  // every frame as limited-range BT.2020, so a full-range source's levels would play clipped and a
+  // BT.709 matrix or other primaries would play with wrong colours.
   @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = CompatibleBase.class,
-      names = {"COMPATIBLE_BASE_PQ", "COMPATIBLE_BASE_HLG"})
+  @CsvSource({"COMPATIBLE_BASE_PQ, smpte2084", "COMPATIBLE_BASE_HLG, arib-std-b67"})
   @DisplayName(
-      "Should scale the source into limited range before describing its frames as limited when an"
-          + " HDR source keeps its transfer")
-  void shouldScaleTheSourceIntoLimitedRangeWhenAnHdrSourceKeepsItsTransfer(CompatibleBase base)
-      throws Exception {
+      "Should scale the source into limited-range BT.2020 with its own transfer before describing"
+          + " its frames that way when an HDR source keeps its transfer")
+  void shouldScaleTheSourceIntoLimitedRangeBt2020WhenAnHdrSourceKeepsItsTransfer(
+      CompatibleBase base, String transfer) throws Exception {
     var job =
         base == CompatibleBase.COMPATIBLE_BASE_PQ
             ? hdr10Encode(hevcMain10(), base)
@@ -218,7 +217,12 @@ class TranscodeWorkerHdrEncodeTest {
 
     var command = commandOf(job);
 
-    assertThat(valueOf(command, "-vf")).containsPattern("scale=-2:\\d+:out_range=tv,");
+    assertThat(valueOf(command, "-vf"))
+        .containsPattern(
+            "scale=-2:\\d+:out_color_matrix=bt2020nc:out_range=tv:out_primaries=bt2020"
+                + ":out_transfer="
+                + transfer
+                + ",");
   }
 
   @ParameterizedTest(name = "{0}")

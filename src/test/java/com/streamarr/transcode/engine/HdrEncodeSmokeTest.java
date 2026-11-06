@@ -2,10 +2,13 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.assertj.core.api.Assertions.within;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import java.io.IOException;
 import java.net.URISyntaxException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -66,6 +69,7 @@ class HdrEncodeSmokeTest {
   private static Path hlg;
   private static Path sdr10;
   private static Path fullRangeHdr10;
+  private static Path bt709MatrixHdr10;
 
   @BeforeAll
   static void writeTheSources() throws Exception {
@@ -82,6 +86,11 @@ class HdrEncodeSmokeTest {
             "full-range-hdr10",
             List.of("-vf", "lutyuv=y=maxval,format=yuv420p10le", "-color_range", "pc"),
             "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:range=full");
+    bt709MatrixHdr10 =
+        encoded(
+            "bt709-matrix-hdr10",
+            List.of("-vf", "drawbox=c=0xC02060:t=fill,format=yuv420p10le"),
+            "colorprim=bt2020:transfer=smpte2084:colormatrix=bt709");
   }
 
   @Test
@@ -226,6 +235,30 @@ class HdrEncodeSmokeTest {
         encoded(fullRangeHdr10, hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ)).build(), 0);
 
     assertThat(peakLuma(delivered.acceptedBytes())).isBetween(900, 950);
+  }
+
+  // The source's samples follow the BT.709 matrix. Labelled BT.2020 without a conversion, its
+  // magenta decodes with a green component about 30 code values lower (out of 1023).
+  @Test
+  @DisplayName(
+      "Should deliver the source's colours when a PQ source with a BT.709 matrix encodes to PQ")
+  void shouldDeliverTheSourcesColoursWhenAPqSourceWithABt709MatrixEncodesToPq() throws Exception {
+    var source = centreRgb(Files.readAllBytes(bt709MatrixHdr10));
+
+    var delivered =
+        centreRgb(
+            encoded(
+                    bt709MatrixHdr10,
+                    hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ)).build(),
+                    0)
+                .acceptedBytes());
+
+    assertThat(delivered).hasSameSizeAs(source);
+    for (var component = 0; component < source.length; component++) {
+      assertThat(delivered[component])
+          .as("component %d", component)
+          .isCloseTo(source[component], within(4));
+    }
   }
 
   @Test
@@ -460,6 +493,40 @@ class HdrEncodeSmokeTest {
             "-of",
             "default=nw=1",
             media.toString()));
+  }
+
+  // The G, B and R planes of the first frame's centre 2x2 pixels, decoded to 10-bit RGB from the
+  // colour description that the stream declares.
+  private static int[] centreRgb(byte[] media) throws Exception {
+    var file = Files.createTempFile(root, "colour", ".mp4");
+    Files.write(file, media);
+    var process =
+        new ProcessBuilder(
+                "ffmpeg",
+                "-hide_banner",
+                "-v",
+                "error",
+                "-i",
+                file.toString(),
+                "-frames:v",
+                "1",
+                "-vf",
+                "crop=2:2:32:18,format=gbrp10le",
+                "-f",
+                "rawvideo",
+                "-")
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start();
+    var samples = process.getInputStream().readAllBytes();
+    assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+    assertThat(process.exitValue()).isZero();
+    var buffer = ByteBuffer.wrap(samples).order(ByteOrder.LITTLE_ENDIAN);
+    var rgb = new int[samples.length / 2];
+    for (var index = 0; index < rgb.length; index++) {
+      rgb[index] = Short.toUnsignedInt(buffer.getShort());
+    }
+
+    return rgb;
   }
 
   // The largest luma sample of any decoded frame, in the stream's bit depth. The metadata key is

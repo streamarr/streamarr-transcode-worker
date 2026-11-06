@@ -973,13 +973,15 @@ public class FfmpegCommandBuilder {
     var request = job.request();
     // Every variant takes the job's picture format: an encoder otherwise keeps a 10-bit or 4:4:4
     // source's format, and few hardware decoders accept 10-bit H.264. An SDR variant that no
-    // filter tone-maps is converted to BT.709. A PQ or HLG variant keeps the source's BT.2020 in
-    // limited range, which the filters then declare on every frame.
+    // filter tone-maps is converted to BT.709. A PQ or HLG variant keeps the source's transfer and
+    // is converted to limited-range BT.2020, which the filters then declare on every frame.
     var colorConversion =
         switch (pictureConversion(job)) {
           case CONVERT_TO_BT709 ->
               ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
-          case KEEP_THE_SOURCES_RANGE -> ":out_range=tv";
+          case KEEP_THE_SOURCES_RANGE ->
+              ":out_color_matrix=bt2020nc:out_range=tv:out_primaries=bt2020:out_transfer="
+                  + hdrTransferOf(job).orElseThrow().ffmpegName();
           case TONE_MAP_TO_SDR, RESHAPE_DOLBY_VISION_TO_PQ -> "";
         };
     // The deinterlacer runs first, so that no filter mixes the two fields of a frame. The held
