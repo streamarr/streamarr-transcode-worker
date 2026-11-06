@@ -101,6 +101,7 @@ public final class Producer {
   private long pausedAtNanos;
   private OptionalLong restEndsAtNanos = OptionalLong.empty();
   private boolean deliveredSinceResume = true;
+  private long resumes;
   private List<PausedProcess> pausedProcesses = List.of();
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
@@ -315,6 +316,7 @@ public final class Producer {
     var resumedAt = clock.nanoTime();
     restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
     deliveredSinceResume = false;
+    resumes++;
     pausedProcesses.forEach(PausedProcess::resume);
     pausedProcesses = List.of();
     watchdog.resume();
@@ -820,7 +822,7 @@ public final class Producer {
         return Optional.of(new Decided());
       }
 
-      delivery = new Delivery(segment, deliveryHeldBytes, new DeliveryCancellation());
+      delivery = new Delivery(segment, deliveryHeldBytes, new DeliveryCancellation(), resumes);
       deliveryInFlight = Optional.of(delivery);
       readerHeldBytes -= deliveryHeldBytes;
     }
@@ -864,10 +866,14 @@ public final class Producer {
     long deliveredBytes;
     synchronized (lock) {
       deliveredBytes = deliveryInFlight.map(Delivery::heldBytes).orElse(0L);
+      // A delivery that began before the latest resume may carry a segment stored before the
+      // pause, so only a later one counts as progress since the resume.
+      var beganAfterTheLatestResume =
+          deliveryInFlight.filter(inFlight -> inFlight.resumesAtStart() == resumes).isPresent();
       deliveryInFlight = Optional.empty();
       if (acceptedMediaSegment.isPresent()) {
         lastDeliveredMediaSegment = acceptedMediaSegment;
-        deliveredSinceResume = true;
+        deliveredSinceResume |= beganAfterTheLatestResume;
       }
 
       lock.notifyAll();
@@ -937,7 +943,10 @@ public final class Producer {
    * {@code moof} and {@code mdat} header written for it.
    */
   private record Delivery(
-      ProducedSegment segment, long heldBytes, DeliveryCancellation cancellation) {}
+      ProducedSegment segment,
+      long heldBytes,
+      DeliveryCancellation cancellation,
+      long resumesAtStart) {}
 
   @Builder
   private record Settings(

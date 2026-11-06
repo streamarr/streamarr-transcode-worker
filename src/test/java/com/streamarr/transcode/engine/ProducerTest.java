@@ -1142,7 +1142,7 @@ class ProducerTest {
     var process =
         ScriptedProcess.builder()
             .output(bytesOf(ENCODED_RECORDING))
-            .pauseAfter(insideThirdMediaSegment(recording))
+            .pauseAfter(insideMediaSegment(recording, 3))
             .build();
     var clock = new SteppedClock();
     sink.holding(1);
@@ -1169,6 +1169,40 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should leave FFmpeg running when the worker pauses it again after only a delivery that began"
+          + " before its resume")
+  void
+      shouldLeaveFfmpegRunningWhenTheWorkerPausesItAgainAfterOnlyADeliveryThatBeganBeforeItsResume() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideMediaSegment(recording, 3))
+            .build();
+    var clock = new SteppedClock();
+    sink.holding(2);
+    var producer = producerFor(process, recording).clock(clock).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(5));
+
+    sink.release();
+
+    awaiting().until(() -> sink.returnedNames().size() == 3);
+    await()
+        .during(Duration.ofMillis(300))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.pauseFfmpeg() && !process.isPausedBySignal());
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
       "Should leave FFmpeg running when the worker pauses it again before it has run for as long as"
           + " it was paused, and pause it once it has")
   void shouldLeaveFfmpegRunningWhenTheWorkerPausesItAgainBeforeItHasRunForAsLongAsItWasPaused() {
@@ -1176,7 +1210,7 @@ class ProducerTest {
     var process =
         ScriptedProcess.builder()
             .output(bytesOf(ENCODED_RECORDING))
-            .pauseAfter(insideFourthMediaSegment(recording))
+            .pauseAfter(insideMediaSegment(recording, 4))
             .build();
     var clock = new SteppedClock();
     sink.holding(1);
@@ -1186,8 +1220,9 @@ class ProducerTest {
     clock.advance(Duration.ofSeconds(5));
     producer.resumeFfmpeg();
     sink.release();
-    // The sink starts the second media segment only after the producer took the first one back.
-    awaiting().until(() -> sink.startedNames().size() == 3);
+    // The sink starts the third media segment only after the producer took the second one back,
+    // the first that began after the resume.
+    awaiting().until(() -> sink.startedNames().size() == 4);
     clock.advance(Duration.ofSeconds(4));
 
     var pausedWithinItsRest = producer.pauseFfmpeg();
@@ -4310,8 +4345,9 @@ class ProducerTest {
     return offsetOfMediaSegment(recording, 2) + 10;
   }
 
-  private static int insideFourthMediaSegment(Recording recording) {
-    return offsetOfMediaSegment(recording, 3) + 10;
+  // Ten bytes into the media segment at this position, so the segment before it has closed.
+  private static int insideMediaSegment(Recording recording, int position) {
+    return offsetOfMediaSegment(recording, position) + 10;
   }
 
   // Where the media segment at this position starts in a recording without preroll.
