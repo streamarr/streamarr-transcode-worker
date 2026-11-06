@@ -61,6 +61,24 @@ class HardwareEncoderFaultTest {
         .contains(HardwareEncoderFault.SESSION_REFUSED);
   }
 
+  // FFmpeg tries each GPU in turn: one can refuse the session while the next opens it and fails.
+  @Test
+  @DisplayName(
+      "Should read a failed encoder when one GPU refuses the session and the next GPU's encoder"
+          + " fails")
+  void shouldReadAFailedEncoderWhenOneGpuRefusesTheSessionAndTheNextGpusEncoderFails() {
+    var errorOutput =
+        """
+        [h264_nvenc @ 0x55e904799fc0] OpenEncodeSessionEx failed: incompatible client key (21): \
+        (no details)
+        [h264_nvenc @ 0x55e904799fc0] InitializeEncoder failed: device does not exist (5)
+        [h264_nvenc @ 0x55e904799fc0] No capable devices found
+        Conversion failed!""";
+
+    assertThat(HardwareEncoderFault.of(H264_NVENC, exitedWith(errorOutput)))
+        .contains(HardwareEncoderFault.FAILED);
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {

@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.util.Optional;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import lombok.NonNull;
 
 /**
@@ -22,6 +23,7 @@ public enum HardwareEncoderFault {
   private static final Pattern SESSION_REFUSAL =
       Pattern.compile(
           "OpenEncodeSessionEx failed: (?:out of memory \\(10\\)|incompatible client key \\(21\\))");
+  private static final Pattern NO_CAPABLE_DEVICE = Pattern.compile("No capable devices found");
   private static final Pattern NVENC_ERROR =
       Pattern.compile(
           "\\[\\w+_nvenc @ [^\\]]*\\][^\\n]*(?:failed|error)|CUDA_ERROR_\\w+|No capable devices found|cu\\w+ failed",
@@ -40,14 +42,29 @@ public enum HardwareEncoderFault {
       return Optional.empty();
     }
 
+    if (NVENC_ERROR.matcher(withoutSessionRefusals(detail)).find()) {
+      return Optional.of(FAILED);
+    }
+
     if (SESSION_REFUSAL.matcher(detail).find()) {
       return Optional.of(SESSION_REFUSED);
     }
 
-    if (NVENC_ERROR.matcher(detail).find()) {
-      return Optional.of(FAILED);
+    return Optional.empty();
+  }
+
+  // FFmpeg tries each GPU in turn and, once none opened a session, adds "No capable devices
+  // found". Neither line means that an encoder failed, but any other NVENC or CUDA error does, even
+  // after another GPU refused its session.
+  private static String withoutSessionRefusals(String detail) {
+    if (!SESSION_REFUSAL.matcher(detail).find()) {
+      return detail;
     }
 
-    return Optional.empty();
+    return detail
+        .lines()
+        .filter(line -> !SESSION_REFUSAL.matcher(line).find())
+        .filter(line -> !NO_CAPABLE_DEVICE.matcher(line).find())
+        .collect(Collectors.joining("\n"));
   }
 }
