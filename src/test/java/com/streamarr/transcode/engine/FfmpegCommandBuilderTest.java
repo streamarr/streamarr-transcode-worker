@@ -3490,9 +3490,9 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should pad the audio from the stream copy's seek position when a stream copy session pads"
-          + " its encoded audio")
-  void shouldPadTheAudioFromTheSeekPositionWhenAStreamCopySessionPadsItsEncodedAudio() {
+      "Should trim and pad the encoded audio from the first segment's start when a stream copy"
+          + " session pads its encoded audio")
+  void shouldTrimAndPadTheEncodedAudioFromTheFirstSegmentsStartWhenAStreamCopySessionPadsIt() {
     var cmd =
         command(
             heldAndPadded(TranscodeMode.AUDIO_TRANSCODE)
@@ -3506,7 +3506,9 @@ class FfmpegCommandBuilderTest {
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "apad,asetpts='if(isnan(PTS),29.5/TB+N/SR/TB,PTS)',atrim=start=29.5:end=67")
+                + "asetpts='PTS+round((0+floor(0*SR/(1024))*(1024))/SR/TB)',apad,"
+                + "asetpts='if(isnan(PTS),30/TB+N/SR/TB,PTS)',atrim=start=30,"
+                + "asetpts='PTS-round((0+floor(0*SR/(1024))*(1024))/SR/TB)',atrim=end=67")
         .doesNotContain("-noaccurate_seek", "-vf");
   }
 

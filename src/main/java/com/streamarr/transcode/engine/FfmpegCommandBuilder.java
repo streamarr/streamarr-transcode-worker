@@ -528,7 +528,17 @@ public class FfmpegCommandBuilder {
   }
 
   private static Optional<Duration> firstSegmentStartOfAnEncode(TranscodeRequest request) {
-    if (!encodesVideo(request) || request.startSequenceNumber() == 0) {
+    if (!encodesVideo(request)) {
+      return Optional.empty();
+    }
+
+    return firstSegmentStartOfALaterAttempt(request);
+  }
+
+  // Where an attempt from a later segment, which encodes its audio whether it encodes or copies
+  // its video, opens that audio: its first segment's start. Empty for an attempt from segment 0.
+  private static Optional<Duration> firstSegmentStartOfALaterAttempt(TranscodeRequest request) {
+    if (request.startSequenceNumber() == 0) {
       return Optional.empty();
     }
 
@@ -767,7 +777,7 @@ public class FfmpegCommandBuilder {
     var frames = framesOf(audio.codec());
     var timing = timingFilter(audio, request, frames);
     var shifts =
-        firstSegmentStartOfAnEncode(request)
+        firstSegmentStartOfALaterAttempt(request)
             .flatMap(_ -> frameAlignedShift(frames, request))
             .isPresent();
     if (!audio.padsWithSilenceToAdvertisedEnd() && !shifts) {
@@ -781,16 +791,16 @@ public class FfmpegCommandBuilder {
   // When the attempt reads no source sample, FFmpeg sets the filters up with the stream's own
   // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
   // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
-  // the padding. An attempt that encodes video from a later segment trims its encoded audio
-  // itself, as its seek no longer does. The padding ends after the shift back, on the attempt's own
-  // times. In a named layout's encode these filters follow its own: its resampler and limiter meet
+  // the padding. An attempt from a later segment trims its encoded audio itself, as its seek no
+  // longer does. The padding ends after the shift back, on the attempt's own times. In a named
+  // layout's encode these filters follow its own: its resampler and limiter meet
   // the end of the source instead of silence, its dither never reaches the silence, and no
   // conversion replaces its layout with FFmpeg's default for the channel count.
   private static Optional<String> timingFilter(
       AudioDecision audio, TranscodeRequest request, Optional<AudioFrames> frames) {
     var trimStart = audioTrimStart(frames, request);
     var shift =
-        firstSegmentStartOfAnEncode(request).flatMap(_ -> frameAlignedShift(frames, request));
+        firstSegmentStartOfALaterAttempt(request).flatMap(_ -> frameAlignedShift(frames, request));
     var start =
         shift
             .map(_ -> alignedTrimSeconds(request))
@@ -814,12 +824,12 @@ public class FfmpegCommandBuilder {
     return trimStart.map(_ -> shiftForward + "atrim=start=" + start + shiftBack);
   }
 
-  // Where an attempt that encodes video from a later segment trims its encoded audio: at the first
-  // segment's start, between the shifts that align the encoder's frames on it, or, for an encoder
-  // whose frames the worker does not know, where the audio's reach back from that start ends.
+  // Where an attempt from a later segment trims its encoded audio: at the first segment's start,
+  // between the shifts that align the encoder's frames on it, or, for an encoder whose frames the
+  // worker does not know, where the audio's reach back from that start ends.
   private static Optional<Duration> audioTrimStart(
       Optional<AudioFrames> frames, TranscodeRequest request) {
-    var firstSegmentStart = firstSegmentStartOfAnEncode(request);
+    var firstSegmentStart = firstSegmentStartOfALaterAttempt(request);
     if (frames.isPresent()) {
       return firstSegmentStart;
     }
@@ -908,7 +918,7 @@ public class FfmpegCommandBuilder {
   // encodes its video from its seek, and its audio reaches back as far, so that the mp4 muxer holds
   // back no pictures until the audio's first packet.
   private static Duration audioReach(TranscodeRequest request) {
-    var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
+    var firstSegmentStart = firstSegmentStartOfALaterAttempt(request).orElseThrow();
     var reach = firstSegmentStart.minus(inputSeekPosition(request));
     if (request.seekPosition().isPresent()) {
       reach = reach.minus(AUDIO_AFTER_THE_KEYFRAME);

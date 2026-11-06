@@ -7564,6 +7564,68 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  // A replacement attempt that copies the video seeks to its first segment's keyframe, whose exact
+  // start lies between two samples of the 48 kHz audio. Its encoded audio must open on the first
+  // sample at or after that start, where the start attempt's audio reaches, so the junction has no
+  // gap.
+  @Test
+  @DisplayName(
+      "Should open a copy's encoded audio on the first sample at or after each segment's exact"
+          + " start when a replacement attempt copies the video and encodes the audio")
+  void shouldOpenACopysEncodedAudioOnTheFirstSampleAtOrAfterEachExactStartWhenAReplacementStarts()
+      throws Exception {
+    var source = exactStartMpegTsSourceWithAudio();
+    var starts = exactStarts(source);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            copyEncodingAudioJob(source, starts).build());
+
+    for (var number = 1; number < starts.size(); number++) {
+      var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
+      var replacementJob = copyEncodingAudioJob(source, starts);
+      replacementJob
+          .getExecutionBuilder()
+          .setStartSequenceNumber(number)
+          .setSeekPositionSeconds(Math.toIntExact(new BigFraction(1, 1).ticksIn(start)));
+      setSeekPosition(
+          replacementJob.getExecutionBuilder(),
+          new BigDecimal(starts.get(number))
+              .divide(BigDecimal.valueOf(MPEG_TS_TICKS_PER_SECOND), 9, RoundingMode.CEILING));
+
+      var replacement =
+          execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+      var replaced =
+          Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(number))));
+      var sample = new BigFraction(1, replaced.audioTrack().timescale());
+      var firstSampleAtOrAfterTheStart = sample.ticksIn(start.ceilingIn(sample));
+      assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
+          .as("segment %d's audio opens on the first sample at or after its exact start", number)
+          .isEqualTo(firstSampleAtOrAfterTheStart);
+      var before =
+          Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(number - 1))));
+      var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
+      assertThat(lastAudioBefore.end())
+          .as("segment %d's audio in the start attempt reaches the replacement's", number - 1)
+          .isGreaterThanOrEqualTo(firstSampleAtOrAfterTheStart)
+          .isLessThan(firstSampleAtOrAfterTheStart + lastAudioBefore.duration());
+    }
+  }
+
+  // A copy of the source's video on its exact starts that encodes its audio as stereo AAC.
+  private static VariantJob.Builder copyEncodingAudioJob(Path source, List<Long> starts) {
+    var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE, starts);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000);
+    return job;
+  }
+
   // Segment 0's audio may start before zero with the AAC priming frame; the last segment's audio
   // runs to the end of the media.
   private static void assertAudioStartsInsideItsExactInterval(
