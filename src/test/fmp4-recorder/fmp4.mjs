@@ -519,6 +519,44 @@ function hvcCWithoutSei(data, body, stop) {
   ]);
 }
 
+export const OBU_SEQUENCE_HEADER = 1;
+
+/** A LEB128 value and its byte count; an AV1 size field holds at most 8 bytes. */
+function leb128(data, at, end) {
+  let value = 0;
+  for (let index = 0; index < 8 && at + index < end; index++) {
+    const byte = data[at + index];
+    value += (byte & 0x7f) * 2 ** (7 * index);
+    if ((byte & 0x80) === 0) {
+      return [value, index + 1];
+    }
+  }
+  throw new Mp4FormatError(`an OBU size at ${at} does not end inside its sample`);
+}
+
+/** Each OBU of one AV1 sample, in order: its type and where its payload lies. */
+export function obusOf(data, sample) {
+  const obus = [];
+  const end = sample.offset + sample.size;
+  let position = sample.offset;
+  while (position < end) {
+    const header = data[position];
+    let payload = position + 1 + ((header >> 2) & 1);
+    let size = end - payload;
+    if ((header >> 1) & 1) {
+      const [value, bytes] = leb128(data, payload, end);
+      payload += bytes;
+      size = value;
+    }
+    if (size > end - payload) {
+      throw new Mp4FormatError(`an OBU at ${position} runs past its sample`);
+    }
+    obus.push({ type: (header >> 3) & 0xf, payload, size });
+    position = payload + size;
+  }
+  return obus;
+}
+
 export function readFiles(paths) {
   return readStream(Buffer.concat(paths.map((path) => readFileSync(path))));
 }
