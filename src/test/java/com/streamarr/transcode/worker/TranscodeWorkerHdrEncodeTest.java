@@ -303,6 +303,22 @@ class TranscodeWorkerHdrEncodeTest {
                     .setMasteringDisplay(P3_D65_DISPLAY)
                     .setContentLightLevel(CONTENT_LIGHT_LEVEL)),
         forbidden(
+            "PQ from an SDR source",
+            hdr10Encode(av1Main(), pq),
+            video -> video.setSourceDynamicRange(range(sdr))),
+        forbidden(
+            "PQ from an HLG source",
+            hdr10Encode(hevcMain10(), pq),
+            video -> video.setSourceDynamicRange(range(hlg))),
+        forbidden(
+            "HLG from a PQ source",
+            tenBitEncode(hevcMain10(), hlg),
+            video -> video.setSourceDynamicRange(range(pq))),
+        forbidden(
+            "HLG from a Dolby Vision profile 5 source",
+            tenBitEncode(hevcMain10(), hlg),
+            video -> video.setSourceDynamicRange(profile5())),
+        forbidden(
             "PQ with HDR10+",
             hdr10Encode(av1Main(), pq),
             video ->

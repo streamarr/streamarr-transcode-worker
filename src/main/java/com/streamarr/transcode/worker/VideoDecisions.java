@@ -131,7 +131,9 @@ final class VideoDecisions {
           "An encode requires source and output dynamic range");
     }
 
+    var sourceDynamicRange = VideoDynamicRanges.of(video.getSourceDynamicRange());
     var outputDynamicRange = encodedRange(VideoDynamicRanges.of(video.getOutputDynamicRange()));
+    requireTransferTheEncodeCanWrite(sourceDynamicRange, outputDynamicRange);
     var pictureFormat = EncodedPictureFormats.of(video, outputDynamicRange);
     var staticHdrMetadata = PlannedCopies.staticHdrMetadataOf(video);
     var outputsPq = outputDynamicRange.compatibleBase() == CompatibleBase.PQ;
@@ -164,7 +166,7 @@ final class VideoDecisions {
         .tier(tier)
         .level(video.getLevel())
         .codecString(video.getCodecString())
-        .sourceDynamicRange(VideoDynamicRanges.of(video.getSourceDynamicRange()))
+        .sourceDynamicRange(sourceDynamicRange)
         .outputDynamicRange(outputDynamicRange)
         .sourcePacketsCarryPresentationTimes(video.getSourcePacketsCarryPresentationTimes())
         .deinterlace(deinterlace(video))
@@ -186,6 +188,27 @@ final class VideoDecisions {
 
     throw new InvalidJobSpecificationException(
         "An encode writes SDR, PQ or HLG without HDR10+ or Dolby Vision, not " + range);
+  }
+
+  // An HDR encode keeps the source's transfer, or reshapes Dolby Vision without a compatible base
+  // into PQ; no filter converts between PQ and HLG, or from SDR into HDR.
+  private static void requireTransferTheEncodeCanWrite(
+      VideoDynamicRange source, VideoDynamicRange output) {
+    var sourceBase = source.compatibleBase();
+    var writable =
+        switch (output.compatibleBase()) {
+          case PQ -> sourceBase == CompatibleBase.PQ || sourceBase == CompatibleBase.NONE;
+          case HLG -> sourceBase == CompatibleBase.HLG;
+          case UNSPECIFIED, NONE, SDR -> true;
+        };
+    if (!writable) {
+      throw new InvalidJobSpecificationException(
+          "An encode cannot write "
+              + output.compatibleBase()
+              + " from a "
+              + sourceBase
+              + " source");
+    }
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
