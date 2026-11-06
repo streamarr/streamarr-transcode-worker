@@ -15,22 +15,22 @@ VMAF difference from libx264 at `faster`:
 
 | Rung | Source | libx264 | `h264_nvenc` | `hevc_nvenc` |
 | --- | --- | --- | --- | --- |
-| 1080p | Sintel trailer | 81.96 | +0.01 | +0.68 |
-| 1080p | Driving POV | 61.08 | +2.56 | +3.86 |
-| 1080p | Roller Coaster | 60.23 | +3.35 | +4.43 |
-| 1080p | Bar Scene | 86.76 | +0.98 | +1.09 |
-| 720p | Sintel trailer | 74.84 | +0.47 | +0.65 |
-| 720p | Driving POV | 57.50 | +1.76 | +2.88 |
-| 720p | Roller Coaster | 58.23 | +2.68 | +3.82 |
-| 720p | Bar Scene | 85.39 | +0.98 | +1.07 |
-| 480p | Sintel trailer | 67.68 | +0.38 | +0.63 |
-| 480p | Driving POV | 47.24 | +1.55 | +2.94 |
-| 480p | Roller Coaster | 50.48 | +2.52 | +3.84 |
-| 480p | Bar Scene | 80.64 | +0.86 | +1.21 |
-| 360p | Sintel trailer | 58.37 | +0.09 | +0.63 |
-| 360p | Driving POV | 35.41 | +1.54 | +2.90 |
-| 360p | Roller Coaster | 39.52 | +2.69 | +4.16 |
-| 360p | Bar Scene | 73.54 | +0.91 | +1.31 |
+| 1080p | Sintel trailer | 93.72 | +0.15 | +0.84 |
+| 1080p | Driving POV | 89.58 | +4.00 | +5.82 |
+| 1080p | Roller Coaster | 92.47 | +5.06 | +6.51 |
+| 1080p | Bar Scene | 94.37 | +1.23 | +1.37 |
+| 720p | Sintel trailer | 86.13 | +0.62 | +0.85 |
+| 720p | Driving POV | 84.80 | +2.56 | +4.12 |
+| 720p | Roller Coaster | 89.41 | +4.49 | +6.10 |
+| 720p | Bar Scene | 92.66 | +1.30 | +1.41 |
+| 480p | Sintel trailer | 77.89 | +0.49 | +0.81 |
+| 480p | Driving POV | 69.65 | +2.40 | +4.45 |
+| 480p | Roller Coaster | 77.85 | +3.97 | +5.95 |
+| 480p | Bar Scene | 87.17 | +1.11 | +1.56 |
+| 360p | Sintel trailer | 67.12 | +0.21 | +0.89 |
+| 360p | Driving POV | 52.79 | +2.29 | +4.28 |
+| 360p | Roller Coaster | 61.72 | +4.07 | +6.29 |
+| 360p | Bar Scene | 78.95 | +1.31 | +1.84 |
 
 Both encoders get the same `-b:v`, `-maxrate` and `-bufsize`, but NVENC fills more of the bitrate
 on easy content. On the Sintel trailer at 1080p, `h264_nvenc` delivered 4.0 Mb/s where libx264
@@ -39,8 +39,8 @@ ladder's bitrate on average, inside what their two-second rate-control buffer al
 4.6 % for libx264, 4.8 % for `h264_nvenc` and 6.1 % for `hevc_nvenc`, all at 360p on the Roller
 Coaster clip.
 
-A second run of the Bar Scene gave the same NVENC sizes and scores. libx264's scores moved by at
-most 0.04, because its threaded rate control varies from run to run.
+A second full run wrote NVENC encodes of exactly the same sizes. libx264's sizes moved by up to
+1.2 %, because its threaded rate control varies from run to run.
 
 ## Method
 
@@ -51,7 +51,12 @@ most 0.04, because its threaded rate control varies from run to run.
   `-bf 3 -rc-lookahead 20`, the extended GOP and the forced keyframes. The script writes the first
   output to a file instead of the pipe and drops the framecrc output.
 - **Score:** VMAF `vmaf_v0.6.1`, the pooled mean over every frame. Each encode is upscaled with
-  bicubic to 1920x1080 and compared with the prepared source.
+  bicubic to 1920x1080 and compared with the prepared source frame by frame. Both streams are
+  restamped by frame index first: the intermediate's container rounds frame times to milliseconds,
+  while the worker's MP4 keeps the exact frame grid, so VMAF's frame sync would otherwise pair a
+  third of the frames with the reference picture before them. Before scoring a source, the script
+  checks that a lossless MP4 of it matches the intermediate on every frame (PSNR infinite), and it
+  checks every encode's frame count.
 - **Levels:** the server's H.264 levels per rung. A 30 fps source at 480p takes level 3.1,
   because 854x480 at 30 fps is past level 3.0's macroblock rate. NVENC refuses level 3.0 there,
   while libx264 writes it anyway.

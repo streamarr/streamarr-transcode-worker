@@ -3,7 +3,10 @@
 # (streamarr/streamarr-transcode-worker#56). Each encode runs the worker's own FFmpeg command,
 # which PrintWorkerCommand prints from FfmpegCommandBuilder, at each default-ladder rung's bitrate.
 # Encodes run on the pinned FFmpeg; VMAF (vmaf_v0.6.1) runs on an FFmpeg built with libvmaf. Each
-# encode is upscaled with bicubic to 1920x1080 and scored against the prepared 1080p source.
+# encode is upscaled with bicubic to 1920x1080 and scored against the prepared 1080p source, frame
+# by frame: both streams are restamped by frame index first, because the intermediate's container
+# rounds frame times to milliseconds while the worker's MP4 keeps the exact frame grid, and VMAF's
+# frame sync would otherwise pair a third of the frames with the reference picture before them.
 #
 # Needs an NVIDIA GPU host and, in WORK_DIR/sources, the open-license sources that
 # src/test/resources/nvenc/vmaf/README.md lists. Run from the repository root after
@@ -22,20 +25,58 @@ CP="pwc:$REPOSITORY/target/classes:$REPOSITORY/target/test-classes:$(cat "$REPOS
 RESULTS=ladder.tsv
 printf 'source\tencoder\trung\tbitrateFactor\tladderBitrate\tdeliveredBitrate\tvmafMean\tencodeSeconds\n' > "$RESULTS.tmp"
 
-# Each source becomes an FFV1 intermediate at 1920x1080, 8-bit 4:2:0, at 24 or 30 fps.
+rate_of() { case $1 in sintel) echo "24 1" ;; *) echo "30 1" ;; esac; }
+seconds_of() { case $1 in sintel) echo 52 ;; *) echo 20 ;; esac; }
+frames_of() { case $1 in sintel) echo 1253 ;; *) echo 600 ;; esac; }
+
+frame_count() {
+  "$VMAF_FFMPEG" -hide_banner -nostdin -loglevel error -i "$1" -map 0:v:0 -f framecrc - | grep -c -v '^#'
+}
+
+# Each source becomes an FFV1 intermediate at 1920x1080, 8-bit 4:2:0, at 24 or 30 fps. A cached
+# intermediate is reused only when it still decodes to every frame of the source.
 prepare() {
   local name=$1 src=$2 filter=$3
-  [[ -s prepared/$name.mkv ]] && return
+  if [[ -s prepared/$name.mkv && $(frame_count "prepared/$name.mkv") == "$(frames_of "$name")" ]]; then
+    return
+  fi
   "$PINNED" -hide_banner -nostdin -loglevel error -y -i "sources/$src" -an -vf "$filter" \
-    -c:v ffv1 -level 3 -g 1 "prepared/$name.mkv"
+    -c:v ffv1 -level 3 -g 1 "prepared/$name.partial.mkv"
+  local frames
+  frames=$(frame_count "prepared/$name.partial.mkv")
+  if [[ $frames != "$(frames_of "$name")" ]]; then
+    echo "prepared $name has $frames frames, not $(frames_of "$name")" >&2
+    exit 1
+  fi
+  mv "prepared/$name.partial.mkv" "prepared/$name.mkv"
+}
+
+# frame_aligned <input label> <rate num> <rate den>: restamps a stream by frame index on the
+# source's frame grid.
+frame_aligned() {
+  printf '[%s]settb=expr=%s/%s,setpts=N' "$1" "$3" "$2"
+}
+
+# A lossless encode in an MP4, scored with the same frame alignment, must match the intermediate on
+# every frame; otherwise the scores below would compare different pictures.
+check_alignment() {
+  local name=$1 num den
+  read -r num den <<<"$(rate_of "$name")"
+  "$PINNED" -hide_banner -nostdin -loglevel error -y -i "prepared/$name.mkv" -an -c:v libx264 -qp 0 \
+    -bf 0 "out/$name-lossless.mp4"
+  local psnr
+  psnr=$("$VMAF_FFMPEG" -hide_banner -nostdin -i "out/$name-lossless.mp4" -i "prepared/$name.mkv" -lavfi \
+    "$(frame_aligned 0:v "$num" "$den")[d];$(frame_aligned 1:v "$num" "$den")[r];[d][r]psnr" -f null - 2>&1 |
+    grep -o 'average:[^ ]*')
+  if [[ $psnr != average:inf ]]; then
+    echo "frame alignment check failed for $name: PSNR $psnr" >&2
+    exit 1
+  fi
 }
 prepare sintel sintel_trailer_2k_1080p24.y4m "format=yuv420p"
 prepare driving Netflix_DrivingPOV_4096x2160_60fps_10bit_420.webm "crop=3840:2160,scale=1920:1080:flags=lanczos,fps=30,format=yuv420p"
 prepare rollercoaster Netflix_RollerCoaster_4096x2160_60fps_10bit_420.webm "crop=3840:2160,scale=1920:1080:flags=lanczos,fps=30,format=yuv420p"
 prepare bar Netflix_BarScene_4096x2160_60fps_10bit_420.webm "crop=3840:2160,scale=1920:1080:flags=lanczos,fps=30,format=yuv420p"
-
-rate_of() { case $1 in sintel) echo "24 1" ;; *) echo "30 1" ;; esac; }
-seconds_of() { case $1 in sintel) echo 52 ;; *) echo 20 ;; esac; }
 
 # rung height bitrate h264-level hevc-level
 LADDER="1080p 1080 5000000 40 40
@@ -65,10 +106,15 @@ encode_and_score() {
   start=$(date +%s.%N)
   "$PINNED" -hide_banner -nostdin -loglevel error "${args[@]}"
   end=$(date +%s.%N)
-  local size
+  local size frames
   size=$(stat -c %s "$out.mp4")
+  frames=$(frame_count "$out.mp4")
+  if [[ $frames != "$(frames_of "$src")" ]]; then
+    echo "$out.mp4 has $frames frames, not $(frames_of "$src")" >&2
+    exit 1
+  fi
   "$VMAF_FFMPEG" -hide_banner -nostdin -loglevel error -i "$out.mp4" -i "prepared/$src.mkv" -lavfi \
-    "[0:v]setpts=PTS-STARTPTS,scale=1920:1080:flags=bicubic,format=yuv420p[d];[1:v]setpts=PTS-STARTPTS[r];[d][r]libvmaf=model=version=vmaf_v0.6.1:n_threads=24:log_fmt=json:log_path=$out.vmaf.json" \
+    "$(frame_aligned 0:v "$num" "$den"),scale=1920:1080:flags=bicubic,format=yuv420p[d];$(frame_aligned 1:v "$num" "$den")[r];[d][r]libvmaf=model=version=vmaf_v0.6.1:n_threads=24:log_fmt=json:log_path=$out.vmaf.json" \
     -f null -
   local vmaf
   vmaf=$(python3 -c "import json,sys;d=json.load(open('$out.vmaf.json'));print(round(d['pooled_metrics']['vmaf']['mean'],3))")
@@ -77,6 +123,7 @@ encode_and_score() {
 }
 
 for src in ${SOURCES:-sintel driving rollercoaster bar}; do
+  check_alignment "$src"
   while read -r rung height bitrate h264level hevclevel; do
     encode_and_score "$src" libx264 "$rung" "$height" "$bitrate" "$h264level" x1.00
     encode_and_score "$src" h264_nvenc "$rung" "$height" "$bitrate" "$h264level" x1.00
