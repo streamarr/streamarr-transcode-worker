@@ -46,7 +46,7 @@ fi
 rm -rf "${layer}/env.launch"
 
 version_output="$("${layer}/bin/ffmpeg" -version 2>&1)"
-expected_runtime_version="${version%-*}-Jellyfin"
+expected_runtime_version="$(ffmpeg_lock_banner_version "${version}")"
 version_line="$(grep -F "ffmpeg version ${expected_runtime_version} " <<<"${version_output}" || true)"
 version_line="${version_line%%$'\n'*}"
 if [[ "${version_line}" != "ffmpeg version ${expected_runtime_version} "* ]]; then

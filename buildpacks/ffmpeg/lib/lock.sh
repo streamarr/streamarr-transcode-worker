@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# The repository whose numbered releases the lock pins.
+ffmpeg_source_repository=jellyfin/jellyfin-ffmpeg
+
 ffmpeg_lock_keys=(
   release
   version
@@ -10,6 +13,21 @@ ffmpeg_lock_keys=(
   arm64_asset
   arm64_sha256
 )
+
+# Succeeds when the argument is an exact release tag of the repository the lock pins.
+ffmpeg_lock_is_release() {
+  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]
+}
+
+# Names the portable archive of a release version for an upstream target and variant.
+ffmpeg_lock_asset() {
+  printf 'jellyfin-ffmpeg_%s_portable_%s-%s.tar.xz' "$1" "$2" "$3"
+}
+
+# Prints the version that FFmpeg's banner reports for a release version.
+ffmpeg_lock_banner_version() {
+  printf '%s-Jellyfin' "${1%-*}"
+}
 
 ffmpeg_lock_value() {
   local lock_file="$1"
@@ -67,7 +85,7 @@ ffmpeg_lock_validate() {
   arm64_asset="$(ffmpeg_lock_value "${lock_file}" arm64_asset)"
   arm64_sha256="$(ffmpeg_lock_value "${lock_file}" arm64_sha256)"
 
-  if [[ ! "${release}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]; then
+  if ! ffmpeg_lock_is_release "${release}"; then
     echo "FFmpeg lock release is not an exact Jellyfin release tag" >&2
     return 1
   fi
@@ -80,8 +98,8 @@ ffmpeg_lock_validate() {
     return 1
   fi
   if [[ "${asset_variant}" != gpl \
-    || "${amd64_asset}" != "jellyfin-ffmpeg_${version}_portable_linux64-${asset_variant}.tar.xz" \
-    || "${arm64_asset}" != "jellyfin-ffmpeg_${version}_portable_linuxarm64-${asset_variant}.tar.xz" ]]; then
+    || "${amd64_asset}" != "$(ffmpeg_lock_asset "${version}" linux64 "${asset_variant}")" \
+    || "${arm64_asset}" != "$(ffmpeg_lock_asset "${version}" linuxarm64 "${asset_variant}")" ]]; then
     echo "FFmpeg lock asset contradicts version and variant" >&2
     return 1
   fi

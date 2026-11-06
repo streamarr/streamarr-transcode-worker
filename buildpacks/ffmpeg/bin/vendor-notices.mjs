@@ -14,8 +14,10 @@ const root = path.resolve(
 );
 const httpLibrary = fileURLToPath(new URL("../lib/http.sh", import.meta.url));
 const run = promisify(execFile);
-const FFMPEG_RAW = "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg";
-const FFMPEG_API = "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg";
+// The repository whose numbered releases the lock pins.
+const SOURCE_REPOSITORY = "jellyfin/jellyfin-ffmpeg";
+const FFMPEG_RAW = `https://raw.githubusercontent.com/${SOURCE_REPOSITORY}`;
+const FFMPEG_API = `https://api.github.com/repos/${SOURCE_REPOSITORY}`;
 const INDEX = "Component source index\n======================\n\n";
 const RECIPE = /^builder\/scripts\.d\/[^;]+\.sh$/;
 const DEPENDENCY_FILE = /^([a-z0-9-]+)\/DEPS$/;

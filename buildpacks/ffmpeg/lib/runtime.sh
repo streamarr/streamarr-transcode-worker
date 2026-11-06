@@ -33,7 +33,7 @@ ffmpeg_runtime_extract() (
     --retry 3 \
     --silent \
     --show-error \
-    "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/${runtime_release}/${runtime_asset}" \
+    "https://github.com/${ffmpeg_source_repository}/releases/download/${runtime_release}/${runtime_asset}" \
     --output "${runtime_archive}"
   printf '%s  %s\n' "${runtime_checksum}" "${runtime_archive}" | ffmpeg_sha256_check --check --strict
 

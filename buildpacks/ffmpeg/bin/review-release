@@ -23,7 +23,7 @@ comparison_file_limit=300
 # gives, so an entry could apply the changelog as a patch or reverse a patch with -R. The rest of
 # this list cannot alter which third-party code the Linux portable binaries link, nor any notice
 # text vendored under notices/. Any path not listed needs a person to review the inventory,
-# except a Jellyfin patch: upstream applies those to the FFmpeg tree before compiling, so what
+# except a patch file of the series: upstream applies those to the FFmpeg tree before compiling, so what
 # each changed patch does to that tree decides.
 paths_outside_inventory=(
   '^\.github/'
@@ -36,7 +36,7 @@ paths_outside_inventory=(
   '^README\.md$'
   '^CONTRIBUTING\.md$'
 )
-jellyfin_patch='^debian/patches/[A-Za-z0-9._+-]+\.patch$'
+series_patch='^debian/patches/[A-Za-z0-9._+-]+\.patch$'
 
 approved=false
 dry_run=false
@@ -99,8 +99,8 @@ path_is_outside_inventory() {
   return 1
 }
 
-path_is_jellyfin_patch() {
-  [[ "$1" =~ ${jellyfin_patch} ]]
+path_is_series_patch() {
+  [[ "$1" =~ ${series_patch} ]]
 }
 
 json_text() {
@@ -129,7 +129,7 @@ examine_change() {
     if path_is_outside_inventory "${path}"; then
       continue
     fi
-    if path_is_jellyfin_patch "${path}"; then
+    if path_is_series_patch "${path}"; then
       changes_patch=true
       continue
     fi
@@ -151,7 +151,7 @@ summarize_patch() {
   local path="$2"
   local summary="$3"
   if ! ffmpeg_github_api_get_raw \
-    "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/contents/${path}?ref=${revision}" \
+    "https://api.github.com/repos/${ffmpeg_source_repository}/contents/${path}?ref=${revision}" \
     "${summary}.patch"; then
     review_reasons+=("${path} could not be fetched at ${revision}")
     return 1
@@ -230,8 +230,8 @@ review_patch_change() {
   local path="$1"
   local previous_path="$2"
   local encoded_status="$3"
-  if ! path_is_jellyfin_patch "${path}" \
-    || { [[ -n "${previous_path}" ]] && ! path_is_jellyfin_patch "${previous_path}"; }; then
+  if ! path_is_series_patch "${path}" \
+    || { [[ -n "${previous_path}" ]] && ! path_is_series_patch "${previous_path}"; }; then
     review_reasons+=("a patch moved between ${previous_path} and ${path}")
     return
   fi
@@ -309,8 +309,8 @@ reviewed_release="$(ffmpeg_lock_value "${manifest}" release)"
 reviewed_revision="$(ffmpeg_lock_value "${manifest}" source_revision)"
 locked_release="$(ffmpeg_lock_value "${lock_file}" release)"
 locked_revision="$(ffmpeg_lock_value "${lock_file}" source_revision)"
-if [[ ! "${reviewed_release}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ \
-  || ! "${reviewed_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+if ! ffmpeg_lock_is_release "${reviewed_release}" \
+  || [[ ! "${reviewed_revision}" =~ ^[0-9a-f]{40}$ ]]; then
   echo "FFmpeg notice manifest does not name an exact release and full source revision" >&2
   exit 1
 fi
@@ -323,7 +323,7 @@ trap 'rm -rf "${temporary_directory}"' EXIT
 comparison="${temporary_directory}/comparison.json"
 # curl's own exit statuses must never be mistaken for the human-review status.
 if ! ffmpeg_github_api_get \
-  "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/${reviewed_revision}...${locked_revision}" \
+  "https://api.github.com/repos/${ffmpeg_source_repository}/compare/${reviewed_revision}...${locked_revision}" \
   "${comparison}"; then
   echo "Unable to compare the reviewed and locked upstream revisions" >&2
   exit 1

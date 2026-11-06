@@ -15,6 +15,8 @@ const { values } = parseArgs({
 });
 if ([values.check, values.compare, values.validate].filter(Boolean).length > 1)
     throw new Error("Choose --check, --compare or --validate");
+// The repository whose numbered releases the lock pins.
+const SOURCE_REPOSITORY = "jellyfin/jellyfin-ffmpeg";
 const root = path.resolve(
     values.root ?? fileURLToPath(new URL("..", import.meta.url)),
 );
@@ -256,7 +258,7 @@ function sbomComponent({ component, arch }) {
         ],
     };
     if (component.id !== "ffmpeg") return result;
-    const purl = `pkg:github/jellyfin/jellyfin-ffmpeg@${lock.release}`;
+    const purl = `pkg:github/${SOURCE_REPOSITORY}@${lock.release}`;
     return {
         ...result,
         type: "application",
@@ -270,7 +272,7 @@ function sbomComponent({ component, arch }) {
             ...result.externalReferences,
             {
                 type: "distribution",
-                url: `https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/${lock.release}/${lock[`${arch}_asset`]}`,
+                url: `https://github.com/${SOURCE_REPOSITORY}/releases/download/${lock.release}/${lock[`${arch}_asset`]}`,
             },
         ],
     };

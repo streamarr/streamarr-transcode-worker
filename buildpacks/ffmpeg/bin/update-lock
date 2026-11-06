@@ -80,7 +80,7 @@ if [[ "${requested_release_set}" == false ]]; then
   fi
   release="${release_lines[0]}"
 fi
-if [[ ! "${release}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]; then
+if ! ffmpeg_lock_is_release "${release}"; then
   echo "Expected an exact Jellyfin release tag, found: ${release}" >&2
   exit 1
 fi
@@ -103,7 +103,7 @@ release_json="${temporary_directory}/release.json"
 commit_json="${temporary_directory}/commit.json"
 
 ffmpeg_github_api_get \
-  "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/releases/tags/${release}" \
+  "https://api.github.com/repos/${ffmpeg_source_repository}/releases/tags/${release}" \
   "${release_json}"
 
 if ! jq -e --arg release "${release}" \
@@ -115,8 +115,8 @@ fi
 
 version="${release#v}"
 asset_variant=gpl
-amd64_asset="jellyfin-ffmpeg_${version}_portable_linux64-${asset_variant}.tar.xz"
-arm64_asset="jellyfin-ffmpeg_${version}_portable_linuxarm64-${asset_variant}.tar.xz"
+amd64_asset="$(ffmpeg_lock_asset "${version}" linux64 "${asset_variant}")"
+arm64_asset="$(ffmpeg_lock_asset "${version}" linuxarm64 "${asset_variant}")"
 
 asset_digest() {
   local name="$1"
@@ -135,7 +135,7 @@ asset_digest() {
 
 amd64_sha256="$(asset_digest "${amd64_asset}")"
 arm64_sha256="$(asset_digest "${arm64_asset}")"
-ffmpeg_github_api_get "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/commits/${release}" "${commit_json}"
+ffmpeg_github_api_get "https://api.github.com/repos/${ffmpeg_source_repository}/commits/${release}" "${commit_json}"
 source_revision="$(jq -r '.sha' "${commit_json}")"
 if [[ ! "${source_revision}" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Expected ${release} to resolve to a full Jellyfin FFmpeg source revision" >&2
