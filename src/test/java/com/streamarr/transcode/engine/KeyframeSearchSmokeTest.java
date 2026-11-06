@@ -14,6 +14,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -76,6 +77,24 @@ class KeyframeSearchSmokeTest {
     assertThat(readPosition)
         .as("where a seek on the attempt's own timeline reads the video's keyframe")
         .isEqualTo(Duration.ofNanos(expectedSeconds.movePointRight(9).longValueExact()));
+  }
+
+  // A raw H.264 stream carries no index and its demuxer cannot seek: a scan from a seek reads no
+  // packet. The attempt for the segment at 24 s reads back from 14 s, so the search reads from 4 s
+  // to 14 s and then from 0 s to 4 s, where it finds the keyframes that decode before 4 s. A seek
+  // to the one that decodes at 1.92 s would read no picture to hold.
+  @Test
+  @DisplayName(
+      "Should read from the start of the timeline when the demuxer of a raw H.264 stream cannot seek"
+          + " to the keyframe that the search finds")
+  void shouldReadFromTheStartOfTheTimelineWhenARawStreamsDemuxerCannotSeekToTheFoundKeyframe()
+      throws Exception {
+    var source = delayedPicturesWithKeyframesUpToTenSeconds("h264", "h264");
+    var request = heldRequest(source, OptionalInt.empty()).toBuilder().startSequenceNumber(12);
+
+    var readPosition = engine().heldPictureReadPosition(request.build(), _ -> {}).orElseThrow();
+
+    assertThat(readPosition).isZero();
   }
 
   // 20 s of H.264 at 128x72 and 4 fps, with one keyframe, starting 2 s after a 440 Hz tone, and an

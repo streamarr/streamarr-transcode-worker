@@ -81,24 +81,29 @@ final class LastKeyframeSearch {
 
   // An MP4 demuxer seeks by presentation time, so a seek to the keyframe's decode time reads from
   // the keyframe before it, a whole GOP earlier. An MPEG-TS seek lands on decode times, so a seek
-  // to the keyframe's presentation time can read past it. The attempt reads from the presentation
-  // time when a seek there lands at or before the keyframe, and from its decode time otherwise.
+  // to the keyframe's presentation time can read past it. A raw H.264 stream's demuxer cannot seek
+  // at all. The attempt reads from the first of the keyframe's presentation and decode times where
+  // a seek lands at or before the keyframe, and from zero when neither does.
   private static Duration readPositionOf(Keyframe keyframe, KeyframeScan scan)
       throws InterruptedException {
-    var presentationTime = keyframe.presentationTime();
-    if (!presentationTime.isPositive()) {
-      return Duration.ZERO;
+    var candidates = List.of(keyframe.presentationTime(), keyframe.decodeTime());
+    for (var candidate : candidates.stream().distinct().toList()) {
+      if (!candidate.isPositive()) {
+        return Duration.ZERO;
+      }
+
+      if (seekLandsAtOrBefore(keyframe, candidate, scan)) {
+        return candidate;
+      }
     }
 
-    var landing = scan.landingDecodeTime(presentationTime);
-    if (landing.isPresent() && landing.get().compareTo(keyframe.decodeTime()) <= 0) {
-      return presentationTime;
-    }
+    return Duration.ZERO;
+  }
 
-    if (keyframe.decodeTime().isNegative()) {
-      return Duration.ZERO;
-    }
-
-    return keyframe.decodeTime();
+  private static boolean seekLandsAtOrBefore(Keyframe keyframe, Duration seek, KeyframeScan scan)
+      throws InterruptedException {
+    return scan.landingDecodeTime(seek)
+        .filter(landing -> landing.compareTo(keyframe.decodeTime()) <= 0)
+        .isPresent();
   }
 }

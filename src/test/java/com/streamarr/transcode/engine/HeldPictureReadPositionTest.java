@@ -64,7 +64,10 @@ class HeldPictureReadPositionTest {
         .as("an MPEG-TS seek to the keyframe's presentation time lands after its decode time")
         .contains(Duration.ofSeconds(8).minus(ScriptedKeyframeSource.REORDER_DELAY));
     assertThat(source.scannedIntervals()).containsExactly(interval(14, 24), interval(4, 14));
-    assertThat(source.landingChecks()).containsExactly(Duration.ofSeconds(8));
+    assertThat(source.landingChecks())
+        .containsExactly(
+            Duration.ofSeconds(8),
+            Duration.ofSeconds(8).minus(ScriptedKeyframeSource.REORDER_DELAY));
   }
 
   @Test
@@ -84,11 +87,12 @@ class HeldPictureReadPositionTest {
     assertThat(source.landingChecks()).containsExactly(Duration.ofSeconds(8));
   }
 
+  // A raw H.264 stream's demuxer cannot seek, so a seek reads no packet at all.
   @Test
   @DisplayName(
-      "Should read from the found keyframe's decode time when a seek to its presentation time"
-          + " reads no video packet")
-  void shouldReadFromTheFoundKeyframesDecodeTimeWhenASeekToItsPresentationTimeReadsNoPacket()
+      "Should read from the start of the timeline when no seek to the found keyframe's times reads a"
+          + " video packet")
+  void shouldReadFromTheStartOfTheTimelineWhenNoSeekToTheFoundKeyframesTimesReadsAPacket()
       throws Exception {
     var source =
         ScriptedKeyframeSource.seekingByPresentationTime(
@@ -103,8 +107,7 @@ class HeldPictureReadPositionTest {
 
     var readPosition = engine.heldPictureReadPosition(heldRequest(14, 24), bytesRead::addAndGet);
 
-    assertThat(readPosition)
-        .contains(Duration.ofSeconds(8).minus(ScriptedKeyframeSource.REORDER_DELAY));
+    assertThat(readPosition).contains(Duration.ZERO);
   }
 
   @Test
