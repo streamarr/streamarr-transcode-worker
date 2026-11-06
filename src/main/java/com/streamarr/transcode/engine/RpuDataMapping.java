@@ -25,6 +25,10 @@ record RpuDataMapping(
 
   private static final int COMPONENTS = 3;
   private static final AcceptedRange VDR_RPU_ID = AcceptedRange.id("vdr_rpu_id");
+  private static final AcceptedRange MAPPING_COLOR_SPACE =
+      AcceptedRange.decodedExpGolomb("mapping_color_space");
+  private static final AcceptedRange MAPPING_CHROMA_FORMAT_IDC =
+      AcceptedRange.decodedExpGolomb("mapping_chroma_format_idc");
   // The decoder reads 1 to 65535 partitions each way, coded minus 1.
   private static final long MOST_PARTITIONS_MINUS1 = 0xFFFE;
   private static final AcceptedRange X_PARTITIONS_MINUS1 =
@@ -40,8 +44,8 @@ record RpuDataMapping(
     var mapping =
         RpuDataMapping.builder()
             .vdrRpuId(reader.unsignedExpGolomb(VDR_RPU_ID))
-            .colorSpace(reader.unsignedExpGolomb())
-            .chromaFormatIdc(reader.unsignedExpGolomb());
+            .colorSpace(reader.unsignedExpGolomb(MAPPING_COLOR_SPACE))
+            .chromaFormatIdc(reader.unsignedExpGolomb(MAPPING_CHROMA_FORMAT_IDC));
     var pivots = new ArrayList<List<Integer>>();
     for (var component = 0; component < COMPONENTS; component++) {
       pivots.add(RpuReshapingCurve.parsePivots(reader, header));

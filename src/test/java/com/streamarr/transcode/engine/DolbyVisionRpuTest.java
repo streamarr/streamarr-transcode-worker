@@ -130,6 +130,14 @@ class DolbyVisionRpuTest {
             "eight static extension blocks under compressed DM metadata, which the decoder parses"
                 + " without keeping",
             SyntheticRpus.profile7().compressedDm().emptyBlocks(8, 0)),
+        Arguments.of(
+            "a scene_refresh_flag, mapping_color_space and mapping_chroma_format_idc of 30 and an"
+                + " extension block of 30 bytes, the largest Exp-Golomb values the decoder reads",
+            SyntheticRpus.profile7()
+                .sceneRefreshFlag(30)
+                .mappingColorSpace(30)
+                .mappingChromaFormatIdc(30)
+                .singleBlockOf(30)),
         Arguments.of("a profile 8 RPU", SyntheticRpus.profile7().withoutResidual()));
   }
 
@@ -333,6 +341,19 @@ class DolbyVisionRpuTest {
         Arguments.of(
             "an eighth static extension block in the CM v4.0 list after seven in the CM v2.9 list",
             SyntheticRpus.profile7().emptyBlocks(7, 0).emptyCmv40Blocks(1, 0).escaped()),
+        Arguments.of(
+            "a scene_refresh_flag of 31, above the 30 that the decoder's Exp-Golomb read decodes",
+            SyntheticRpus.profile7().sceneRefreshFlag(31).escaped()),
+        Arguments.of(
+            "a mapping_color_space of 31, above the 30 that the decoder's Exp-Golomb read decodes",
+            SyntheticRpus.profile7().mappingColorSpace(31).escaped()),
+        Arguments.of(
+            "a mapping_chroma_format_idc of 31, above the 30 that the decoder's Exp-Golomb read"
+                + " decodes",
+            SyntheticRpus.profile7().mappingChromaFormatIdc(31).escaped()),
+        Arguments.of(
+            "an extension block of 31 bytes, above the 30 that the decoder's Exp-Golomb read decodes",
+            SyntheticRpus.profile7().singleBlockOf(31).escaped()),
         Arguments.of(
             "a previous RPU id of 4294967295, above the largest value a ue(v) codes",
             SyntheticRpus.profile7().previousRpu(4_294_967_295L).escaped()),

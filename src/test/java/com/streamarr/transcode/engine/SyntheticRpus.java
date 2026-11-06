@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.OptionalLong;
 
 /**
@@ -123,6 +124,10 @@ final class SyntheticRpus {
     private Optional<EmptyBlocks> cmv40EmptyBlocks = Optional.empty();
     private long lumaMappingIdc = 0;
     private long vdrRpuId = 0;
+    private long mappingColorSpace = 0;
+    private long mappingChromaFormatIdc = 0;
+    private long sceneRefreshFlag = 1;
+    private OptionalInt singleBlockBytes = OptionalInt.empty();
     private long xPartitionsMinus1 = 2;
     private long yPartitionsMinus1 = 1;
     private long baseLayerBitDepthMinus8 = BL_BIT_DEPTH - 8;
@@ -150,6 +155,30 @@ final class SyntheticRpus {
      */
     Builder emptyBlocks(int staticCount, int dynamicCount) {
       cmv29EmptyBlocks = Optional.of(new EmptyBlocks(staticCount, dynamicCount));
+      return this;
+    }
+
+    /**
+     * A CM v2.9 block list of one dynamic block of that many zero bytes, in place of the usual
+     * four.
+     */
+    Builder singleBlockOf(int bytes) {
+      singleBlockBytes = OptionalInt.of(bytes);
+      return this;
+    }
+
+    Builder mappingColorSpace(long value) {
+      mappingColorSpace = value;
+      return this;
+    }
+
+    Builder mappingChromaFormatIdc(long value) {
+      mappingChromaFormatIdc = value;
+      return this;
+    }
+
+    Builder sceneRefreshFlag(long value) {
+      sceneRefreshFlag = value;
       return this;
     }
 
@@ -405,7 +434,7 @@ final class SyntheticRpus {
     }
 
     private void writeMapping(BitSink sink) {
-      sink.ue(vdrRpuId).ue(0).ue(0);
+      sink.ue(vdrRpuId).ue(mappingColorSpace).ue(mappingChromaFormatIdc);
       for (var component = 0; component < 3; component++) {
         writePivots(sink, component == 0 ? lumaPieces : 1);
       }
@@ -477,7 +506,7 @@ final class SyntheticRpus {
     }
 
     private void writeDmData(BitSink sink) {
-      sink.ue(affectedDmMetadataId).ue(currentDmMetadataId).ue(1);
+      sink.ue(affectedDmMetadataId).ue(currentDmMetadataId).ue(sceneRefreshFlag);
       if (dmMetadataCompression != 1) {
         writeSignalDescription(sink);
       }
@@ -510,6 +539,15 @@ final class SyntheticRpus {
     private void writeCmv29Blocks(BitSink sink) {
       if (cmv29EmptyBlocks.isPresent()) {
         writeEmptyBlocks(sink, cmv29EmptyBlocks.get());
+        return;
+      }
+
+      if (singleBlockBytes.isPresent()) {
+        sink.ue(1).align().ue(singleBlockBytes.getAsInt()).u(UNREAD_BLOCK_LEVEL, 8);
+        for (var index = 0; index < singleBlockBytes.getAsInt(); index++) {
+          sink.u(0, 8);
+        }
+
         return;
       }
 
