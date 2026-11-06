@@ -23,6 +23,7 @@ import com.streamarr.transcode.engine.SourceEnd.EndedEarly;
 import com.streamarr.transcode.engine.SourceEnd.StreamEnd;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.AudioInterval;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
@@ -1040,6 +1041,216 @@ class ProducerTest {
         .hasSize(recording.segments().size())
         .extracting(ProductionTiming::productionTime)
         .containsOnly(Duration.ZERO);
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the time the worker pauses FFmpeg for a seek out of a media segment's"
+          + " production time")
+  void shouldLeaveTheTimeTheWorkerPausesFfmpegForASeekOutOfAMediaSegmentsProductionTime() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(offsetOfMediaSegment(recording, 0))
+            .build();
+    var clock = new SteppedClock();
+    var producer = producerFor(process, recording).clock(clock).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+
+    producer.pauseFfmpeg();
+    var pausedBySignal = process.isPausedBySignal();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(2));
+    process.resume();
+
+    assertThat(pausedBySignal).isTrue();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(sink.mediaTimings())
+        .extracting(ProductionTiming::productionTime)
+        .startsWith(Duration.ofSeconds(2))
+        .containsOnly(Duration.ofSeconds(2), Duration.ZERO);
+    assertThat(process.isPausedBySignal()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep timing a media segment's production when the worker pauses FFmpeg and no"
+          + " process stops")
+  void shouldKeepTimingAMediaSegmentsProductionWhenTheWorkerPausesFfmpegAndNoProcessStops() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(offsetOfMediaSegment(recording, 0))
+            .keepsRunningWhenPaused(true)
+            .build();
+    var clock = new SteppedClock();
+    var producer = producerFor(process, recording).clock(clock).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+
+    var paused = producer.pauseFfmpeg();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(2));
+    process.resume();
+
+    assertThat(paused).isFalse();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(sink.mediaTimings())
+        .extracting(ProductionTiming::productionTime)
+        .startsWith(Duration.ofSeconds(7));
+  }
+
+  @Test
+  @DisplayName("Should not fail the attempt as an encoder stall while the worker pauses FFmpeg")
+  void shouldNotFailTheAttemptAsAnEncoderStallWhileTheWorkerPausesFfmpeg() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(100)).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+
+    producer.pauseFfmpeg();
+
+    await()
+        .during(Duration.ofMillis(500))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
+    producer.resumeFfmpeg();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave FFmpeg running when the worker pauses it again before it delivers another media"
+          + " segment, and pause it once it has")
+  void shouldLeaveFfmpegRunningWhenTheWorkerPausesItAgainBeforeItDeliversAnotherMediaSegment() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideMediaSegment(recording, 3))
+            .build();
+    var clock = new SteppedClock();
+    sink.holding(1);
+    var producer = producerFor(process, recording).clock(clock).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(2));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(5));
+
+    var pausedBeforeADelivery = producer.pauseFfmpeg();
+
+    assertThat(pausedBeforeADelivery).isFalse();
+    assertThat(process.isPausedBySignal()).isFalse();
+    sink.release();
+    awaiting().until(producer::pauseFfmpeg);
+    assertThat(process.isPausedBySignal()).isTrue();
+    producer.resumeFfmpeg();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave FFmpeg running when the worker pauses it again after only a delivery that began"
+          + " before its resume")
+  void
+      shouldLeaveFfmpegRunningWhenTheWorkerPausesItAgainAfterOnlyADeliveryThatBeganBeforeItsResume() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideMediaSegment(recording, 3))
+            .build();
+    var clock = new SteppedClock();
+    sink.holding(2);
+    var producer = producerFor(process, recording).clock(clock).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(5));
+
+    sink.release();
+
+    awaiting().until(() -> sink.returnedNames().size() == 3);
+    await()
+        .during(Duration.ofMillis(300))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.pauseFfmpeg() && !process.isPausedBySignal());
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave FFmpeg running when the worker pauses it again before it has run for as long as"
+          + " it was paused, and pause it once it has")
+  void shouldLeaveFfmpegRunningWhenTheWorkerPausesItAgainBeforeItHasRunForAsLongAsItWasPaused() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideMediaSegment(recording, 4))
+            .build();
+    var clock = new SteppedClock();
+    sink.holding(1);
+    var producer = producerFor(process, recording).clock(clock).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(5));
+    producer.resumeFfmpeg();
+    sink.release();
+    // The sink starts the third media segment only after the producer took the second one back,
+    // the first that began after the resume.
+    awaiting().until(() -> sink.startedNames().size() == 4);
+    clock.advance(Duration.ofSeconds(4));
+
+    var pausedWithinItsRest = producer.pauseFfmpeg();
+
+    assertThat(pausedWithinItsRest).isFalse();
+    assertThat(process.isPausedBySignal()).isFalse();
+    clock.advance(Duration.ofSeconds(1));
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    assertThat(process.isPausedBySignal()).isTrue();
+    producer.resumeFfmpeg();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName("Should leave FFmpeg running when the worker pauses an attempt that has an outcome")
+  void shouldLeaveFfmpegRunningWhenTheWorkerPausesAnAttemptThatHasAnOutcome() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var producer = producerFor(process, recording).start();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+
+    producer.pauseFfmpeg();
+
+    assertThat(process.isPausedBySignal()).isFalse();
   }
 
   @Test
@@ -3984,7 +4195,7 @@ class ProducerTest {
   // A producer of this process's output, with its own budget and generous bounds, to adjust.
   private Producer.ProducerBuilder producerLaunching(ScriptedProcess process) {
     return Producer.builder()
-        .launcher((command, jobAttemptId) -> process)
+        .launcher(new ScriptedProcessLauncher(_ -> process))
         .pipeline(new FfmpegPipeline.SingleProcess(List.of("ffmpeg")))
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))
@@ -4131,6 +4342,11 @@ class ProducerTest {
   // An offset inside the first fragment of the third media segment, before it is complete.
   private static int insideThirdMediaSegment(Recording recording) {
     return offsetOfMediaSegment(recording, 2) + 10;
+  }
+
+  // Ten bytes into the media segment at this position, so the segment before it has closed.
+  private static int insideMediaSegment(Recording recording, int position) {
+    return offsetOfMediaSegment(recording, position) + 10;
   }
 
   // Where the media segment at this position starts in a recording without preroll.

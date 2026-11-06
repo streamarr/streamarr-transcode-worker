@@ -4,11 +4,13 @@ import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDI
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.FfmpegRecordings;
+import com.streamarr.transcode.engine.PausedProcess;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -62,6 +64,17 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
         .computeIfAbsent(jobAttemptId, _ -> new CopyOnWriteArrayList<>())
         .add(new Launch(List.copyOf(command), process));
     return process;
+  }
+
+  @Override
+  public Optional<PausedProcess> pause(Process process) {
+    var scripted = (ScriptedProcess) process;
+    if (scripted.keepsRunningWhenPaused()) {
+      return Optional.empty();
+    }
+
+    scripted.pauseBySignal();
+    return Optional.of(scripted::resumeBySignal);
   }
 
   public boolean hasLaunched(UUID jobAttemptId) {

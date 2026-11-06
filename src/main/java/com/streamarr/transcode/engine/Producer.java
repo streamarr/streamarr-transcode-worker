@@ -15,6 +15,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -66,6 +67,7 @@ public final class Producer {
   private static final Duration BEFORE_ANY_SAMPLE = Duration.ofSeconds(Long.MIN_VALUE);
 
   private final FfmpegProcess ffmpeg;
+  private final ProcessLauncher launcher;
   private final FragmentedMp4Reader reader;
 
   // Guarded by lock, because a decision discards the fragments it holds.
@@ -76,6 +78,7 @@ public final class Producer {
   private final Duration stallTimeout;
   private final StallWatchdog watchdog;
   private final ProductionTimer productionTimer;
+  private final MonotonicClock clock;
   private final String threadName;
   private final SourceEndRule sourceEndRule;
   private final int startSequenceNumber;
@@ -90,12 +93,24 @@ public final class Producer {
   private Optional<Delivery> deliveryInFlight = Optional.empty();
   private long readerHeldBytes;
   private OptionalInt lastDeliveredMediaSegment = OptionalInt.empty();
+  // Guarded by lock. Once the attempt is decided or its output has ended, FFmpeg stays running.
+  private boolean ffmpegPaused;
+  private boolean pausesEnded;
+  // Guarded by lock. After a resume, FFmpeg runs for as long as it was paused and until the sink
+  // accepts another media segment before it pauses again.
+  private long pausedAtNanos;
+  private OptionalLong restEndsAtNanos = OptionalLong.empty();
+  private boolean deliveredSinceResume = true;
+  private long resumes;
+  private List<PausedProcess> pausedProcesses = List.of();
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
     this.ffmpeg = ffmpeg;
+    this.launcher = settings.launcher();
     this.stallTimeout = settings.stallTimeout();
     this.watchdog = new StallWatchdog(stallTimeout);
     this.productionTimer = new ProductionTimer(settings.clock());
+    this.clock = settings.clock();
     this.reader =
         new FragmentedMp4Reader(
             watchdog.watch(ffmpeg.output()), MAXIMUM_SEGMENT_BYTES, this::tryAdmit);
@@ -155,6 +170,7 @@ public final class Producer {
     var settings =
         Settings.builder()
             .jobAttemptId(jobAttemptId)
+            .launcher(launcher)
             .assembler(
                 SegmentAssembler.builder()
                     .intervals(intervals)
@@ -252,6 +268,74 @@ public final class Producer {
         Math.floorMod(ticks, timescale) * NANOSECONDS_PER_SECOND / timescale);
   }
 
+  /**
+   * Stops every FFmpeg process of the attempt until {@link #resumeFfmpeg}, so that another job
+   * attempt gets the CPU, and answers whether it did. The time FFmpeg spends paused counts neither
+   * as production time nor toward the stall timeout. Does nothing while FFmpeg is already paused,
+   * once the attempt has an outcome, once FFmpeg's output has ended, and after a resume until
+   * FFmpeg has run for as long as it was paused and the sink has accepted another media segment, so
+   * that pauses take at most half of FFmpeg's time and at most one pause falls between two media
+   * segments.
+   */
+  public boolean pauseFfmpeg() {
+    synchronized (lock) {
+      if (ffmpegPaused || pausesEnded || !deliveredSinceResume || isResting()) {
+        return false;
+      }
+
+      // One stopped process of a pipe holds the other back through the pipe between them.
+      var stopped =
+          ffmpeg.processes().stream().map(launcher::pause).flatMap(Optional::stream).toList();
+      if (stopped.isEmpty()) {
+        return false;
+      }
+
+      ffmpegPaused = true;
+      pausedAtNanos = clock.nanoTime();
+      productionTimer.pause();
+      watchdog.pause();
+      pausedProcesses = stopped;
+      return true;
+    }
+  }
+
+  /** Continues FFmpeg after {@link #pauseFfmpeg}; does nothing while FFmpeg is not paused. */
+  public void resumeFfmpeg() {
+    synchronized (lock) {
+      resumePausedFfmpeg();
+    }
+  }
+
+  // Guarded by lock.
+  private void resumePausedFfmpeg() {
+    if (!ffmpegPaused) {
+      return;
+    }
+
+    ffmpegPaused = false;
+    var resumedAt = clock.nanoTime();
+    restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
+    deliveredSinceResume = false;
+    resumes++;
+    pausedProcesses.forEach(PausedProcess::resume);
+    pausedProcesses = List.of();
+    watchdog.resume();
+    productionTimer.resume();
+  }
+
+  // Guarded by lock.
+  private boolean isResting() {
+    return restEndsAtNanos.isPresent() && clock.nanoTime() - restEndsAtNanos.getAsLong() < 0;
+  }
+
+  // FFmpeg must run to quit, to exit after its output ends and to be terminated.
+  private void endPauses() {
+    synchronized (lock) {
+      pausesEnded = true;
+      resumePausedFfmpeg();
+    }
+  }
+
   /** Completes once with the attempt's outcome, after FFmpeg has exited. */
   public CompletableFuture<AttemptOutcome> outcome() {
     return outcome.copy();
@@ -304,6 +388,8 @@ public final class Producer {
       }
 
       decision = Optional.of(decided);
+      pausesEnded = true;
+      resumePausedFfmpeg();
       assembler.discardHeldFragments();
       readerReleasedBytes = readerHeldBytes;
       readerHeldBytes = 0;
@@ -407,6 +493,7 @@ public final class Producer {
   private void produce() {
     try {
       var ending = readAndDeliver();
+      endPauses();
       watchdog.end();
       discardHeldFragments();
       holdOnlyTheAssemblingSegment();
@@ -735,7 +822,7 @@ public final class Producer {
         return Optional.of(new Decided());
       }
 
-      delivery = new Delivery(segment, deliveryHeldBytes, new DeliveryCancellation());
+      delivery = new Delivery(segment, deliveryHeldBytes, new DeliveryCancellation(), resumes);
       deliveryInFlight = Optional.of(delivery);
       readerHeldBytes -= deliveryHeldBytes;
     }
@@ -779,9 +866,14 @@ public final class Producer {
     long deliveredBytes;
     synchronized (lock) {
       deliveredBytes = deliveryInFlight.map(Delivery::heldBytes).orElse(0L);
+      // A delivery that began before the latest resume may carry a segment stored before the
+      // pause, so only a later one counts as progress since the resume.
+      var beganAfterTheLatestResume =
+          deliveryInFlight.filter(inFlight -> inFlight.resumesAtStart() == resumes).isPresent();
       deliveryInFlight = Optional.empty();
       if (acceptedMediaSegment.isPresent()) {
         lastDeliveredMediaSegment = acceptedMediaSegment;
+        deliveredSinceResume |= beganAfterTheLatestResume;
       }
 
       lock.notifyAll();
@@ -851,11 +943,15 @@ public final class Producer {
    * {@code moof} and {@code mdat} header written for it.
    */
   private record Delivery(
-      ProducedSegment segment, long heldBytes, DeliveryCancellation cancellation) {}
+      ProducedSegment segment,
+      long heldBytes,
+      DeliveryCancellation cancellation,
+      long resumesAtStart) {}
 
   @Builder
   private record Settings(
       UUID jobAttemptId,
+      ProcessLauncher launcher,
       SegmentAssembler assembler,
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,

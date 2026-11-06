@@ -70,6 +70,7 @@ public final class ScriptedProcess extends Process {
   private final Optional<RuntimeException> uncheckedReadFailure;
   private final boolean resumesOnQuit;
   private final boolean ignoresTermination;
+  private final boolean keepsRunningWhenPaused;
   private final boolean lingersAfterKill;
   private final boolean readsMediaFromStdin;
   private final OptionalInt stdinCapacity;
@@ -93,6 +94,9 @@ public final class ScriptedProcess extends Process {
   private boolean terminated;
   private boolean destroyedForcibly;
   private boolean inputEnded;
+  private boolean pausedBySignal;
+  private boolean quitArrivedWhilePausedBySignal;
+  private boolean quitPendingUntilResumed;
   private volatile Thread reader;
 
   @Builder
@@ -105,6 +109,7 @@ public final class ScriptedProcess extends Process {
       RuntimeException failReadWith,
       boolean resumesOnQuit,
       boolean ignoresTermination,
+      boolean keepsRunningWhenPaused,
       boolean lingersAfterKill,
       boolean readsMediaFromStdin,
       Integer stdinCapacity,
@@ -117,6 +122,7 @@ public final class ScriptedProcess extends Process {
     this.uncheckedReadFailure = Optional.ofNullable(failReadWith);
     this.resumesOnQuit = resumesOnQuit;
     this.ignoresTermination = ignoresTermination;
+    this.keepsRunningWhenPaused = keepsRunningWhenPaused;
     this.lingersAfterKill = lingersAfterKill;
     this.readsMediaFromStdin = readsMediaFromStdin;
     this.stdinCapacity = optionalOffset(stdinCapacity);
@@ -141,6 +147,43 @@ public final class ScriptedProcess extends Process {
   public synchronized void resume() {
     resumed = true;
     notifyAll();
+  }
+
+  /**
+   * Stops the process as SIGSTOP does: it writes nothing and takes no {@code q} until {@link
+   * #resumeBySignal}.
+   */
+  public synchronized void pauseBySignal() {
+    pausedBySignal = true;
+  }
+
+  /** Continues the process as SIGCONT does, and acts on a {@code q} that arrived meanwhile. */
+  public void resumeBySignal() {
+    boolean quit;
+    synchronized (this) {
+      pausedBySignal = false;
+      quit = quitPendingUntilResumed;
+      quitPendingUntilResumed = false;
+      notifyAll();
+    }
+
+    if (quit) {
+      quit();
+    }
+  }
+
+  /** Whether no pause reaches the process, as on a system where no pidfd names FFmpeg. */
+  public boolean keepsRunningWhenPaused() {
+    return keepsRunningWhenPaused;
+  }
+
+  public synchronized boolean isPausedBySignal() {
+    return pausedBySignal;
+  }
+
+  /** Whether {@code q} arrived while the process was stopped, when FFmpeg could not read it. */
+  public synchronized boolean quitArrivedWhilePausedBySignal() {
+    return quitArrivedWhilePausedBySignal;
   }
 
   /** Exits with the scripted exit code; the output keeps whatever the reader has not read. */
@@ -397,6 +440,7 @@ public final class ScriptedProcess extends Process {
   }
 
   private synchronized int read(byte[] buffer, int offset, int length) throws IOException {
+    awaitResumeBySignal();
     awaitResumeAtPause();
     if (streamsClosed) {
       throw streamClosed();
@@ -427,6 +471,12 @@ public final class ScriptedProcess extends Process {
 
   private static IOException streamClosed() {
     return new IOException("Stream closed");
+  }
+
+  private void awaitResumeBySignal() throws InterruptedIOException {
+    while (pausedBySignal && !exit.isDone()) {
+      awaitChange("interrupted while the process is stopped");
+    }
   }
 
   // A read that waits at the pause of a process whose streams were closed ends once it exits.
@@ -493,6 +543,16 @@ public final class ScriptedProcess extends Process {
     } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
       throw new InterruptedIOException(interruption);
+    }
+  }
+
+  private void quit() {
+    if (resumesOnQuit) {
+      resume();
+    }
+
+    if (exitTiming == ExitTiming.AT_QUIT) {
+      exit();
     }
   }
 
@@ -565,16 +625,22 @@ public final class ScriptedProcess extends Process {
         writing.unlock();
       }
 
-      if (value != 'q' || readsMediaFromStdin) {
+      if (value != 'q' || readsMediaFromStdin || deferQuitWhilePausedBySignal()) {
         return;
       }
 
-      if (resumesOnQuit) {
-        resume();
-      }
+      quit();
+    }
 
-      if (exitTiming == ExitTiming.AT_QUIT) {
-        exit();
+    private boolean deferQuitWhilePausedBySignal() {
+      synchronized (ScriptedProcess.this) {
+        if (!pausedBySignal) {
+          return false;
+        }
+
+        quitArrivedWhilePausedBySignal = true;
+        quitPendingUntilResumed = true;
+        return true;
       }
     }
 

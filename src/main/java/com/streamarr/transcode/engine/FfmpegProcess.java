@@ -55,6 +55,9 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses
 
   long pid();
 
+  /** Every FFmpeg process of the attempt, which a pause stops together. */
+  List<Process> processes();
+
   Duration gracePeriod();
 
   /** The fragmented MP4 that the attempt writes. */

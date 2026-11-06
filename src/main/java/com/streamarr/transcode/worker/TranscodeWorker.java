@@ -32,6 +32,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerCapabilities;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
+import build.buf.gen.streamarr.transcode.v1.YieldToSeekCommand;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.UnsafeByteOperations;
 import com.streamarr.transcode.engine.AttemptOutcome;
@@ -82,6 +83,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
@@ -1080,6 +1082,27 @@ public final class TranscodeWorker implements AutoCloseable {
     stopping.start();
   }
 
+  @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
+  private synchronized void yieldToSeek(
+      YieldToSeekCommand command, WorkerResponseObserver session) {
+    // A yield from a session that close() ended must not touch the session that replaced it.
+    if (!command.getTarget().equals(identity()) || responseObserver.get() != session) {
+      return;
+    }
+
+    var holdLimit =
+        Duration.ofSeconds(command.getHoldLimit().getSeconds(), command.getHoldLimit().getNanos());
+    var attemptIds =
+        command.getJobAttemptIdsList().stream()
+            .map(ProtoUuid::fromProto)
+            .collect(Collectors.toSet());
+    session.sessionYields.yieldTo(
+        attemptIds,
+        holdLimit,
+        attemptId ->
+            Optional.ofNullable(activeAttempts.get(attemptId)).map(ActiveAttempt::producer));
+  }
+
   // An attempt that is still reading its audio stream has no producer, so its stop is settled at
   // once; the interrupt ends the read.
   private synchronized void stopReading(StopVariantCommand command) {
@@ -1276,7 +1299,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // Returns the closed session's probes and any attempt that started after the stops began.
   private synchronized Optional<ClosedSession> closeConnection() {
-    responseObserver.set(null);
+    var observer = responseObserver.getAndSet(null);
 
     if (channel == null) {
       return Optional.empty();
@@ -1285,6 +1308,7 @@ public final class TranscodeWorker implements AutoCloseable {
     probeSession.shutdown();
     sessionTimers.shutdownNow();
     sessionTimers = null;
+    observer.sessionYields.close();
     var attempts = claimActiveAttempts();
     try {
       if (requests != null) {
@@ -1316,6 +1340,7 @@ public final class TranscodeWorker implements AutoCloseable {
     private final CompletableFuture<WorkerSessionAccepted> accepted;
     private volatile boolean sessionAccepted;
     private final WorkerProbeSession sessionProbes;
+    private final SeekYields sessionYields = new SeekYields();
     private final CompletableFuture<Void> sessionDisconnected = disconnected;
 
     private WorkerResponseObserver(
@@ -1351,6 +1376,11 @@ public final class TranscodeWorker implements AutoCloseable {
 
       if (response.hasStopVariant()) {
         stopVariant(response.getStopVariant());
+        return;
+      }
+
+      if (response.hasYieldToSeek()) {
+        yieldToSeek(response.getYieldToSeek(), this);
         return;
       }
 

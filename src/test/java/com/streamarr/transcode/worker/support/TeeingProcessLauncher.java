@@ -1,5 +1,6 @@
 package com.streamarr.transcode.worker.support;
 
+import com.streamarr.transcode.engine.PausedProcess;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import java.io.ByteArrayOutputStream;
 import java.io.FilterInputStream;
@@ -10,6 +11,7 @@ import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,6 +41,11 @@ public final class TeeingProcessLauncher implements ProcessLauncher {
     outputs.put(jobAttemptId, copy);
     var gate = nextGate.getAndSet(Gate.OPEN);
     return new TeedProcess(launcher.launch(command, jobAttemptId), copy, gate);
+  }
+
+  @Override
+  public Optional<PausedProcess> pause(Process process) {
+    return launcher.pause(((TeedProcess) process).process);
   }
 
   /**
