@@ -151,7 +151,7 @@ record RpuBits(
   private static void writeExtensionBlocks(Bits bits, long count, List<ExtensionBlock> blocks) {
     bits.unsignedExpGolomb(count).align();
     for (var block : blocks) {
-      bits.unsignedExpGolomb(block.payload().size()).put(8, block.level());
+      bits.unsignedExpGolomb(block.declaredLength()).put(8, block.level());
       block.payload().forEach(value -> bits.put(8, value));
     }
   }
@@ -182,7 +182,12 @@ record RpuBits(
   }
 
   /** One extension block: its level and its payload bytes. */
-  record ExtensionBlock(int level, List<Integer> payload) {
+  /** An extension block whose length field declares {@code declaredLength} payload bytes. */
+  record ExtensionBlock(int level, List<Integer> payload, int declaredLength) {
+
+    ExtensionBlock(int level, List<Integer> payload) {
+      this(level, payload, payload.size());
+    }
 
     /** A level 6 block: mastering luminances, then MaxCLL and MaxFALL, each 16 bits. */
     static ExtensionBlock level6(int maxContentLightLevel, int maxFrameAverageLightLevel) {

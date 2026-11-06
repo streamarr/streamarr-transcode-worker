@@ -4,6 +4,8 @@ package com.streamarr.transcode.probe;
 final class BitReader {
 
   private static final int UVLC_LONGEST_VALUE = 32;
+  private static final int TABLE_BITS = 9;
+  private static final int LONGEST_TABLE_CODE_BITS = 19;
 
   private final byte[] bytes;
   private int position;
@@ -63,6 +65,31 @@ final class BitReader {
 
   boolean flag() {
     return bits(1) == 1;
+  }
+
+  /**
+   * FFmpeg's get_ue_golomb_31(), which reads ue(v) through a 9-bit table: exact up to 30. A code of
+   * 5 leading zeros reads as 31 when its first 3 value bits are zero and as 32 otherwise, a code of
+   * 6 to 8 leading zeros as 32, and 9 or more leading zeros consume 19 bits and read as 32.
+   */
+  long unsignedExpGolomb31() {
+    var leadingZeros = 0;
+    while (leadingZeros < TABLE_BITS && !flag()) {
+      leadingZeros++;
+    }
+
+    return switch (leadingZeros) {
+      case 0, 1, 2, 3, 4 -> (1L << leadingZeros) - 1 + bits(leadingZeros);
+      case 5 -> bits(5) < 4 ? 31 : 32;
+      case TABLE_BITS -> {
+        skip(LONGEST_TABLE_CODE_BITS - TABLE_BITS);
+        yield 32;
+      }
+      default -> {
+        skip(leadingZeros);
+        yield 32;
+      }
+    };
   }
 
   /**

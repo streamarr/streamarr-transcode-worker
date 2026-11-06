@@ -9,6 +9,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import com.streamarr.transcode.probe.RpuBits.ExtensionBlock;
 import com.streamarr.transcode.probe.RpuBits.Nlq;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -322,6 +324,24 @@ class FfprobeExecutorRpuFactsTest {
             level6.toBuilder()
                 .header(level6.header().toBuilder().elBitDepthMinus8(0xFF_02).build())
                 .build()));
+  }
+
+  @ParameterizedTest(name = "a length field of {0} over {1} bytes")
+  @CsvSource({"31, 31, true", "32, 31, true", "32, 32, false"})
+  @DisplayName(
+      "Should read an extension block's length field as FFmpeg does, which reads 31 to 34 as 31")
+  void shouldReadAnExtensionBlocksLengthFieldAsFfmpegDoes(
+      int declaredLength, int payloadBytes, boolean isParsed) {
+    var payload = new ArrayList<>(ExtensionBlock.level6(1_000, 400).payload());
+    payload.addAll(zeros(payloadBytes - payload.size()));
+    var rpu =
+        RpuBits.profile7(Nlq.identity())
+            .extensionBlock(new ExtensionBlock(6, payload, declaredLength))
+            .build();
+
+    var present = dolbyVisionOf(rpu, rpu, rpu);
+
+    assertThat(present.hasRpuContentLightLevel()).isEqualTo(isParsed);
   }
 
   @ParameterizedTest(name = "ms_weight {0}")

@@ -148,10 +148,10 @@ final class DolbyVisionRpuReader {
   }
 
   private static void skipExtensionBlocks(BitReader reader, BlockCounts counts) {
-    var blocks = reader.unsignedExpGolomb();
+    var blocks = reader.unsignedExpGolomb31();
     reader.alignToByte();
     for (long block = 0; block < blocks; block++) {
-      var length = reader.unsignedExpGolomb();
+      var length = reader.unsignedExpGolomb31();
       var level = reader.bits(8);
       counts.add(level);
       requireLength(SECOND_GROUP_BLOCK_BYTES, level, length);
@@ -192,15 +192,15 @@ final class DolbyVisionRpuReader {
    */
   private static Optional<DolbyVisionEnhancementLayer> mappingLayer(
       BitReader reader, Header header) {
-    if (reader.unsignedExpGolomb() > LARGEST_METADATA_ID) {
+    if (reader.unsignedExpGolomb31() > LARGEST_METADATA_ID) {
       return Optional.empty();
     }
 
-    reader.unsignedExpGolomb();
-    reader.unsignedExpGolomb();
+    reader.unsignedExpGolomb31();
+    reader.unsignedExpGolomb31();
     var pivots = new int[COMPONENTS];
     for (var component = 0; component < COMPONENTS; component++) {
-      var pivotsMinus2 = reader.unsignedExpGolomb();
+      var pivotsMinus2 = reader.unsignedExpGolomb31();
       if (pivotsMinus2 > LARGEST_PIVOTS_MINUS_2) {
         return Optional.empty();
       }
@@ -250,7 +250,7 @@ final class DolbyVisionRpuReader {
 
   /** Skips one piece of a reshaping curve; false for syntax that FFmpeg rejects. */
   private static boolean skipPiece(BitReader reader, Header header) {
-    var mapping = reader.unsignedExpGolomb();
+    var mapping = reader.unsignedExpGolomb31();
     if (mapping == POLYNOMIAL) {
       return skipPolynomial(reader, header);
     }
@@ -259,7 +259,7 @@ final class DolbyVisionRpuReader {
   }
 
   private static boolean skipPolynomial(BitReader reader, Header header) {
-    var orderMinus1 = reader.unsignedExpGolomb();
+    var orderMinus1 = reader.unsignedExpGolomb31();
     if (orderMinus1 > LARGEST_POLYNOMIAL_ORDER_MINUS_1) {
       return false;
     }
@@ -331,22 +331,22 @@ final class DolbyVisionRpuReader {
    */
   private static Optional<Optional<ContentLightLevel>> level6(
       BitReader reader, Header header, BlockCounts counts) {
-    var affectedId = reader.unsignedExpGolomb();
-    var currentId = reader.unsignedExpGolomb();
+    var affectedId = reader.unsignedExpGolomb31();
+    var currentId = reader.unsignedExpGolomb31();
     if (affectedId > LARGEST_METADATA_ID || affectedId != currentId) {
       return Optional.empty();
     }
 
-    reader.unsignedExpGolomb();
+    reader.unsignedExpGolomb31();
     if (header.displayManagementCompression() == 0) {
       requireValidColorMetadata(reader);
     }
 
-    var blocks = reader.unsignedExpGolomb();
+    var blocks = reader.unsignedExpGolomb31();
     reader.alignToByte();
     var level6 = Optional.<ContentLightLevel>empty();
     for (long block = 0; block < blocks; block++) {
-      var length = reader.unsignedExpGolomb();
+      var length = reader.unsignedExpGolomb31();
       var level = reader.bits(8);
       counts.add(level);
       requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
@@ -486,10 +486,10 @@ final class DolbyVisionRpuReader {
         return Optional.empty();
       }
 
-      var baseLayerBitDepthMinus8 = reader.unsignedExpGolomb();
+      var baseLayerBitDepthMinus8 = reader.unsignedExpGolomb31();
       var enhancementLayerField = reader.unsignedExpGolomb();
       var enhancementLayerBitDepthMinus8 = enhancementLayerField & EL_BIT_DEPTH_BITS;
-      var vdrBitDepthMinus8 = reader.unsignedExpGolomb();
+      var vdrBitDepthMinus8 = reader.unsignedExpGolomb31();
       if ((enhancementLayerField >> 8) > LARGEST_EXT_MAPPING_IDC
           || baseLayerBitDepthMinus8 > LARGEST_BIT_DEPTH_MINUS_8
           || enhancementLayerBitDepthMinus8 > LARGEST_BIT_DEPTH_MINUS_8
