@@ -787,8 +787,10 @@ public final class Producer {
     return readerHeldBytes + deliveryInFlight.map(Delivery::heldBytes).orElse(0L);
   }
 
-  // Whatever the grouper did not keep, such as preroll, is no longer held. Once the attempt has an
-  // outcome, the reader holds nothing that it has not already released.
+  // Whatever the grouper did not keep, such as preroll, is no longer held, and whatever a rewrite
+  // added to a fragment, such as converted RPUs longer than the source's, is held beyond what the
+  // reader admitted. Once the attempt has an outcome, the reader holds nothing that it has not
+  // already released.
   private void holdOnlyTheAssemblingSegment() {
     long droppedBytes;
     synchronized (lock) {
@@ -797,11 +799,15 @@ public final class Producer {
       }
 
       droppedBytes = readerHeldBytes - assembler.heldBytes();
-      readerHeldBytes = assembler.heldBytes();
+      readerHeldBytes = Math.min(readerHeldBytes, assembler.heldBytes());
     }
 
     if (droppedBytes > 0) {
       memoryBudget.release(droppedBytes);
+    }
+
+    if (droppedBytes < 0) {
+      tryAdmit(-droppedBytes);
     }
   }
 

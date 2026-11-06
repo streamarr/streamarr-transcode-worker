@@ -43,7 +43,13 @@ public record PlannedCopyOutput(
    */
   @Builder
   public record DolbyVisionOutput(
-      int profile, int level, int baseLayerCompatibilityId, @NonNull SampleEntry sampleEntry) {}
+      int profile, int level, int baseLayerCompatibilityId, @NonNull SampleEntry sampleEntry) {
+
+    /** Whether the output is profile 8.1: profile 8 on a PQ base under the HEVC base entry. */
+    public boolean isProfile81() {
+      return profile == 8 && baseLayerCompatibilityId == 1 && sampleEntry == SampleEntry.HVC1;
+    }
+  }
 
   /** The sample entry of a copy that carries Dolby Vision. */
   public enum SampleEntry {

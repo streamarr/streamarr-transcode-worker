@@ -41,10 +41,21 @@ public sealed interface VideoDecision {
 
     public Copy {
       bitstreamRewrites = Set.copyOf(bitstreamRewrites);
+      var dolbyVision = plannedOutput.flatMap(PlannedCopyOutput::dolbyVision);
       if (bitstreamRewrites.contains(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
-          && plannedOutput.flatMap(PlannedCopyOutput::dolbyVision).isEmpty()) {
+          && dolbyVision.isEmpty()) {
         throw new IllegalArgumentException(
             "a copy that normalizes its Dolby Vision record plans a Dolby Vision output");
+      }
+
+      if (bitstreamRewrites.contains(BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1)
+          && !(bitstreamRewrites.contains(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
+              && dolbyVision
+                  .filter(PlannedCopyOutput.DolbyVisionOutput::isProfile81)
+                  .isPresent())) {
+        throw new IllegalArgumentException(
+            "a copy that converts profile 7 to profile 8.1 plans a profile 8.1 output and"
+                + " normalizes its record");
       }
     }
 

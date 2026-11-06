@@ -59,4 +59,14 @@ final class PlannedCopyOutputs {
   static PlannedCopyOutput.PlannedCopyOutputBuilder pqOutputBuilder() {
     return PlannedCopyOutput.builder().dynamicRange(pq());
   }
+
+  /** The profile 8.1 output at level 6 of a converted single-track profile 7 copy on a PQ base. */
+  static PlannedCopyOutput.DolbyVisionOutput profile81Output() {
+    return PlannedCopyOutput.DolbyVisionOutput.builder()
+        .profile(8)
+        .level(6)
+        .baseLayerCompatibilityId(1)
+        .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+        .build();
+  }
 }

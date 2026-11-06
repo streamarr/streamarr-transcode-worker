@@ -49,6 +49,9 @@ final class BitstreamRewrites {
       case NORMALIZE_DOLBY_VISION_RECORD ->
           build.buf.gen.streamarr.transcode.v1.BitstreamRewrite
               .BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD;
+      case CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1 ->
+          build.buf.gen.streamarr.transcode.v1.BitstreamRewrite
+              .BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1;
     };
   }
 
@@ -59,9 +62,9 @@ final class BitstreamRewrites {
       case BITSTREAM_REWRITE_STRIP_HDR10_PLUS -> BitstreamRewrite.STRIP_HDR10_PLUS;
       case BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD ->
           BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD;
-      case BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1,
-          BITSTREAM_REWRITE_UNSPECIFIED,
-          UNRECOGNIZED ->
+      case BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1 ->
+          BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1;
+      case BITSTREAM_REWRITE_UNSPECIFIED, UNRECOGNIZED ->
           throw new InvalidJobSpecificationException("The worker does not apply " + value);
     };
   }

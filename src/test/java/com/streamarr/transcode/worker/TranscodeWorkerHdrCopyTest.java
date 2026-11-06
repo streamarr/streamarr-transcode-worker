@@ -156,7 +156,8 @@ class TranscodeWorkerHdrCopyTest {
           .containsExactlyInAnyOrder(
               BitstreamRewrite.BITSTREAM_REWRITE_STRIP_DOLBY_VISION,
               BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS,
-              BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD);
+              BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD,
+              BitstreamRewrite.BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1);
       assertThat(capabilities.getVideoCopyFeaturesList())
           .containsExactlyInAnyOrder(
               VideoCopyFeature.VIDEO_COPY_FEATURE_PLANNED_OUTPUT,
@@ -395,19 +396,48 @@ class TranscodeWorkerHdrCopyTest {
         .containsExactly(planned.deliveredRecord());
   }
 
+  // The recorded copy holds no RPU, so its first picture cannot be converted: the attempt fails
+  // with the typed failure that moves the server to the copy with Dolby Vision stripped.
+  @Test
+  @DisplayName(
+      "Should fail the attempt with the typed conversion failure when a picture of a copy that"
+          + " converts profile 7 holds no RPU")
+  void shouldFailTheAttemptWithTheTypedConversionFailureWhenAPictureOfAConvertingCopyHoldsNoRpu()
+      throws Exception {
+    var job = copyJobBuilderFor(HEVC_COPY);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setOutputDynamicRange(pqWithDolbyVision())
+        .setDolbyVisionOutput(profile81Output())
+        .addBitstreamRewrites(
+            BitstreamRewrite.BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1)
+        .addBitstreamRewrites(BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD);
+    var launcher = ScriptedProcessLauncher.writing(HEVC_COPY.file());
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(
+              connection.events().stream()
+                  .filter(EstablishWorkerSessionRequest::hasJobAttemptFailed)
+                  .findFirst()
+                  .orElseThrow()
+                  .getJobAttemptFailed()
+                  .getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_DOLBY_VISION_CONVERSION_FAILED);
+    }
+  }
+
   static Stream<PlannedDolbyVision> dolbyVisionOutputs() {
     return Stream.of(
         PlannedDolbyVision.builder()
             .name("profile 8.1 under hvc1")
             .recording(HEVC_COPY)
             .range(pqWithDolbyVision())
-            .output(
-                DolbyVisionOutput.newBuilder()
-                    .setProfile(8)
-                    .setLevel(6)
-                    .setBaseLayerCompatibilityId(1)
-                    .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_HVC1)
-                    .build())
+            .output(profile81Output())
             .codecString(HEVC_COPY.videoCodecString())
             .sampleEntry("hvc1")
             .deliveredRecord("dvvC" + PROFILE_8_LEVEL_6_PQ_RECORD)
@@ -474,11 +504,30 @@ class TranscodeWorkerHdrCopyTest {
                         .setOutputDynamicRange(pq())
                         .addBitstreamRewrites(BitstreamRewrite.BITSTREAM_REWRITE_UNSPECIFIED))),
         Arguments.of(
-            "the profile 7 to 8.1 conversion",
+            "the profile 7 to 8.1 conversion without a Dolby Vision output",
             unary(
                 video ->
                     video
                         .setOutputDynamicRange(pq())
+                        .addBitstreamRewrites(
+                            BitstreamRewrite
+                                .BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1))),
+        Arguments.of(
+            "the profile 7 to 8.1 conversion without a normalized record",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(pqWithDolbyVision())
+                        .setDolbyVisionOutput(profile81Output())
+                        .addBitstreamRewrites(
+                            BitstreamRewrite
+                                .BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1))),
+        Arguments.of(
+            "the profile 7 to 8.1 conversion under dvh1",
+            unary(
+                video ->
+                    dolbyVisionOutput(UnaryOperator.identity())
+                        .apply(video)
                         .addBitstreamRewrites(
                             BitstreamRewrite
                                 .BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1))),
@@ -581,6 +630,17 @@ class TranscodeWorkerHdrCopyTest {
   private static VideoDynamicRange profile5() {
     return pqWithDolbyVision().toBuilder()
         .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+        .build();
+  }
+
+  // The profile 8.1 output at level 6 of a profile 8.1 copy, or of a converted single-track profile
+  // 7 copy, under hvc1.
+  private static DolbyVisionOutput profile81Output() {
+    return DolbyVisionOutput.newBuilder()
+        .setProfile(8)
+        .setLevel(6)
+        .setBaseLayerCompatibilityId(1)
+        .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_HVC1)
         .build();
   }
 

@@ -65,14 +65,15 @@ final class PlannedCopies {
               + range.compatibleBase());
     }
 
-    requireRewritesThatFit(range, rewrites, video.hasDolbyVisionOutput());
+    var dolbyVision =
+        video.hasDolbyVisionOutput()
+            ? Optional.of(dolbyVisionOutput(video.getDolbyVisionOutput(), range))
+            : Optional.<PlannedCopyOutput.DolbyVisionOutput>empty();
+    requireRewritesThatFit(range, rewrites, dolbyVision);
     return Optional.of(
         PlannedCopyOutput.builder()
             .dynamicRange(range)
-            .dolbyVision(
-                video.hasDolbyVisionOutput()
-                    ? Optional.of(dolbyVisionOutput(video.getDolbyVisionOutput(), range))
-                    : Optional.empty())
+            .dolbyVision(dolbyVision)
             .masteringDisplay(
                 video.hasMasteringDisplay()
                     ? Optional.of(masteringDisplay(video.getMasteringDisplay()))
@@ -119,9 +120,12 @@ final class PlannedCopies {
   }
 
   // The planned range describes the output after the rewrites, so it keeps nothing that a rewrite
-  // strips, and only a planned Dolby Vision output names the record that the copy normalizes to.
+  // strips, only a planned Dolby Vision output names the record that the copy normalizes to, and a
+  // conversion to profile 8.1 writes RPUs that only that profile's normalized record describes.
   private static void requireRewritesThatFit(
-      VideoDynamicRange range, Set<BitstreamRewrite> rewrites, boolean plansDolbyVision) {
+      VideoDynamicRange range,
+      Set<BitstreamRewrite> rewrites,
+      Optional<PlannedCopyOutput.DolbyVisionOutput> dolbyVision) {
     if (rewrites.contains(BitstreamRewrite.STRIP_DOLBY_VISION)
         && range.dolbyVision() instanceof DolbyVision.Present) {
       throw new InvalidJobSpecificationException(
@@ -133,9 +137,17 @@ final class PlannedCopies {
       throw new InvalidJobSpecificationException("A copy that strips HDR10+ plans a range with it");
     }
 
-    if (rewrites.contains(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD) && !plansDolbyVision) {
+    if (rewrites.contains(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
+        && dolbyVision.isEmpty()) {
       throw new InvalidJobSpecificationException(
           "A copy normalizes its Dolby Vision record without a planned Dolby Vision output");
+    }
+
+    if (rewrites.contains(BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1)
+        && !(rewrites.contains(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
+            && dolbyVision.filter(PlannedCopyOutput.DolbyVisionOutput::isProfile81).isPresent())) {
+      throw new InvalidJobSpecificationException(
+          "A copy that converts profile 7 to profile 8.1 plans a normalized profile 8.1 output");
     }
   }
 

@@ -51,6 +51,12 @@ public enum ProducerFailure {
    */
   NOT_AN_AUDIO_STREAM,
   /**
+   * A copy that converts single-track Dolby Vision profile 7 to profile 8.1 met a picture whose RPU
+   * it cannot convert, so the producer delivered nothing more; every attempt with the same decision
+   * meets the same picture (streamarr/streamarr-server#651).
+   */
+  DOLBY_VISION_CONVERSION_FAILED,
+  /**
    * Reading FFmpeg's standard output failed, or the copy of the source did not reach the FFmpeg
    * that encodes it.
    */
@@ -80,6 +86,7 @@ public enum ProducerFailure {
       case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
       case SHORT_VIDEO_SAMPLE -> SHORT_VIDEO_SAMPLE;
       case OUTPUT_MISMATCH -> OUTPUT_MISMATCH;
+      case DOLBY_VISION_CONVERSION_FAILED -> DOLBY_VISION_CONVERSION_FAILED;
       case MULTIPLE_VIDEO_TRACKS, NO_SOUND_TRACK -> NOT_AN_AUDIO_STREAM;
       case UNSIZED_BOX,
           MALFORMED_BOX,
