@@ -23,6 +23,10 @@ public class FfmpegCommandBuilder {
   // packets until every stream has one or the held span exceeds this, which bounds how far the
   // output's audio trails its video when the input's does not.
   private static final String MAX_INTERLEAVE_DELTA_MICROSECONDS = "10000000";
+  // The second input of a held encode that encodes its audio, and its filter graph's outputs.
+  private static final int HELD_AUDIO_INPUT = 1;
+  private static final String HELD_VIDEO_LABEL = "[held_video]";
+  private static final String HELD_AUDIO_LABEL = "[held_audio]";
   // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final String PROFILE_OPTION = "-profile:v";
@@ -460,16 +464,79 @@ public class FfmpegCommandBuilder {
         .map(start -> start.minus(Duration.ofSeconds(request.targetSegmentDuration())));
   }
 
-  private void addSourceInputsAndStreamSelection(List<String> cmd, TranscodeRequest request) {
-    addSourceInput(cmd, request);
-    addStreamSelection(cmd, request.transcodeDecision());
-  }
-
   private void addSourceInput(List<String> cmd, TranscodeRequest request) {
     addSeekArgs(cmd, request);
     encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
         .ifPresent(options -> cmd.addAll(options.inputOptions()));
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
+  }
+
+  // tpad repeats the last picture once its input ends, and a demuxer ends every stream of its input
+  // only at the end of the whole file. Read from the input that also feeds the audio's decoder,
+  // filters and encoder, the video ended only once all of the audio after it had gone through them,
+  // so the first segment after the video's end waited for the whole audio after it. The held
+  // encode reads the encoded audio from a second input of the source instead, seeked as the first
+  // and placed on its timeline by -isync: the first input reaches the file's end at the demuxer's
+  // pace. Both inputs' filters run in one filter graph, which filters each output in turn from the
+  // one with the earliest time, so the held pictures do not run ahead of the audio. That graph maps
+  // the encode's outputs (addOneFilterGraphOfBothInputs).
+  private void addSourceInputsAndStreamSelection(List<String> cmd, TranscodeRequest request) {
+    addSourceInput(cmd, request);
+    if (readsAudioFromItsOwnInput(request, EncoderInput.SOURCE)) {
+      cmd.addAll(List.of("-isync", String.valueOf(EncoderInput.SOURCE.sourceInputIndex())));
+      addSourceInput(cmd, request);
+      return;
+    }
+
+    addStreamSelection(cmd, request.transcodeDecision());
+  }
+
+  // A named stream that the worker did not read as audio stays with the one input's optional
+  // map, so that the producer refuses the output without a sound track as the job's error.
+  private static boolean readsAudioFromItsOwnInput(TranscodeRequest request, EncoderInput input) {
+    var audio = request.transcodeDecision().audioDecision();
+    return input == EncoderInput.SOURCE
+        && holdsLastFrame(request)
+        && audio.mode() == AudioMode.TRANSCODE
+        && (!namesAudioStream(audio) || request.sourceAudio().isPresent());
+  }
+
+  // The encode's video and audio filters, as one filter graph of the two inputs, and the maps of
+  // its two outputs. The video's filters and the audio's, which may be a graph of their own whose
+  // one unlabelled input and output these labels name, leave the output's options for the graph.
+  private static void addOneFilterGraphOfBothInputs(List<String> cmd, TranscodeDecision decision) {
+    var video = takeOptionValue(cmd, "-vf").orElseThrow();
+    var audio = takeOptionValue(cmd, "-af").orElse("anull");
+    cmd.addAll(
+        List.of(
+            "-filter_complex",
+            "[0:"
+                + decision.videoDecision().streamIndex()
+                + "]"
+                + video
+                + HELD_VIDEO_LABEL
+                + ";["
+                + HELD_AUDIO_INPUT
+                + ":"
+                + decision.audioDecision().sourceStreamSpecifier()
+                + "]"
+                + audio
+                + HELD_AUDIO_LABEL,
+            "-map",
+            HELD_VIDEO_LABEL,
+            "-map",
+            HELD_AUDIO_LABEL));
+  }
+
+  private static Optional<String> takeOptionValue(List<String> cmd, String option) {
+    var index = cmd.indexOf(option);
+    if (index < 0) {
+      return Optional.empty();
+    }
+
+    var value = cmd.remove(index + 1);
+    cmd.remove(index);
+    return Optional.of(value);
   }
 
   private static void addSeekArgs(List<String> cmd, TranscodeRequest request) {
@@ -701,6 +768,9 @@ public class FfmpegCommandBuilder {
     cmd.addAll(hdrColourArgs(job));
     addScaleAndBitrateArgs(cmd, job, input);
     addAudioArgs(cmd, encodedAudio(decision.audioDecision(), input), job.request());
+    if (readsAudioFromItsOwnInput(job.request(), input)) {
+      addOneFilterGraphOfBothInputs(cmd, decision);
+    }
   }
 
   // FFmpeg's opus encoder is experimental, so the encode of the copy names libopus.

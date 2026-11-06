@@ -754,7 +754,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       }
 
       var shift = "round((" + lead + "+" + wholeFrames + "*(" + samplesPerFrame + "))/SR/TB)";
-      assertThat(audioFilter(cmd))
+      assertThat(heldAudioFilter(cmd))
           .isEqualTo(
               audioFilter(command(audio, source("dts", "5.1(side)")))
                   + ",asetpts='PTS+"
@@ -914,5 +914,15 @@ class FfmpegCommandBuilderAudioLayoutTest {
   private static String audioFilter(List<String> cmd) {
     assertThat(cmd).containsOnlyOnce("-af");
     return cmd.get(cmd.indexOf("-af") + 1);
+  }
+
+  // A held encode filters its audio from its second input, in one filter graph with its video.
+  private static String heldAudioFilter(List<String> cmd) {
+    assertThat(cmd).containsOnlyOnce("-filter_complex").doesNotContain("-af");
+    var graph = cmd.get(cmd.indexOf("-filter_complex") + 1);
+    var audio =
+        graph.substring(graph.indexOf("[held_video];[1:a:0]") + "[held_video];[1:a:0]".length());
+    assertThat(audio).endsWith("[held_audio]");
+    return audio.substring(0, audio.length() - "[held_audio]".length());
   }
 }

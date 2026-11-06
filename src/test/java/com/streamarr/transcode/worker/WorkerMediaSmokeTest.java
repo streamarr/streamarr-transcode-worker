@@ -273,6 +273,7 @@ class WorkerMediaSmokeTest {
   private static final Duration ONE_FRAME_AT_24_FPS = Duration.ofNanos(1_000_000_000L / 24 + 1);
   // 1,764 s of audio in 6 s segments after the same 64 s of video.
   private static final int LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT = 294;
+  private static final Duration HALF_OF_THE_LONG_AUDIO = Duration.ofSeconds(882);
   // The seekable sources' 6 s period at their 24 fps.
   private static final int FRAMES_IN_A_PERIOD = 144;
   // The longest frame among the audio codecs these tests encode: AC-3 and E-AC-3 code 1,536
@@ -6443,6 +6444,45 @@ class WorkerMediaSmokeTest {
                         VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT,
                         VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1)
                     .map(start -> Arguments.of(source.get()[0], source.get()[1], start)));
+  }
+
+  // The first segment after the video's end needs one period of held pictures and of audio, so it
+  // must not wait for the downmix of the 1,700 s of audio after it. The output end that the worker
+  // reports before that segment's upload shows how far past it FFmpeg had written the audio.
+  @Test
+  @DisplayName(
+      "Should upload the first segment after the video's end before encoding the audio after it"
+          + " when an encode holds the last frame and downmixes half an hour of 5.1 audio")
+  void shouldUploadTheFirstSegmentAfterTheVideosEndBeforeEncodingTheAudioAfterItWhenAHoldRuns()
+      throws Exception {
+    var source = longAudioAfterVideoEndSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    var firstSegmentAfterTheVideo = VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1;
+    job.getExecutionBuilder().setStartSequenceNumber(firstSegmentAfterTheVideo);
+    var uploadStartedAt = new ConcurrentHashMap<String, Long>();
+
+    var completion =
+        executeToCompletion(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            job.build(),
+            name -> uploadStartedAt.putIfAbsent(name, System.nanoTime()));
+
+    var segment = segmentName(firstSegmentAfterTheVideo);
+    assertThat(completion.uploads().names()).contains(segment);
+    assertThat(
+            completion.progress().stream()
+                .filter(report -> report.receivedAtNanos() < uploadStartedAt.get(segment))
+                .map(TimedProgress::outputEnd))
+        .as(
+            "the output ends reported before %s's upload started; the audio ends at 1,764 s",
+            segment)
+        .allMatch(end -> end.compareTo(HALF_OF_THE_LONG_AUDIO) < 0);
   }
 
   @Test
