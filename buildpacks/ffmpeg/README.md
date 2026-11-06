@@ -93,6 +93,13 @@ pull request (see [Renovate synchronization](#renovate-synchronization)), or wit
 `bin/review-release --approved` for a change Renovate did not propose. Never edit
 `notices/manifest` by hand.
 
+Every fork release builds new archives, and a recipe that clones without a revision can
+resolve to another source each time, so the build-source records in `SOURCE.txt` never carry
+forward. Before binding, replace that section's records with each locked archive's
+`BUILD-SOURCES.txt` (`tar -xJOf <archive> BUILD-SOURCES.txt`) under its `SHA-256` line.
+`review-release` asks for a person, and `--approved` refuses, while `SOURCE.txt` lacks either
+locked archive's digest.
+
 The quilt patches under `debian/patches/`, upstream's and Streamarr's alike, are judged by what they do, not by their
 path: upstream's Linux build applies them to the FFmpeg tree before compiling, so a patch can
 edit `configure`, a licence file, or add third-party source. For every added, modified,

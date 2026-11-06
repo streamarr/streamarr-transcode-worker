@@ -250,6 +250,18 @@ whole_value() {
   printf '%s([^0-9A-Za-z]|$)' "${1//./\\.}"
 }
 
+# SOURCE.txt carries each pinned archive's build-source record under its digest (ADR 0057). The
+# fork builds new archives for every release, and their unpinned clones can resolve to other
+# revisions, so an offer that names no locked digest describes other binaries.
+offer_names_locked_archives() {
+  local architecture
+  for architecture in amd64 arm64; do
+    if ! grep -Fxq "SHA-256 $(ffmpeg_lock_value "${lock_file}" "${architecture}_sha256")" "$1"; then
+      return 1
+    fi
+  done
+}
+
 replace_in_file() {
   local file="$1"
   local reviewed="$2"
@@ -297,6 +309,11 @@ if [[ "${approved}" == true ]]; then
     || ! grep -Eq "$(whole_value "releases/tag/${approved_release}")" "${source_access}" \
     || ! grep -Fq "${approved_revision}" "${source_access}"; then
     echo "Reviewed inputs do not describe the locked release; regenerate them before approving" >&2
+    exit 1
+  fi
+  if ! offer_names_locked_archives "${source_access}"; then
+    echo "SOURCE.txt has no build-source record of a locked archive;" \
+      "add each locked archive's BUILD-SOURCES.txt under its digest before approving" >&2
     exit 1
   fi
   write_manifest "${manifest}.approved"
@@ -390,6 +407,9 @@ if ! jq -e --arg revision "${locked_revision}" \
   echo "Reviewed inputs do not reference the reviewed release as expected;" \
     "regenerate them and bind with an approving review" >&2
   exit 1
+fi
+if ! offer_names_locked_archives "${temporary_directory}/SOURCE.txt"; then
+  require_human_review "SOURCE.txt has no build-source record of a locked archive"
 fi
 # A carry-forward inherits a review, so it may move only the release tag and source revision
 # inside the reviewed inputs: undoing that substitution must reproduce the content the manifest
