@@ -148,17 +148,19 @@ final class SegmentUploadLimit {
       }
     }
 
-    // Holds the limit's monitor, with this turn in the queue.
+    // With this turn in the queue.
     private void awaitCallInQueue(long deadline) throws InterruptedException, TimeoutException {
-      try {
-        awaitAdmission(deadline);
-      } finally {
-        queue.remove(this);
-        SegmentUploadLimit.this.notifyAll();
-      }
+      synchronized (SegmentUploadLimit.this) {
+        try {
+          awaitAdmission(deadline);
+        } finally {
+          queue.remove(this);
+          SegmentUploadLimit.this.notifyAll();
+        }
 
-      openCalls++;
-      holdsCall = true;
+        openCalls++;
+        holdsCall = true;
+      }
     }
 
     // Holds the limit's monitor.
