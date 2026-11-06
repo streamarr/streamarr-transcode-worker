@@ -1267,6 +1267,34 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should stop counting a held producer as stopped when its FFmpeg exits while the sink holds a"
+          + " segment")
+  void shouldStopCountingAHeldProducerAsStoppedWhenItsFfmpegExitsWhileTheSinkHoldsASegment() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var pauses = new ProducerPauses();
+    sink.holding(1);
+    var producer = producerFor(process, recording).pauses(pauses).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+    assertThat(pauses.stoppedProducers()).isOne();
+
+    process.exit();
+
+    awaiting().until(() -> pauses.stoppedProducers() == 0);
+    producer.releaseHeldFfmpeg();
+    assertThat(pauses.stoppedProducers()).isZero();
+    sink.release();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+  }
+
+  @Test
+  @DisplayName(
       "Should pause FFmpeg for a seek right after the worker releases a hold-back, with no rest"
           + " after the hold")
   void shouldPauseFfmpegForASeekRightAfterTheWorkerReleasesAHoldBack() {
