@@ -172,6 +172,27 @@ class TranscodeWorkerSeekYieldTest {
   }
 
   @Test
+  @DisplayName(
+      "Should leave the paused job attempts alone when a yield arrives on an earlier session's"
+          + " connection")
+  void shouldLeaveThePausedJobAttemptsAloneWhenAYieldArrivesOnAnEarlierSessionsConnection()
+      throws Exception {
+    try (var worker = worker()) {
+      worker.start("localhost", 1);
+      var earlier = runtime.connection();
+      worker.close();
+      var connection = startThreeAttempts(worker);
+      yieldToSeek(connection, LONG_HOLD, steady);
+      promptly().until(() -> pausedAttempts().equals(List.of(steady)));
+
+      yieldToSeek(earlier, LONG_HOLD);
+
+      assertThat(pausedAttempts()).containsExactly(steady);
+      exitAll();
+    }
+  }
+
+  @Test
   @DisplayName("Should pause nothing when the yield carries no positive hold limit")
   void shouldPauseNothingWhenTheYieldCarriesNoPositiveHoldLimit() throws Exception {
     try (var worker = worker()) {

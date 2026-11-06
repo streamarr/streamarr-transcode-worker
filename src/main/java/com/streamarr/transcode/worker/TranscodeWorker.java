@@ -265,7 +265,7 @@ public final class TranscodeWorker implements AutoCloseable {
         JOB_ATTEMPT_PROGRESS_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
     disconnected = new CompletableFuture<>();
-    var observer = new WorkerResponseObserver(accepted, probeSession);
+    var observer = new WorkerResponseObserver(accepted, probeSession, seekYields);
     responseObserver.set(observer);
     // Waiting for the channel to become ready lets the worker start before the server listens.
     requests =
@@ -1085,8 +1085,9 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
-  private synchronized void yieldToSeek(YieldToSeekCommand command) {
-    if (!command.getTarget().equals(identity()) || seekYields == null) {
+  private synchronized void yieldToSeek(YieldToSeekCommand command, SeekYields sessionYields) {
+    // A yield from a session that close() ended must not touch the session that replaced it.
+    if (!command.getTarget().equals(identity()) || seekYields != sessionYields) {
       return;
     }
 
@@ -1341,12 +1342,16 @@ public final class TranscodeWorker implements AutoCloseable {
     private final CompletableFuture<WorkerSessionAccepted> accepted;
     private volatile boolean sessionAccepted;
     private final WorkerProbeSession sessionProbes;
+    private final SeekYields sessionYields;
     private final CompletableFuture<Void> sessionDisconnected = disconnected;
 
     private WorkerResponseObserver(
-        CompletableFuture<WorkerSessionAccepted> accepted, WorkerProbeSession sessionProbes) {
+        CompletableFuture<WorkerSessionAccepted> accepted,
+        WorkerProbeSession sessionProbes,
+        SeekYields sessionYields) {
       this.accepted = accepted;
       this.sessionProbes = sessionProbes;
+      this.sessionYields = sessionYields;
     }
 
     @Override
@@ -1380,7 +1385,7 @@ public final class TranscodeWorker implements AutoCloseable {
       }
 
       if (response.hasYieldToSeek()) {
-        yieldToSeek(response.getYieldToSeek());
+        yieldToSeek(response.getYieldToSeek(), sessionYields);
         return;
       }
 
