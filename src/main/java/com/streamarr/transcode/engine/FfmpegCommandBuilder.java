@@ -289,13 +289,20 @@ public class FfmpegCommandBuilder {
   // The FFmpeg that encodes copies the chosen source streams' packets, from the keyframe its seek
   // reads on, to a framecrc on its error output, its second output: the worker reads there where
   // each stream's last source sample ends. FFmpeg writes each record at once, so that no log line
-  // splits it.
+  // splits it. Audio that the job encodes is also decoded, by the decoder that the encode uses, to
+  // PCM as the framecrc's third stream: a decoder discards trailing padding that only side data
+  // records, which no packet's duration shows.
   private static void addSourceStreamsOutput(
       List<String> cmd, TranscodeDecision decision, EncoderInput input) {
     var source = input.sourceInputIndex();
+    var audio = decision.audioDecision();
     cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
-    addAudioStreamSelection(cmd, decision.audioDecision(), source);
+    addAudioStreamSelection(cmd, audio, source);
     cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
+    if (audio.mode() == AudioMode.TRANSCODE) {
+      cmd.addAll(List.of("-map", audioMap(audio, source), "-c:2", "pcm_f32le"));
+    }
+
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
   }

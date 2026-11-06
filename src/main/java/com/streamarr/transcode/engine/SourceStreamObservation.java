@@ -3,12 +3,18 @@ package com.streamarr.transcode.engine;
 import java.math.BigInteger;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Function;
+import java.util.function.IntPredicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * What FFmpeg's error output shows of the chosen source streams. The FFmpeg that reads the source
@@ -21,12 +27,19 @@ import java.util.regex.Pattern;
  * before the stream mapping and the framecrc only after it. That metadata can print the mapping's
  * header itself, so each header discards what was read before it, and the last one, FFmpeg's own,
  * leaves only what follows the real mapping.
+ *
+ * <p>When the command encodes the audio, the framecrc also carries that stream decoded to PCM, and
+ * the stream ends where the earlier of its packets and its decoded samples end. A decoder discards
+ * trailing padding that only side data records, as Matroska's DiscardPadding, while a packet's
+ * duration keeps it; an MP4 edit list shortens the last packet's duration, while the decoder still
+ * writes the whole frame.
  */
 final class SourceStreamObservation {
 
   private static final Pattern TIME_BASE = Pattern.compile("#tb (\\d+): (\\d+)/(\\d+)$");
-  // The framecrc carries at most the video and one audio stream, so a record's stream index is the
-  // one digit before its first comma, even when a log line that ends in digits runs into it.
+  // The framecrc carries at most the video, one audio stream and that stream decoded, so a record's
+  // stream index is the one digit before its first comma, even when a log line that ends in digits
+  // runs into it.
   private static final Pattern RECORD =
       Pattern.compile(
           "(\\d), *(-?\\d+), *(-?\\d+), *(-?\\d+), *\\d+, 0x[0-9a-f]{8}"
@@ -34,7 +47,7 @@ final class SourceStreamObservation {
   // What framecrc prints for a time the packet does not carry: FFmpeg's AV_NOPTS_VALUE.
   private static final long NO_TIME = Long.MIN_VALUE;
   private static final Pattern MAPPING =
-      Pattern.compile("Stream #\\d{1,9}:(\\d{1,9}) -> #(\\d{1,9}):(\\d{1,9})\\b");
+      Pattern.compile("Stream #\\d{1,9}:(\\d{1,9}) -> #(\\d{1,9}):(\\d{1,9})\\b( \\(copy\\))?");
   private static final int KEYFRAME = 0x1;
   // AV_PKT_FLAG_DISCARD: the demuxer marks a packet that no decoder presents, as an MP4 edit list
   // cuts it away.
@@ -46,6 +59,7 @@ final class SourceStreamObservation {
   private final Map<Integer, TimeBase> timeBases = new HashMap<>();
   private final Map<Integer, Integer> sourceIndexes = new HashMap<>();
   private final Map<Integer, Packets> packets = new HashMap<>();
+  private final Set<Integer> decodedStreams = new HashSet<>();
   private boolean mappingStarted;
 
   /**
@@ -57,6 +71,7 @@ final class SourceStreamObservation {
       timeBases.clear();
       sourceIndexes.clear();
       packets.clear();
+      decodedStreams.clear();
       mappingStarted = true;
       return false;
     }
@@ -91,8 +106,24 @@ final class SourceStreamObservation {
    * them.
    */
   synchronized List<ObservedSourceStream> streams() {
+    var decoded =
+        observedStreams(decodedStreams::contains)
+            .collect(
+                Collectors.toMap(
+                    ObservedSourceStream::sourceIndex, Function.identity(), (first, _) -> first));
+    return observedStreams(stream -> !decodedStreams.contains(stream))
+        .map(
+            copied ->
+                Optional.ofNullable(decoded.get(copied.sourceIndex()))
+                    .map(samples -> endingWithDecodedSamples(copied, samples))
+                    .orElse(copied))
+        .toList();
+  }
+
+  private Stream<ObservedSourceStream> observedStreams(IntPredicate outputStream) {
     return new TreeMap<>(packets)
         .entrySet().stream()
+            .filter(entry -> outputStream.test(entry.getKey()))
             .filter(entry -> timeBases.containsKey(entry.getKey()))
             .filter(entry -> sourceIndexes.containsKey(entry.getKey()))
             .flatMap(
@@ -101,13 +132,37 @@ final class SourceStreamObservation {
                         sourceIndexes.get(entry.getKey()),
                         timeBases.get(entry.getKey()),
                         entry.getValue())
-                        .stream())
-            .toList();
+                        .stream());
   }
 
+  private static ObservedSourceStream endingWithDecodedSamples(
+      ObservedSourceStream copied, ObservedSourceStream decoded) {
+    return ObservedSourceStream.builder()
+        .sourceIndex(copied.sourceIndex())
+        .lastStart(earlier(copied.lastStart(), decoded.lastStart()))
+        .end(earlier(copied.end(), decoded.end()))
+        .lastKeyframeStart(copied.lastKeyframeStart())
+        .build();
+  }
+
+  private static Duration earlier(Duration first, Duration second) {
+    if (second.compareTo(first) < 0) {
+      return second;
+    }
+
+    return first;
+  }
+
+  // A mapping that FFmpeg does not mark as a copy decodes its stream.
   private void readMapping(Matcher mapping) {
-    if (Integer.parseInt(mapping.group(2)) == SOURCE_STREAMS_OUTPUT) {
-      sourceIndexes.put(Integer.parseInt(mapping.group(3)), Integer.parseInt(mapping.group(1)));
+    if (Integer.parseInt(mapping.group(2)) != SOURCE_STREAMS_OUTPUT) {
+      return;
+    }
+
+    var outputStream = Integer.parseInt(mapping.group(3));
+    sourceIndexes.put(outputStream, Integer.parseInt(mapping.group(1)));
+    if (mapping.group(4) == null) {
+      decodedStreams.add(outputStream);
     }
   }
 

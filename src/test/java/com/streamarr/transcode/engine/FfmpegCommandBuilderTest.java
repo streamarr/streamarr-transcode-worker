@@ -1839,10 +1839,10 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
+  @CsvSource({"REMUX, copy", "VIDEO_TRANSCODE, libx264"})
   @DisplayName(
       "Should copy the chosen streams' packets, from the keyframe the seek reads, to a framecrc on"
-          + " standard error as the second output when building a command")
+          + " standard error as the second output when building a command that copies the audio")
   void shouldCopyTheChosenStreamsPacketsToAFramecrcOnStandardErrorAsTheSecondOutput(
       TranscodeMode mode, String videoEncoder) {
     var cmd = command(request(mode).startSequenceNumber(5).build(), videoEncoder);
@@ -1857,6 +1857,42 @@ class FfmpegCommandBuilderTest {
             "copy",
             "-copypriorss",
             "1",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "-flush_packets",
+            "1",
+            "pipe:2");
+  }
+
+  // The decoder applies trailing padding that only side data records, as Matroska's DiscardPadding,
+  // so the worker reads where the decoded audio ends as well as where its packets end.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"AUDIO_TRANSCODE, copy", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should also decode the chosen audio stream to PCM as the framecrc's third stream when"
+          + " building a command that encodes the audio")
+  void shouldAlsoDecodeTheChosenAudioStreamToPcmAsTheFramecrcsThirdStreamWhenItEncodesTheAudio(
+      TranscodeMode mode, String videoEncoder) {
+    var cmd = command(request(mode).startSequenceNumber(5).build(), videoEncoder);
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .containsExactly(
+            "-map",
+            "0:0",
+            "-map",
+            "0:a:0",
+            "-c",
+            "copy",
+            "-copypriorss",
+            "1",
+            "-map",
+            "0:a:0",
+            "-c:2",
+            "pcm_f32le",
             "-map_metadata",
             "-1",
             "-map_chapters",

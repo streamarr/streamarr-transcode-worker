@@ -40,6 +40,25 @@ class SourceStreamObservationTest {
       #channel_layout_name 1: stereo
       """;
 
+  // The mapping of a command that copies the video and encodes the audio, whose framecrc copies
+  // both streams and decodes the audio as its third stream.
+  private static final String DECODED_AUDIO_MAPPING =
+      """
+      Stream mapping:
+        Stream #0:0 -> #0:0 (copy)
+        Stream #0:1 -> #0:1 (opus (native) -> aac (native))
+        Stream #0:0 -> #1:0 (copy)
+        Stream #0:1 -> #1:1 (copy)
+        Stream #0:1 -> #1:2 (opus (native) -> pcm_f32le (native))
+      """;
+
+  private static final String DECODED_AUDIO_HEADER =
+      """
+      #tb 0: 1/1000
+      #tb 1: 1/1000
+      #tb 2: 1/48000
+      """;
+
   private final SourceStreamObservation observation = new SourceStreamObservation();
 
   @Test
@@ -73,6 +92,67 @@ class SourceStreamObservationTest {
                 .lastStart(Duration.ofNanos(21_333_333))
                 .end(Duration.ofNanos(32_000_000))
                 .lastKeyframeStart(Optional.of(Duration.ofNanos(21_333_333)))
+                .build());
+  }
+
+  // A command that encodes the audio also decodes it to PCM as the framecrc's third stream. The
+  // last Opus packet of a Matroska source lasts its whole 20 ms frame, and its DiscardPadding
+  // reaches FFmpeg as side data that the decoder applies: 12 of the frame's 960 samples are the
+  // source's.
+  @Test
+  @DisplayName(
+      "Should end a stream where its decoded samples end when its decoder discards trailing"
+          + " padding that its last packet's duration still covers")
+  void shouldEndAStreamWhereItsDecodedSamplesEndWhenItsDecoderDiscardsTrailingPadding() {
+    readAll(
+        DECODED_AUDIO_MAPPING
+            + DECODED_AUDIO_HEADER
+            + """
+            0,    11958,      11958,       42,      400, 0x0a1b2c3d
+            1,    11974,      11974,       20,      384, 0x0a1b2c3d
+            2,   574728,     574728,      960,     7680, 0x0a1b2c3d
+            1,    11994,      11994,       20,      384, 0x0a1b2c3d, S=1, Skip Samples,       10, 0x044700b7
+            2,   575688,     575688,       12,       96, 0x0a1b2c3d
+            """);
+
+    assertThat(observation.streams())
+        .containsExactly(
+            ObservedSourceStream.builder()
+                .sourceIndex(0)
+                .lastStart(Duration.ofMillis(11_958))
+                .end(Duration.ofMillis(12_000))
+                .lastKeyframeStart(Optional.of(Duration.ofMillis(11_958)))
+                .build(),
+            ObservedSourceStream.builder()
+                .sourceIndex(1)
+                .lastStart(Duration.ofNanos(11_993_500_000L))
+                .end(Duration.ofNanos(11_993_750_000L))
+                .lastKeyframeStart(Optional.of(Duration.ofMillis(11_994)))
+                .build());
+  }
+
+  // An MP4 edit list shortens the last packet's duration to the source's samples, but the decoder
+  // still writes the packet's whole frame.
+  @Test
+  @DisplayName(
+      "Should end a stream where its packets end when an edit list trims its last packet's"
+          + " duration but its decoder writes the whole frame")
+  void shouldEndAStreamWhereItsPacketsEndWhenAnEditListTrimsTheLastPacketButNotTheDecoder() {
+    readAll(
+        DECODED_AUDIO_MAPPING
+            + DECODED_AUDIO_HEADER.replace("#tb 1: 1/1000", "#tb 1: 1/48000")
+            + """
+            1,   575488,     575488,      272,        7, 0x0a1b2c3d
+            2,   575488,     575488,     1024,     8192, 0x0a1b2c3d
+            """);
+
+    assertThat(observation.streams())
+        .containsExactly(
+            ObservedSourceStream.builder()
+                .sourceIndex(1)
+                .lastStart(Duration.ofNanos(11_989_333_333L))
+                .end(Duration.ofMillis(11_995))
+                .lastKeyframeStart(Optional.of(Duration.ofNanos(11_989_333_333L)))
                 .build());
   }
 
