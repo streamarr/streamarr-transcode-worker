@@ -6318,9 +6318,8 @@ class WorkerMediaSmokeTest {
         .isBetween(Duration.ofSeconds(20), Duration.ofSeconds(20).plus(ONE_FRAME_AT_24_FPS));
   }
 
-  // 20 s of H.264 at 64x36 and 24 fps with IDR keyframes at 0, 2, 4, 6, 8 and 10 s only, and 40 s
-  // of
-  // a 440 Hz tone, in MPEG-TS, which carries no index.
+  // 20 s of H.264 at 64x36 and 24 fps with IDR keyframes at 0, 2, 4, 6, 8 and 10 s only, and a
+  // 440 Hz tone for 40 s, in MPEG-TS, which carries no index.
   private static synchronized Path longFinalGopTransportStreamSource() throws Exception {
     var source = seekableSources.resolve("long-final-gop.ts");
     if (!generatedSeekableSources.contains(source)) {

@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.function.LongConsumer;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.Builder;
@@ -47,24 +48,31 @@ final class KeyframeScan {
 
   /** The first keyframe that presents in the interval; FFmpeg stops reading once it finds one. */
   Optional<Keyframe> firstKeyframe(Duration from, Duration until) throws InterruptedException {
-    return read(from, until, 1).stream().findFirst();
+    var interval = new Interval(from, until);
+    return read(interval, interval::presents, 1).stream().findFirst();
   }
 
-  /** Every keyframe that presents in the interval, in decode order. */
+  /**
+   * Every keyframe that decodes in the interval, in decode order; from zero, every keyframe that
+   * decodes before the interval's end. FFmpeg's seek into an MPEG-TS source lands on decode times
+   * and its duration ends at one, so a keyframe that presents in one interval and decodes in the
+   * interval before it reaches only the earlier interval's scan.
+   */
   List<Keyframe> keyframes(Duration from, Duration until) throws InterruptedException {
-    return read(from, until, Integer.MAX_VALUE);
+    var interval = new Interval(from, until);
+    return read(interval, interval::decodes, Integer.MAX_VALUE);
   }
 
   // The scan runs on a thread of its own, so an interrupt ends the wait at once; the forcible end
   // of FFmpeg then ends the read.
-  private List<Keyframe> read(Duration from, Duration until, int limit)
+  private List<Keyframe> read(Interval interval, Predicate<Keyframe> inside, int limit)
       throws InterruptedException {
     var command =
         commandBuilder.buildKeyframeScanCommand(
             request.sourcePath(),
             request.transcodeDecision().videoDecision().streamIndex(),
-            from,
-            until.minus(from));
+            interval.from(),
+            interval.until().minus(interval.from()));
     Process process;
     try {
       process = launcher.launch(command, request.attemptId());
@@ -72,7 +80,7 @@ final class KeyframeScan {
       throw new TranscodeException("FFmpeg could not start a keyframe scan", e);
     }
 
-    var reading = new FutureTask<>(() -> readKeyframes(process, new Interval(from, until), limit));
+    var reading = new FutureTask<>(() -> readKeyframes(process, inside, limit));
     Thread.ofVirtual().name("keyframe-scan-" + request.attemptId()).start(reading);
     try {
       return reading.get();
@@ -83,7 +91,7 @@ final class KeyframeScan {
     }
   }
 
-  private List<Keyframe> readKeyframes(Process process, Interval interval, int limit)
+  private List<Keyframe> readKeyframes(Process process, Predicate<Keyframe> inside, int limit)
       throws IOException, InterruptedException {
     var keyframes = new ArrayList<Keyframe>();
     var timeBase = Optional.<TimeBase>empty();
@@ -101,7 +109,7 @@ final class KeyframeScan {
           continue;
         }
 
-        var keyframe = readRecord(line, timeBase).filter(interval::presents);
+        var keyframe = readRecord(line, timeBase).filter(inside);
         keyframe.ifPresent(keyframes::add);
         if (keyframes.size() == limit) {
           return keyframes;
@@ -170,6 +178,11 @@ final class KeyframeScan {
     boolean presents(Keyframe keyframe) {
       var time = keyframe.presentationTime();
       return time.compareTo(from) >= 0 && time.compareTo(until) < 0;
+    }
+
+    boolean decodes(Keyframe keyframe) {
+      var time = keyframe.decodeTime();
+      return (from.isZero() || time.compareTo(from) >= 0) && time.compareTo(until) < 0;
     }
   }
 }

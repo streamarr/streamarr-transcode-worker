@@ -102,6 +102,26 @@ class HeldPictureReadPositionTest {
         .containsExactly(interval(14, 24), interval(4, 14), interval(0, 4));
   }
 
+  // The last keyframe presents at 10 s, where the second interval starts, and decodes 83 ms before,
+  // inside the third interval: the scans cut where packets decode.
+  @Test
+  @DisplayName(
+      "Should find the video's last keyframe in the interval where it decodes when it presents in"
+          + " the interval after it")
+  void shouldFindTheLastKeyframeInTheIntervalWhereItDecodesWhenItPresentsInTheIntervalAfterIt()
+      throws Exception {
+    var source =
+        new ScriptedKeyframeSource(ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
+    var engine = engineReading(source);
+
+    var readPosition = engine.heldPictureReadPosition(heldRequest(14, 18), bytesRead::addAndGet);
+
+    assertThat(readPosition)
+        .contains(Duration.ofSeconds(8).minus(ScriptedKeyframeSource.REORDER_DELAY));
+    assertThat(source.scannedIntervals())
+        .containsExactly(interval(14, 18), interval(10, 14), interval(2, 10));
+  }
+
   @Test
   @DisplayName(
       "Should read from the video's first keyframe when no keyframe lies 0.5 s before its last")

@@ -12,7 +12,9 @@ import java.util.stream.IntStream;
  * An index-less source, standing in for FFmpeg's keyframe scans of it. Its video has a picture
  * every 250 ms up to its end, keyframes at the given presentation times, each decoded 83 ms before
  * it presents, and an audio packet every 250 ms. Each scan writes the framecrc of the packets that
- * present inside the interval that its command's seek and duration name, and exits cleanly.
+ * decode inside the interval that its command's seek and duration name, as FFmpeg's scan of an
+ * MPEG-TS source does: the seek lands on the packets' decode times, and the duration ends at a
+ * decode time. A scan without a seek reads every packet that decodes before its end.
  */
 public final class ScriptedKeyframeSource {
 
@@ -47,7 +49,8 @@ public final class ScriptedKeyframeSource {
 
   /** The framecrc that a scan with the command writes. */
   public synchronized byte[] framecrcOf(List<String> command) {
-    var from = argumentAfter(command, "-ss").orElse(Duration.ZERO);
+    var seek = argumentAfter(command, "-ss");
+    var from = seek.orElse(Duration.ZERO);
     var until = from.plus(argumentAfter(command, "-t").orElseThrow());
     scanned.add(List.of(from, until));
     var framecrc = new StringBuilder("#tb 0: 1/1000\n#tb 1: 1/1000\n");
@@ -59,7 +62,7 @@ public final class ScriptedKeyframeSource {
     pictures.stream()
         .distinct()
         .sorted()
-        .filter(time -> !time.minus(from).isNegative() && time.compareTo(until) < 0)
+        .filter(time -> decodesInside(time.minus(REORDER_DELAY), seek, until))
         .forEach(time -> framecrc.append(videoRecord(time)));
     for (var millis = from.toMillis(); millis < until.toMillis(); millis += PACKET_MILLIS) {
       framecrc.append(
@@ -91,6 +94,12 @@ public final class ScriptedKeyframeSource {
             PACKET_MILLIS,
             VIDEO_PACKET_BYTES,
             flags);
+  }
+
+  private static boolean decodesInside(
+      Duration decodeTime, Optional<Duration> seek, Duration until) {
+    return decodeTime.compareTo(until) < 0
+        && seek.map(from -> decodeTime.compareTo(from) >= 0).orElse(true);
   }
 
   private static Optional<Duration> argumentAfter(List<String> command, String option) {
