@@ -25,8 +25,10 @@ class MediaTimeTest {
     var avi = new MediaTime(340, AVI);
     var mpegTs = new MediaTime(1_276_275, MPEG_TS);
 
-    assertThat(avi).isEqualTo(mpegTs).hasSameHashCodeAs(mpegTs);
-    assertThat(avi).isNotEqualTo(new MediaTime(1_276_276, MPEG_TS));
+    assertThat(avi)
+        .isEqualTo(mpegTs)
+        .hasSameHashCodeAs(mpegTs)
+        .isNotEqualTo(new MediaTime(1_276_276, MPEG_TS));
   }
 
   @Test
@@ -34,8 +36,9 @@ class MediaTimeTest {
   void shouldOrderMediaTimesByTheInstantsTheyNameWhenTheirTimeBasesDiffer() {
     var start = new MediaTime(315_001, MPEG_TS);
 
-    assertThat(start).isGreaterThan(MediaTime.of(Duration.ofNanos(3_500_011_111L)));
-    assertThat(start).isLessThan(MediaTime.of(Duration.ofNanos(3_500_011_112L)));
+    assertThat(start)
+        .isGreaterThan(MediaTime.of(Duration.ofNanos(3_500_011_111L)))
+        .isLessThan(MediaTime.of(Duration.ofNanos(3_500_011_112L)));
   }
 
   @Test

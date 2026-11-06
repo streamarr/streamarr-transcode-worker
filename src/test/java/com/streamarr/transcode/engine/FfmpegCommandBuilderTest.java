@@ -2054,7 +2054,7 @@ class FfmpegCommandBuilderTest {
 
     var cmd = command(request, "copy");
 
-    assertThat(cmd).doesNotContain("-ss");
+    assertThat(cmd).isNotEmpty().doesNotContain("-ss");
   }
 
   @Test

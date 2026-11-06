@@ -7532,9 +7532,9 @@ class WorkerMediaSmokeTest {
       assertThat(encodedStart)
           .as("encoded segment %d opens on the first output frame at or after its start", number)
           .isEqualTo(start.ceilingIn(frame));
-      assertThat(encodedStart.minus(copiedStart).compareTo(frame))
+      assertThat(encodedStart.minus(copiedStart))
           .as("encoded segment %d starts less than one output frame after the copied one", number)
-          .isNegative();
+          .isLessThan(frame);
     }
   }
 
