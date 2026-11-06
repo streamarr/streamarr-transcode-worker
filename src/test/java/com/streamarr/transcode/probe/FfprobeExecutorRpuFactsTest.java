@@ -160,6 +160,18 @@ class FfprobeExecutorRpuFactsTest {
                 .build()
                 .hevcNalUnit()),
         Named.of(
+            "eight static extension blocks, one more than FFmpeg holds",
+            withBlocks(level6.toBuilder(), 7, new ExtensionBlock(255, zeros(6))).hevcNalUnit()),
+        Named.of(
+            "26 dynamic extension blocks, one more than FFmpeg holds",
+            withBlocks(level6.toBuilder(), 26, ExtensionBlock.level1()).hevcNalUnit()),
+        Named.of(
+            "NLQ in an RPU that FFmpeg takes for profile 5",
+            level6.toBuilder()
+                .header(level6.header().toBuilder().vdrRpuProfile(0).blVideoFullRange(true).build())
+                .build()
+                .hevcNalUnit()),
+        Named.of(
             "DM compression without a DM payload",
             level6.toBuilder()
                 .header(level6.header().toBuilder().dmCompression(1).build())
@@ -246,6 +258,39 @@ class FfprobeExecutorRpuFactsTest {
 
   private static List<Integer> zeros(int bytes) {
     return Collections.nCopies(bytes, 0);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("fullBlockArrays")
+  @DisplayName("Should parse an RPU when it holds as many extension blocks as FFmpeg holds")
+  void shouldParseAnRpuWhenItHoldsAsManyExtensionBlocksAsFfmpegHolds(RpuBits rpu) {
+    var present = dolbyVisionOf(rpu, rpu, rpu);
+
+    assertThat(present.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL);
+  }
+
+  static Stream<Named<RpuBits>> fullBlockArrays() {
+    var level6 =
+        RpuBits.profile7(Nlq.identity()).extensionBlock(ExtensionBlock.level6(1_000, 400)).build();
+    var compressed =
+        level6.toBuilder().header(level6.header().toBuilder().dmCompression(1).build());
+    return Stream.of(
+        Named.of(
+            "seven static blocks",
+            withBlocks(level6.toBuilder(), 6, new ExtensionBlock(255, zeros(6)))),
+        Named.of("25 dynamic blocks", withBlocks(level6.toBuilder(), 25, ExtensionBlock.level1())),
+        Named.of(
+            "eight static blocks in a compressed DM payload, where FFmpeg ignores them",
+            withBlocks(compressed, 7, new ExtensionBlock(255, zeros(6)))));
+  }
+
+  private static RpuBits withBlocks(RpuBits.RpuBitsBuilder rpu, int count, ExtensionBlock block) {
+    for (var added = 0; added < count; added++) {
+      rpu.extensionBlock(block);
+    }
+
+    return rpu.build();
   }
 
   @ParameterizedTest(name = "ms_weight {0}")

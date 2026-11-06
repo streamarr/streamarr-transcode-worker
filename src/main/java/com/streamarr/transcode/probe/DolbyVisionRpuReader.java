@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 
 /**
  * Walks a whole Dolby Vision RPU in the order that FFmpeg 8.1's RPU parser reads it, for the two
@@ -135,20 +136,23 @@ final class DolbyVisionRpuReader {
    */
   private static Optional<Optional<ContentLightLevel>> displayManagementLevel6(
       BitReader reader, Header header) {
-    var level6 = level6(reader, header);
+    var counts = new BlockCounts(header.displayManagementCompression() != 0);
+    var level6 = level6(reader, header, counts);
     if (level6.isPresent() && reader.bitsLeft() > TRAILER_BITS) {
-      skipExtensionBlocks(reader);
+      skipExtensionBlocks(reader, counts);
     }
 
     return level6;
   }
 
-  private static void skipExtensionBlocks(BitReader reader) {
+  private static void skipExtensionBlocks(BitReader reader, BlockCounts counts) {
     var blocks = reader.unsignedExpGolomb();
     reader.alignToByte();
     for (long block = 0; block < blocks; block++) {
       var length = reader.unsignedExpGolomb();
-      requireLength(SECOND_GROUP_BLOCK_BYTES, reader.bits(8), length);
+      var level = reader.bits(8);
+      counts.add(level);
+      requireLength(SECOND_GROUP_BLOCK_BYTES, level, length);
       reader.skip(length * 8);
     }
   }
@@ -323,7 +327,8 @@ final class DolbyVisionRpuReader {
    * The level 6 block among the first group of extension blocks of the DM payload: present or empty
    * inside the optional, and an empty outer optional when the payload's syntax breaks.
    */
-  private static Optional<Optional<ContentLightLevel>> level6(BitReader reader, Header header) {
+  private static Optional<Optional<ContentLightLevel>> level6(
+      BitReader reader, Header header, BlockCounts counts) {
     var affectedId = reader.unsignedExpGolomb();
     var currentId = reader.unsignedExpGolomb();
     if (affectedId > LARGEST_METADATA_ID || affectedId != currentId) {
@@ -341,6 +346,7 @@ final class DolbyVisionRpuReader {
     for (long block = 0; block < blocks; block++) {
       var length = reader.unsignedExpGolomb();
       var level = reader.bits(8);
+      counts.add(level);
       requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
       if (level == LEVEL_2) {
         requireValidMsWeight(reader);
@@ -389,8 +395,45 @@ final class DolbyVisionRpuReader {
   }
 
   /**
-   * A DM payload that FFmpeg rejects: an extension block shorter than its level's payload, or a
-   * value out of FFmpeg's range.
+   * The extension blocks of one RPU's two groups, which FFmpeg holds in arrays of 7 static and 25
+   * dynamic blocks. A compressed DM payload holds no static block there, as FFmpeg ignores them.
+   */
+  private static final class BlockCounts {
+    private static final Set<Long> STATIC_LEVELS = Set.of(6L, 10L, 32L, 254L, 255L);
+    private static final int LARGEST_STATIC_BLOCKS = 7;
+    private static final int LARGEST_DYNAMIC_BLOCKS = 25;
+
+    private final boolean isCompressed;
+    private int staticBlocks;
+    private int dynamicBlocks;
+
+    BlockCounts(boolean isCompressed) {
+      this.isCompressed = isCompressed;
+    }
+
+    void add(long level) {
+      if (!STATIC_LEVELS.contains(level)) {
+        dynamicBlocks++;
+        requireAtMost(dynamicBlocks, LARGEST_DYNAMIC_BLOCKS);
+        return;
+      }
+
+      if (!isCompressed) {
+        staticBlocks++;
+        requireAtMost(staticBlocks, LARGEST_STATIC_BLOCKS);
+      }
+    }
+
+    private static void requireAtMost(int blocks, int largest) {
+      if (blocks > largest) {
+        throw new MalformedRpuException();
+      }
+    }
+  }
+
+  /**
+   * A DM payload that FFmpeg rejects: more extension blocks than it holds, a block shorter than its
+   * level's payload, or a value out of FFmpeg's range.
    */
   private static final class MalformedRpuException extends RuntimeException {
     MalformedRpuException() {
@@ -422,7 +465,8 @@ final class DolbyVisionRpuReader {
       }
 
       var format = (int) reader.bits(11);
-      reader.bits(8);
+      var vdrRpuProfile = reader.bits(4);
+      reader.bits(4);
       if (!reader.flag()) {
         return Optional.empty();
       }
@@ -434,7 +478,8 @@ final class DolbyVisionRpuReader {
         return Optional.empty();
       }
 
-      reader.bits(3);
+      reader.bits(2);
+      var isBaseLayerFullRange = reader.flag();
       if ((format & FORMAT_WITHOUT_BIT_DEPTHS) != 0) {
         return Optional.empty();
       }
@@ -451,6 +496,13 @@ final class DolbyVisionRpuReader {
       reader.bits(1);
       var compression = (int) reader.bits(3);
       reader.bits(1);
+      var disableResidual = reader.flag();
+      // FFmpeg rejects NLQ in a profile 5 RPU. The walk sees no configuration record, so it takes
+      // the profile as FFmpeg guesses it without one: vdr_rpu_profile 0 with a full-range base.
+      if (vdrRpuProfile == 0 && isBaseLayerFullRange && !disableResidual) {
+        return Optional.empty();
+      }
+
       return Optional.of(
           new Header(
               coefficientDataType,
@@ -458,7 +510,7 @@ final class DolbyVisionRpuReader {
               (int) baseLayerBitDepthMinus8 + 8,
               (int) enhancementLayerBitDepthMinus8 + 8,
               compression,
-              reader.flag()));
+              disableResidual));
     }
 
     /**
