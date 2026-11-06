@@ -11,13 +11,16 @@ import java.util.Set;
 
 /**
  * Strips Dolby Vision, HDR10+ or both from a sample whose NAL units each follow a big-endian length
- * of the size that the sample entry's decoder configuration record declares (ISO/IEC 14496-15).
- * Stripping Dolby Vision removes every NAL unit that the syntax names as Dolby Vision: in HEVC,
- * type 62, which holds the RPUs, and type 63, which holds a single-track profile 7 enhancement
- * layer, whatever their layer and temporal id. Stripping HDR10+ removes each HDR10+ message from
- * the SEI NAL units and keeps their other messages; a NAL unit left with no message goes. Every
- * other NAL unit keeps its bytes, and so does an SEI NAL unit that holds no HDR10+ message. Bytes
- * after the last NAL unit too few to hold a length stay where they are.
+ * of the size that the sample entry's decoder configuration record declares (ISO/IEC 14496-15), or
+ * converts the sample's single-track Dolby Vision profile 7 to profile 8.1. Stripping Dolby Vision
+ * removes every NAL unit that the syntax names as Dolby Vision: in HEVC, type 62, which holds the
+ * RPUs, and type 63, which holds a single-track profile 7 enhancement layer, whatever their layer
+ * and temporal id. Converting profile 7 removes the same NAL units and writes the sample's one RPU,
+ * converted to profile 8.1, as the sample's last NAL unit (ADR 0036); a sample without exactly one
+ * RPU that converts fails the attempt as a conversion failure. Stripping HDR10+ removes each HDR10+
+ * message from the SEI NAL units and keeps their other messages; a NAL unit left with no message
+ * goes. Every other NAL unit keeps its bytes, and so does an SEI NAL unit that holds no HDR10+
+ * message. Bytes after the last NAL unit too few to hold a length stay where they are.
  */
 final class NalUnitSampleRewrite implements SampleRewrite {
 
@@ -32,6 +35,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   private final int lengthSize;
   private final boolean stripsDolbyVision;
   private final boolean stripsHdr10Plus;
+  private final boolean convertsProfile7;
 
   /**
    * @param lengthSize the bytes of each NAL unit's length: 1, 2 or 4
@@ -41,6 +45,8 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     this.lengthSize = lengthSize;
     this.stripsDolbyVision = rewrites.contains(BitstreamRewrite.STRIP_DOLBY_VISION);
     this.stripsHdr10Plus = rewrites.contains(BitstreamRewrite.STRIP_HDR10_PLUS);
+    this.convertsProfile7 =
+        rewrites.contains(BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1);
   }
 
   @Override
@@ -52,6 +58,11 @@ final class NalUnitSampleRewrite implements SampleRewrite {
       var rewritten = rewrittenUnit(unit);
       changed |= rewritten.filter(each -> each == unit).isEmpty();
       rewritten.ifPresent(kept::add);
+    }
+
+    if (convertsProfile7) {
+      kept.add(convertedRpuOf(units.nalUnits()));
+      changed = true;
     }
 
     if (!changed) {
@@ -84,14 +95,15 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     return new Units(units, sample.slice(position, sample.limit() - position));
   }
 
-  // The NAL unit as the copy keeps it: the same buffer, a rewritten SEI NAL unit, or nothing.
+  // The NAL unit as the copy keeps it: the same buffer, a rewritten SEI NAL unit, or nothing. A
+  // conversion removes the RPU here and writes its converted form last.
   private Optional<ByteBuffer> rewrittenUnit(ByteBuffer unit) {
     if (unit.remaining() < syntax.headerBytes()) {
       return Optional.of(unit);
     }
 
     var type = syntax.typeOf(unit.get(0));
-    if (stripsDolbyVision && syntax.isDolbyVision(type)) {
+    if ((stripsDolbyVision || convertsProfile7) && syntax.isDolbyVision(type)) {
       return Optional.empty();
     }
 
@@ -106,6 +118,34 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     }
 
     return Optional.of(unit);
+  }
+
+  // A Dolby Vision picture without an RPU can flash in a player, so the conversion neither drops a
+  // picture's RPU nor repeats an earlier one: a sample without exactly one RPU that converts fails
+  // the attempt.
+  private ByteBuffer convertedRpuOf(List<ByteBuffer> units) {
+    var rpus = units.stream().filter(this::isRpu).toList();
+    if (rpus.size() != 1) {
+      throw conversionFailed(
+          "a video sample holds " + rpus.size() + " RPUs where the conversion needs one");
+    }
+
+    var rpu = rpus.getFirst();
+    var headerBytes = syntax.headerBytes();
+    return withHeaderOf(
+        rpu, convertedToProfile81(rpu.slice(headerBytes, rpu.remaining() - headerBytes)));
+  }
+
+  private static byte[] convertedToProfile81(ByteBuffer escapedPayload) {
+    try {
+      return DolbyVisionRpu.parse(escapedPayload).convertedToProfile81().write();
+    } catch (DolbyVisionRpuException exception) {
+      throw conversionFailed(exception.getMessage());
+    }
+  }
+
+  private boolean isRpu(ByteBuffer unit) {
+    return unit.remaining() >= syntax.headerBytes() && syntax.isRpu(syntax.typeOf(unit.get(0)));
   }
 
   private Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
@@ -263,6 +303,10 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     }
 
     return length;
+  }
+
+  private static FragmentedMp4Exception conversionFailed(String detail) {
+    return new FragmentedMp4Exception(Reason.DOLBY_VISION_CONVERSION_FAILED, detail);
   }
 
   // The NAL units of a sample and the bytes after the last one too few to hold a length.

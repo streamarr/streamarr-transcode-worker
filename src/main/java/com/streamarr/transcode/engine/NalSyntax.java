@@ -60,4 +60,11 @@ enum NalSyntax {
   boolean wrapsNalUnits(int type) {
     return wrappingTypes.contains(type);
   }
+
+  /**
+   * Whether NAL units of the type carry a Dolby Vision RPU: the Dolby Vision type that wraps none.
+   */
+  boolean isRpu(int type) {
+    return isDolbyVision(type) && !wrapsNalUnits(type);
+  }
 }

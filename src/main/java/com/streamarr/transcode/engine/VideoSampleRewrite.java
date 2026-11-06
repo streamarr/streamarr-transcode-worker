@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -17,7 +18,9 @@ import java.util.stream.Collectors;
  * the fragment's own {@code mdat} array, back to back in their old order, and get new positions and
  * sizes. The array keeps its length and its header, which nothing reads again: a media segment
  * writes its own {@code moof} and {@code mdat} from the samples. A rewrite therefore holds no more
- * memory than one rewritten sample beside the fragment that the producer already admitted.
+ * memory than one rewritten sample beside the fragment that the producer already admitted, except
+ * when a rewritten sample is longer than the source's: the samples then move into a longer copy of
+ * the array, which the producer admits as the fragment's growth.
  */
 final class VideoSampleRewrite {
 
@@ -91,14 +94,19 @@ final class VideoSampleRewrite {
    * The fragment with its video samples rewritten.
    *
    * @throws FragmentedMp4Exception with {@link Reason#MALFORMED_BOX} when a video sample cannot be
-   *     read, or two samples share bytes of the {@code mdat}
+   *     read, or two samples share bytes of the {@code mdat}; with {@link
+   *     Reason#DOLBY_VISION_CONVERSION_FAILED} when a copy that converts profile 7 meets a sample
+   *     without exactly one RPU that converts
    */
   Fragment rewrite(Fragment fragment) {
     var mdat = fragment.mediaDataBox();
+    var placed = inMediaDataOrder(fragment);
     var video = new ArrayList<>(fragment.videoSamples());
     var audio = new ArrayList<>(fragment.audioSamples());
+    var target = mdat;
     var write = -1;
-    for (var each : inMediaDataOrder(fragment)) {
+    for (var index = 0; index < placed.size(); index++) {
+      var each = placed.get(index);
       var original = bytesOf(mdat, each.sample());
       var bytes = each.video() ? sampleRewrite.rewrite(original) : original;
       if (write < 0 && bytes == original) {
@@ -109,8 +117,9 @@ final class VideoSampleRewrite {
         write = each.sample().mediaDataPosition();
       }
 
-      requireRoomAt(write, each.sample(), bytes);
-      copy(bytes, mdat, write);
+      target =
+          withRoomAt(target, mdat, write, bytes.remaining(), placed.subList(index, placed.size()));
+      copy(bytes, target, write);
       var moved = withPlacement(each.sample(), write, bytes.remaining());
       (each.video() ? video : audio).set(each.index(), moved);
       write += bytes.remaining();
@@ -121,13 +130,14 @@ final class VideoSampleRewrite {
     }
 
     return Fragment.builder()
-        .boxes(fragment.boxes())
+        .boxes(withMediaDataBox(fragment.boxes(), target))
         .tracks(fragment.tracks())
         .videoSamples(video)
         .audioSamples(audio)
         .build();
   }
 
+  // Every sample in the order of its bytes in the mdat; FFmpeg writes no two over the same bytes.
   private static List<Placed> inMediaDataOrder(Fragment fragment) {
     var placed = new ArrayList<Placed>();
     for (var index = 0; index < fragment.videoSamples().size(); index++) {
@@ -139,26 +149,59 @@ final class VideoSampleRewrite {
     }
 
     placed.sort(Comparator.comparingInt(each -> each.sample().mediaDataPosition()));
+    for (var index = 1; index < placed.size(); index++) {
+      requireAfter(placed.get(index - 1).sample(), placed.get(index).sample());
+    }
+
     return placed;
   }
 
-  // Each sample moves down to where the samples before it end, which is never past where it starts:
-  // every rewrite only removes bytes, and FFmpeg writes no two samples over the same bytes.
-  private static void requireRoomAt(int write, Sample sample, ByteBuffer bytes) {
-    if (write > sample.mediaDataPosition() || bytes.remaining() > sample.size()) {
+  private static void requireAfter(Sample before, Sample sample) {
+    if (sample.mediaDataPosition() < before.mediaDataPosition() + before.size()) {
       throw FragmentedMp4Exception.malformed(
-          "a rewritten sample at mdat position "
+          "a sample at mdat position "
               + sample.mediaDataPosition()
-              + " cannot move to position "
-              + write);
+              + " shares bytes with the sample before it");
     }
+  }
+
+  // A sample that shrinks moves down inside the fragment's own array, onto bytes at or before its
+  // own, and ends before the next sample's bytes, which are still to move. A sample that grows past
+  // its own end would overwrite them, so from the first such sample on, the samples move into a
+  // copy of the array with room for every remaining sample to grow as much, which grows again when
+  // a later sample grows more.
+  private static byte[] withRoomAt(
+      byte[] target, byte[] mdat, int write, int length, List<Placed> remaining) {
+    var sample = remaining.getFirst().sample();
+    var end = write + length;
+    var ownEnd = Math.toIntExact(sample.mediaDataPosition() + sample.size());
+    if (target == mdat && end <= ownEnd) {
+      return target;
+    }
+
+    if (target != mdat && end <= target.length) {
+      return target;
+    }
+
+    var growth = Math.max(0, end - Math.max(ownEnd, target.length));
+    return Arrays.copyOf(target, end + growth * (remaining.size() - 1));
+  }
+
+  private static List<byte[]> withMediaDataBox(List<byte[]> boxes, byte[] mediaDataBox) {
+    if (boxes.getLast() == mediaDataBox) {
+      return boxes;
+    }
+
+    var replaced = new ArrayList<>(boxes);
+    replaced.set(replaced.size() - 1, mediaDataBox);
+    return replaced;
   }
 
   // System.arraycopy copies as if through a temporary array, so a sample may move onto bytes that
   // it overlaps.
-  private static void copy(ByteBuffer bytes, byte[] mdat, int position) {
+  private static void copy(ByteBuffer bytes, byte[] target, int position) {
     System.arraycopy(
-        bytes.array(), bytes.arrayOffset() + bytes.position(), mdat, position, bytes.remaining());
+        bytes.array(), bytes.arrayOffset() + bytes.position(), target, position, bytes.remaining());
   }
 
   private static Sample withPlacement(Sample sample, int mediaDataPosition, int size) {

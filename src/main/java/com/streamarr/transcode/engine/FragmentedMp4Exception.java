@@ -53,6 +53,12 @@ final class FragmentedMp4Exception extends RuntimeException {
      */
     OUTPUT_MISMATCH,
     /**
+     * A copy that converts single-track Dolby Vision profile 7 to profile 8.1 met a picture whose
+     * RPU it cannot convert: the sample holds no RPU or more than one, or the RPU cannot be parsed
+     * or serves another profile (streamarr/streamarr-server#651).
+     */
+    DOLBY_VISION_CONVERSION_FAILED,
+    /**
      * The timing the FFmpeg that copies the source wrote of the copy's video packets ended before
      * the timing of one of the copy's video samples.
      */

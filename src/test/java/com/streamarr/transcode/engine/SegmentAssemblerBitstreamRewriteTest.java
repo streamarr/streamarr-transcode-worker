@@ -9,6 +9,7 @@ import static com.streamarr.transcode.engine.HevcCopies.nalUnit;
 import static com.streamarr.transcode.engine.HevcCopies.rpu;
 import static com.streamarr.transcode.engine.HevcCopies.sample;
 import static com.streamarr.transcode.engine.HevcCopies.slice;
+import static com.streamarr.transcode.engine.HevcCopies.suffixSei;
 import static com.streamarr.transcode.engine.InitializationSegmentFixtures.bytesOfInitializationSegment;
 import static com.streamarr.transcode.engine.IsoBoxes.concat;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -596,6 +597,143 @@ class SegmentAssemblerBitstreamRewriteTest {
     var av1C = IsoBoxes.box("av1C", HexFormat.of().parseHex("81080C00" + obus));
     return new InitializationSegment(
         HevcCopies.initializationSegment(IsoBoxes.box("av01", new byte[78], av1C)));
+  }
+
+  // ADR 0036: the converted RPU is the last NAL unit of its sample, behind a suffix SEI NAL unit
+  // that the source holds after its RPU, so that the decoder reads it with the picture.
+  @Test
+  @DisplayName(
+      "Should deliver each picture's RPU converted to profile 8.1 as its sample's last NAL unit and"
+          + " no enhancement-layer unit when the copy converts profile 7")
+  void
+      shouldDeliverEachPicturesRpuConvertedToProfile81LastAndNoEnhancementLayerUnitWhenTheCopyConvertsProfile7()
+          throws IOException {
+    var felRpu = SyntheticRpus.profile7().nalUnit();
+    var keyframe =
+        sample(
+            aud(),
+            enhancementLayer(0),
+            slice(0),
+            enhancementLayer(0),
+            felRpu,
+            enhancementLayer(0),
+            suffixSei(0));
+    var picture = sample(aud(), slice(1), felRpu, enhancementLayer(1));
+    var fragment =
+        fragmentBuilder()
+            .startsWithKeyframe(true)
+            .video(0, keyframe, picture)
+            .audio(0, AUDIO_SAMPLE)
+            .build();
+
+    var delivered = deliveredSamples(profile7ConversionCopy(), HEVC_SEGMENT, fragment);
+
+    var converted = SyntheticRpus.nalUnit(SyntheticRpus.convertedProfile7());
+    assertThat(delivered.video())
+        .containsExactly(
+            hex(sample(aud(), slice(0), suffixSei(0), converted)),
+            hex(sample(aud(), slice(1), converted)));
+    assertThat(delivered.audio()).containsExactly(hex(AUDIO_SAMPLE));
+  }
+
+  // The profile 8.1 colour matrices take emulation prevention bytes that the source's did not, so
+  // a converted sample can outgrow the source's, and the fragment makes room for it.
+  @Test
+  @DisplayName("Should deliver every sample when the converted RPUs are longer than the source's")
+  void shouldDeliverEverySampleWhenTheConvertedRpusAreLongerThanTheSources() throws IOException {
+    var source = SyntheticRpus.profile7().previousRpu(0).nalUnit();
+    var converted = SyntheticRpus.nalUnit(SyntheticRpus.convertedPreviousRpu());
+    assertThat(converted).hasSizeGreaterThan(source.length);
+    var fragment =
+        fragmentBuilder()
+            .startsWithKeyframe(true)
+            .video(0, sample(aud(), slice(0), source), sample(aud(), slice(1), source))
+            .audio(0, AUDIO_SAMPLE, AUDIO_SAMPLE)
+            .build();
+
+    var delivered = deliveredSamples(profile7ConversionCopy(), HEVC_SEGMENT, fragment);
+
+    assertThat(delivered.video())
+        .containsExactly(
+            hex(sample(aud(), slice(0), converted)), hex(sample(aud(), slice(1), converted)));
+    assertThat(delivered.audio()).containsExactly(hex(AUDIO_SAMPLE), hex(AUDIO_SAMPLE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should strip the HDR10+ message and convert the RPU when the copy converts profile 7 and"
+          + " strips HDR10+")
+  void shouldStripTheHdr10PlusMessageAndConvertTheRpuWhenTheCopyConvertsProfile7AndStripsHdr10Plus()
+      throws IOException {
+    var keyframe =
+        sample(aud(), seiOf(HDR10_PLUS_MESSAGE), slice(0), SyntheticRpus.profile7().nalUnit());
+
+    var delivered =
+        deliveredSamples(
+            profile7ConversionCopy(BitstreamRewrite.STRIP_HDR10_PLUS),
+            HEVC_SEGMENT,
+            fragmentBuilder().startsWithKeyframe(true).video(0, keyframe).build());
+
+    assertThat(delivered.video())
+        .containsExactly(
+            hex(sample(aud(), slice(0), SyntheticRpus.nalUnit(SyntheticRpus.convertedProfile7()))));
+  }
+
+  // A Dolby Vision picture without an RPU can flash in a player, so the copy neither drops nor
+  // repeats an RPU: it fails the attempt, and the server moves to the copy with Dolby Vision
+  // stripped.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("samplesWithoutOneRpuThatConverts")
+  @DisplayName(
+      "Should fail the attempt as a conversion failure when a sample holds no single RPU that"
+          + " converts to profile 8.1")
+  void shouldFailTheAttemptAsAConversionFailureWhenASampleHoldsNoSingleRpuThatConvertsToProfile81(
+      String description, byte[] sample) throws IOException {
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                concat(
+                    bytesOfInitializationSegment(HEVC_SEGMENT),
+                    fragmentBuilder().startsWithKeyframe(true).video(0, sample).build())));
+    var assembler = assemblerFor(profile7ConversionCopy());
+    assembler.accept(output.initializationSegment());
+    var fragment = output.fragments().getFirst();
+
+    assertThatThrownBy(() -> assembler.accept(fragment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception ->
+                assertThat(exception.getReason()).isEqualTo(Reason.DOLBY_VISION_CONVERSION_FAILED));
+  }
+
+  static Stream<Arguments> samplesWithoutOneRpuThatConverts() {
+    var felRpu = SyntheticRpus.profile7().nalUnit();
+    return Stream.of(
+        Arguments.of("a sample without an RPU", sample(aud(), slice(0), enhancementLayer(0))),
+        Arguments.of("a sample with two RPUs", sample(aud(), slice(0), felRpu, felRpu)),
+        Arguments.of("an RPU cut short", sample(aud(), slice(0), rpu(0))),
+        Arguments.of(
+            "a profile 5 RPU",
+            sample(aud(), slice(0), SyntheticRpus.profile7().profile5().nalUnit())));
+  }
+
+  // A copy of single-track profile 7 that the server planned as profile 8.1 at level 6 on its PQ
+  // base: the conversion, the normalized record, and whatever else the test lists.
+  private static VideoDecision.Copy profile7ConversionCopy(BitstreamRewrite... alsoListed) {
+    var rewrites =
+        EnumSet.of(
+            BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1,
+            BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD);
+    rewrites.addAll(List.of(alsoListed));
+    return VideoDecisionFixtures.copyBuilder()
+        .codecString(HEVC_CODEC_STRING)
+        .plannedOutput(
+            Optional.of(
+                PlannedCopyOutputs.pqOutputBuilder()
+                    .dolbyVision(Optional.of(PlannedCopyOutputs.profile81Output()))
+                    .build()))
+        .bitstreamRewrites(rewrites)
+        .build();
   }
 
   private static VideoDecision.Copy copyOf(String codecString, BitstreamRewrite rewrite) {

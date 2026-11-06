@@ -22,7 +22,16 @@ public enum BitstreamRewrite {
    * compatibility identifier, an RPU and a base layer, no enhancement layer, and metadata
    * compression 0. A copy that lists it plans a Dolby Vision output.
    */
-  NORMALIZE_DOLBY_VISION_RECORD(false);
+  NORMALIZE_DOLBY_VISION_RECORD(false),
+  /**
+   * Converts a single-track Dolby Vision profile 7 stream to profile 8.1 (ADR 0036,
+   * streamarr/streamarr-server#651): removes every enhancement-layer NAL unit of type 63, and
+   * rewrites each picture's RPU without its residual, as libdovi's mode 2 does, as the last NAL
+   * unit of the picture's sample. A copy that lists it plans a profile 8.1 output and normalizes
+   * its record. A picture whose RPU cannot be converted fails the attempt with the typed conversion
+   * failure.
+   */
+  CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1(true);
 
   private final boolean rewritesSamples;
 

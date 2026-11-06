@@ -2900,6 +2900,43 @@ class ProducerTest {
     assertReleasesEveryReservedByte(workerBudget);
   }
 
+  // The conversion can make a fragment longer than the bytes that the reader reserved for it, so
+  // the reader reserves the growth and the delivery releases the whole fragment.
+  @Test
+  @DisplayName(
+      "Should release every byte it reserved when the conversion makes a fragment longer than"
+          + " FFmpeg wrote it")
+  void shouldReleaseEveryReservedByteWhenTheConversionMakesAFragmentLonger() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var rpu = SyntheticRpus.profile7().previousRpu(0).nalUnit();
+    var fragment =
+        HevcCopies.fragmentBuilder()
+            .startsWithKeyframe(true)
+            .video(0, HevcCopies.sample(HevcCopies.aud(), HevcCopies.slice(0), rpu))
+            .build();
+    var output =
+        IsoBoxes.concat(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)), fragment);
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .memoryBudget(workerBudget)
+            .videoDecision(
+                dolbyVisionCopy(HVC1_RECORD_CODEC_STRING, PlannedCopyOutputs.profile81Output())
+                    .bitstreamRewrites(
+                        Set.of(
+                            BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1,
+                            BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+                    .build())
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(HexFormat.of().formatHex(sink.contentOf("segment0.m4s")))
+        .as("the delivered media segment")
+        .contains(HexFormat.of().formatHex(SyntheticRpus.convertedPreviousRpu()));
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
   static Stream<GrowingCopy> copiesWhoseInitializationSegmentGrows() {
     return Stream.of(
         new GrowingCopy(
