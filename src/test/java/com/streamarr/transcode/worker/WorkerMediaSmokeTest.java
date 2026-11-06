@@ -131,6 +131,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
@@ -5914,6 +5915,92 @@ class WorkerMediaSmokeTest {
               "flac",
               "-frame_size",
               "60000"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The copy's video ends at 12 s, the end of segment 1, so segment 2 has no video. The tone ends
+  // less than one audio frame before 12 s, and the encoder fills its last frame past 12 s with
+  // padding: AAC's 1,024-sample frame, after 1,024 samples of priming, and Opus's 960-sample frame,
+  // after 312. AC-3's and E-AC-3's encoder drops the tail of its 1,536-sample frames instead. The
+  // MP4 muxer trims the last packet with an edit list. Matroska trims the last Opus packet only
+  // with DiscardPadding, which FFmpeg passes as side data that its decoder applies. AAC in Matroska
+  // keeps no record of its padding, so no reader can tell the padding from the tone.
+  @ParameterizedTest(name = "{0} in {1}")
+  @CsvSource({
+    "aac, mp4",
+    "ac3, mp4",
+    "ac3, mkv",
+    "eac3, mp4",
+    "eac3, mkv",
+    "libopus, mp4",
+    "libopus, mkv"
+  })
+  @DisplayName(
+      "Should list no stream with media after the last segment when only the encoded audio's"
+          + " trailing codec padding crosses that segment's end")
+  void shouldListNoStreamAfterTheLastSegmentWhenOnlyTheAudiosTrailingCodecPaddingCrossesItsEnd(
+      String codec, String container) throws Exception {
+    var source = toneEndingInsideItsLastFrameBeforeTwelveSecondsSource(codec, container);
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(3);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(SourceEndedEarly.newBuilder().setLastSegmentWithSourceMedia(1).build());
+    assertThat(completion.report().getStreamEndsList())
+        .filteredOn(end -> end.getStreamIndex() == 1)
+        .extracting(
+            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .as("the audio's end, within AC-3's 32 ms frame before 12 s")
+        .singleElement(InstanceOfAssertFactories.DURATION)
+        .isLessThan(Duration.ofSeconds(12))
+        .isGreaterThan(Duration.ofMillis(11_968));
+  }
+
+  // Less than one frame of the codec before 12 s: 575,700 samples at 48 kHz for Opus, whose last
+  // packet starts at sample 575,688; 575,760 for the others.
+  private static Duration toneEndBeforeTwelveSeconds(String codec) {
+    return switch (codec) {
+      case "libopus" -> Duration.ofNanos(11_993_750_000L);
+      default -> Duration.ofMillis(11_995);
+    };
+  }
+
+  // 12 s of H.264 at 64x36 and 24 fps with a keyframe every 2 s, and a stereo 440 Hz tone at
+  // 48 kHz in the codec that ends less than one of its frames before 12 s.
+  private static synchronized Path toneEndingInsideItsLastFrameBeforeTwelveSecondsSource(
+      String codec, String container) throws Exception {
+    var source =
+        seekableSources.resolve("tone-ending-inside-its-last-frame-" + codec + "." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      var toneEnd = toneEndBeforeTwelveSeconds(codec);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=12",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=48000:duration="
+                  + BigDecimal.valueOf(toneEnd.toNanos(), 9).toPlainString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              codec,
+              "-ac",
+              "2"),
           source);
       generatedSeekableSources.add(source);
     }

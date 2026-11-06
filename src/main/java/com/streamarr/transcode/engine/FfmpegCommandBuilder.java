@@ -289,15 +289,31 @@ public class FfmpegCommandBuilder {
   // The FFmpeg that encodes copies the chosen source streams' packets, from the keyframe its seek
   // reads on, to a framecrc on its error output, its second output: the worker reads there where
   // each stream's last source sample ends. FFmpeg writes each record at once, so that no log line
-  // splits it.
+  // splits it. Audio that the job encodes is also decoded, by the decoder that the encode uses, to
+  // PCM as the framecrc's third stream: a decoder discards trailing padding that only side data
+  // records, which no packet's duration shows.
   private static void addSourceStreamsOutput(
       List<String> cmd, TranscodeDecision decision, EncoderInput input) {
     var source = input.sourceInputIndex();
     cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
-    addAudioStreamSelection(cmd, decision.audioDecision(), source);
-    cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
+    addSourceAudioStreams(cmd, decision.audioDecision(), source);
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
+  }
+
+  // The exclusions undo both maps of a named stream that is no audio stream, and the PCM encoder
+  // applies only to an audio stream, so the producer still refuses the job for its sound track.
+  private static void addSourceAudioStreams(List<String> cmd, AudioDecision audio, int source) {
+    if (audio.mode() != AudioMode.TRANSCODE) {
+      addAudioStreamSelection(cmd, audio, source);
+      cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
+      return;
+    }
+
+    var audioMap = audioMap(audio, source);
+    cmd.addAll(List.of("-map", audioMap, "-map", audioMap));
+    addNamedAudioStreamExclusions(cmd, audio, source);
+    cmd.addAll(List.of("-c", "copy", "-copypriorss", "1", "-c:a:1", "pcm_f32le"));
   }
 
   // The copy's muxer replaces each video packet's duration with the gap to the next packet's
@@ -478,19 +494,26 @@ public class FfmpegCommandBuilder {
     }
 
     cmd.addAll(List.of("-map", audioMap(audio, input)));
-    if (namesAudioStream(audio)) {
-      var exclusion = "-" + input + ":";
-      cmd.addAll(
-          List.of(
-              "-map",
-              exclusion + "s",
-              "-map",
-              exclusion + "d",
-              "-map",
-              exclusion + "t",
-              "-map",
-              exclusion + "disp:attached_pic"));
+    addNamedAudioStreamExclusions(cmd, audio, input);
+  }
+
+  private static void addNamedAudioStreamExclusions(
+      List<String> cmd, AudioDecision audio, int input) {
+    if (!namesAudioStream(audio)) {
+      return;
     }
+
+    var exclusion = "-" + input + ":";
+    cmd.addAll(
+        List.of(
+            "-map",
+            exclusion + "s",
+            "-map",
+            exclusion + "d",
+            "-map",
+            exclusion + "t",
+            "-map",
+            exclusion + "disp:attached_pic"));
   }
 
   private static boolean namesAudioStream(AudioDecision audio) {

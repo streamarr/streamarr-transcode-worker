@@ -1839,10 +1839,10 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
+  @CsvSource({"REMUX, copy", "VIDEO_TRANSCODE, libx264"})
   @DisplayName(
       "Should copy the chosen streams' packets, from the keyframe the seek reads, to a framecrc on"
-          + " standard error as the second output when building a command")
+          + " standard error as the second output when building a command that copies the audio")
   void shouldCopyTheChosenStreamsPacketsToAFramecrcOnStandardErrorAsTheSecondOutput(
       TranscodeMode mode, String videoEncoder) {
     var cmd = command(request(mode).startSequenceNumber(5).build(), videoEncoder);
@@ -1866,6 +1866,82 @@ class FfmpegCommandBuilderTest {
             "-flush_packets",
             "1",
             "pipe:2");
+  }
+
+  // The decoder applies trailing padding that only side data records, as Matroska's DiscardPadding,
+  // so the worker reads where the decoded audio ends as well as where its packets end.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"AUDIO_TRANSCODE, copy", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should also decode the chosen audio stream to PCM as the framecrc's third stream when"
+          + " building a command that encodes the audio")
+  void shouldAlsoDecodeTheChosenAudioStreamToPcmAsTheFramecrcsThirdStreamWhenItEncodesTheAudio(
+      TranscodeMode mode, String videoEncoder) {
+    var cmd = command(request(mode).startSequenceNumber(5).build(), videoEncoder);
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .containsExactly(
+            "-map",
+            "0:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-c",
+            "copy",
+            "-copypriorss",
+            "1",
+            "-c:a:1",
+            "pcm_f32le",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "-flush_packets",
+            "1",
+            "pipe:2");
+  }
+
+  // A named stream that is no audio stream must still reach the producer's check for a sound
+  // track: the exclusions undo the decoded map of a subtitle, data, attachment or cover art stream,
+  // and the PCM encoder applies only to an audio stream, so a named video stream stays a copy.
+  @Test
+  @DisplayName(
+      "Should decode the audio stream that the job names only as the framecrc's second audio"
+          + " stream, inside the same exclusions, when the job names the audio stream it encodes")
+  void shouldDecodeTheNamedAudioStreamOnlyAsTheSecondAudioStreamInsideTheSameExclusions() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .audioDecision(
+                audio(TranscodeMode.FULL_TRANSCODE).streamIndex(OptionalInt.of(2)).build())
+            .build();
+
+    var cmd = command(request(decision).build(), "libx264");
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .startsWith(
+            "-map",
+            "0:0",
+            "-map",
+            "0:2?",
+            "-map",
+            "0:2?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic",
+            "-c",
+            "copy",
+            "-copypriorss",
+            "1",
+            "-c:a:1",
+            "pcm_f32le");
   }
 
   // FFmpeg writes each output's metadata to its error output, where the worker reads the framecrc.
@@ -1914,10 +1990,10 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
+  @CsvSource({"REMUX, copy", "VIDEO_TRANSCODE, libx264"})
   @DisplayName(
       "Should copy the audio stream that the job names to the framecrc, and no other kind of"
-          + " stream, when the job names its audio stream")
+          + " stream, when the job names the audio stream it copies")
   void shouldCopyTheAudioStreamThatTheJobNamesToTheFramecrcWhenTheJobNamesItsAudioStream(
       TranscodeMode mode, String videoEncoder) {
     var decision =
