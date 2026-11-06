@@ -10,6 +10,7 @@ import com.streamarr.transcode.engine.BitstreamRewrite;
 import com.streamarr.transcode.engine.PlannedCopyOutput;
 import com.streamarr.transcode.engine.PlannedCopyOutput.Chromaticity;
 import com.streamarr.transcode.engine.PlannedCopyOutput.SampleEntry;
+import com.streamarr.transcode.engine.StaticHdrMetadata;
 import com.streamarr.transcode.engine.VideoDynamicRange;
 import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
 import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVision;
@@ -81,6 +82,34 @@ final class PlannedCopies {
                     ? Optional.of(contentLightLevel(video.getContentLightLevel()))
                     : Optional.empty())
             .build());
+  }
+
+  /** Whether the decision carries a bitstream rewrite or a Dolby Vision output. */
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  static boolean carriesCopyOnlyValues(build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
+    return video.getBitstreamRewritesCount() > 0 || video.hasDolbyVisionOutput();
+  }
+
+  /**
+   * The HDR10 static metadata of a PQ encode, which carries both values; empty for an encode that
+   * carries neither.
+   */
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  static Optional<StaticHdrMetadata> staticHdrMetadataOf(
+      build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
+    if (!carriesStaticValues(video)) {
+      return Optional.empty();
+    }
+
+    if (!video.hasMasteringDisplay() || !video.hasContentLightLevel()) {
+      throw new InvalidJobSpecificationException(
+          "A PQ encode carries both the mastering display and the content light level");
+    }
+
+    return Optional.of(
+        new StaticHdrMetadata(
+            masteringDisplay(video.getMasteringDisplay()),
+            contentLightLevel(video.getContentLightLevel())));
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

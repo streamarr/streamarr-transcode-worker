@@ -27,8 +27,13 @@ public class FfmpegCommandBuilder {
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final String PROFILE_OPTION = "-profile:v";
   private static final String LEVEL_OPTION = "-level:v";
+  // The planar 10-bit 4:2:0 format that the software encoders and the Dolby Vision reshape take.
+  private static final String PLANAR_TEN_BIT_PIXEL_FORMAT = "yuv420p10le";
+  // The hardware encoders take 10-bit 4:2:0 video as biplanar p010.
+  private static final String P010 = "p010le";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
-  private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
+  private static final EncoderTraits FIXED_GOP =
+      traits().fixedGop(true).tenBitPixelFormat(P010).build();
   // The RTX 5090 recordings (src/test/resources/nvenc) show every forced keyframe as an IDR
   // picture with no leading pictures under these B-frames and lookahead, and the GOP count
   // restarting there.
@@ -36,14 +41,16 @@ public class FfmpegCommandBuilder {
       traits()
           .keyframeVerified(true)
           .fixedGop(true)
+          .tenBitPixelFormat(P010)
           .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
           .codecProfileForcing(CodecProfileForcing.NVENC)
           .build();
   // QSV and VAAPI take nv12 from system memory and refuse yuv420p.
   private static final String NV12 = "nv12";
   private static final EncoderTraits QSV =
-      traits().fixedGop(true).eightBitPixelFormat(NV12).build();
-  private static final EncoderTraits VAAPI = traits().eightBitPixelFormat(NV12).build();
+      traits().fixedGop(true).eightBitPixelFormat(NV12).tenBitPixelFormat(P010).build();
+  private static final EncoderTraits VAAPI =
+      traits().eightBitPixelFormat(NV12).tenBitPixelFormat(P010).build();
 
   // What the command passes each encoder differently; an encoder not listed has none of it. A
   // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
@@ -641,6 +648,7 @@ public class FfmpegCommandBuilder {
     PlayableSampleEntry.ofEncoder(job.videoEncoder())
         .ifPresent(entry -> cmd.addAll(tagArgs(entry)));
     cmd.addAll(forcedCodecProfileArgs(job));
+    cmd.addAll(hdrColourArgs(job));
     addScaleAndBitrateArgs(cmd, job, input);
     addAudioArgs(cmd, encodedAudio(decision.audioDecision(), input), job.request());
   }
@@ -951,12 +959,13 @@ public class FfmpegCommandBuilder {
 
   private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job, EncoderInput input) {
     var request = job.request();
-    // Every variant is 8-bit 4:2:0: an encoder otherwise keeps a 10-bit or 4:4:4 source's format,
-    // and few hardware decoders accept 10-bit H.264.
+    // Every variant takes the job's picture format: an encoder otherwise keeps a 10-bit or 4:4:4
+    // source's format, and few hardware decoders accept 10-bit H.264. An SDR variant that no
+    // filter tone-maps is converted to BT.709; a PQ or HLG variant keeps the source's BT.2020.
     var colorConversion =
-        toneMaps(job)
-            ? ""
-            : ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
+        pictureConversion(job) == PictureConversion.CONVERT_TO_BT709
+            ? ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709"
+            : "";
     // The deinterlacer runs first, so that no filter mixes the two fields of a frame. The held
     // picture is the last one the filters produce from the source, and no filter sees it again.
     var videoFilter =
@@ -973,10 +982,14 @@ public class FfmpegCommandBuilder {
             + trimAfterTheFrameGrid(request, input).map(trim -> ",trim=" + trim).orElse("");
     cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
-    // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
+    // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35. FFmpeg keeps only
+    // the last -svtav1-params of an output, so the HDR settings join the cap's value.
     if (traitsOf(job).capsBitrateOnlyInCrfMode()) {
+      var parameters = new ArrayList<>(List.of("mbr-overshoot-pct=0"));
+      parameters.addAll(forcedSvtAv1Parameters(job));
       cmd.addAll(
-          List.of("-crf", "35", "-maxrate", bitrate, "-svtav1-params", "mbr-overshoot-pct=0"));
+          List.of(
+              "-crf", "35", "-maxrate", bitrate, "-svtav1-params", String.join(":", parameters)));
       return;
     }
 
@@ -1056,22 +1069,121 @@ public class FfmpegCommandBuilder {
     };
   }
 
+  // tonemapx reshapes Dolby Vision only from planar 10-bit input, and only into PQ with BT.2020
+  // primaries and matrix; it aborts FFmpeg for PQ in an 8-bit format, which the encode's own
+  // check rules out.
   private static String videoFormat(TranscodeJob job) {
-    if (toneMaps(job)) {
-      return "tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p,"
-          + "sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT";
-    }
-
-    return "format=" + traitsOf(job).eightBitPixelFormat();
+    return switch (pictureConversion(job)) {
+      case TONE_MAP_TO_SDR ->
+          "tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:format="
+              + planarFormat(job)
+              + ",sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT";
+      case RESHAPE_DOLBY_VISION_TO_PQ ->
+          "format="
+              + PLANAR_TEN_BIT_PIXEL_FORMAT
+              + ",tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format="
+              + PLANAR_TEN_BIT_PIXEL_FORMAT
+              + encoderFormatAfterThePlanarOne(job);
+      case CONVERT_TO_BT709, KEEP_THE_SOURCES_RANGE -> "format=" + encoderPixelFormat(job);
+    };
   }
 
-  private static boolean toneMaps(TranscodeJob job) {
-    return job.request().transcodeDecision().videoDecision() instanceof VideoDecision.Encode encode
-        && encode.outputDynamicRange().compatibleBase() == VideoDynamicRange.CompatibleBase.SDR
-        && switch (encode.sourceDynamicRange().compatibleBase()) {
-          case PQ, HLG, NONE -> true;
-          case SDR, UNSPECIFIED -> false;
-        };
+  private static String planarFormat(TranscodeJob job) {
+    if (outputPictureFormat(job).bitDepth() > 8) {
+      return PLANAR_TEN_BIT_PIXEL_FORMAT;
+    }
+
+    return DEFAULT_EIGHT_BIT_PIXEL_FORMAT;
+  }
+
+  private static String encoderFormatAfterThePlanarOne(TranscodeJob job) {
+    var format = encoderPixelFormat(job);
+    if (format.equals(PLANAR_TEN_BIT_PIXEL_FORMAT)) {
+      return "";
+    }
+
+    return ",format=" + format;
+  }
+
+  private static String encoderPixelFormat(TranscodeJob job) {
+    if (outputPictureFormat(job).bitDepth() > 8) {
+      return traitsOf(job).tenBitPixelFormat();
+    }
+
+    return traitsOf(job).eightBitPixelFormat();
+  }
+
+  private static PictureFormat outputPictureFormat(TranscodeJob job) {
+    return switch (job.request().transcodeDecision().videoDecision()) {
+      case VideoDecision.Copy _ -> PictureFormat.EIGHT_BIT_420;
+      case VideoDecision.Encode encode -> encode.outputPictureFormat();
+    };
+  }
+
+  // How the encode's filters turn the source's picture into the output's range.
+  private enum PictureConversion {
+    // An SDR or untagged source to SDR output.
+    CONVERT_TO_BT709,
+    // A PQ, HLG or Dolby Vision source to SDR output.
+    TONE_MAP_TO_SDR,
+    // Dolby Vision without a compatible base, profile 5 or 10.0, to PQ output with its RPUs.
+    RESHAPE_DOLBY_VISION_TO_PQ,
+    // A PQ or HLG source to output of the same range.
+    KEEP_THE_SOURCES_RANGE
+  }
+
+  private static PictureConversion pictureConversion(TranscodeJob job) {
+    if (!(job.request().transcodeDecision().videoDecision()
+        instanceof VideoDecision.Encode encode)) {
+      return PictureConversion.CONVERT_TO_BT709;
+    }
+
+    var source = encode.sourceDynamicRange().compatibleBase();
+    return switch (encode.outputDynamicRange().compatibleBase()) {
+      case PQ, HLG ->
+          source == VideoDynamicRange.CompatibleBase.NONE
+              ? PictureConversion.RESHAPE_DOLBY_VISION_TO_PQ
+              : PictureConversion.KEEP_THE_SOURCES_RANGE;
+      case SDR, NONE, UNSPECIFIED ->
+          switch (source) {
+            case PQ, HLG, NONE -> PictureConversion.TONE_MAP_TO_SDR;
+            case SDR, UNSPECIFIED -> PictureConversion.CONVERT_TO_BT709;
+          };
+    };
+  }
+
+  // The colour description of a PQ or HLG output, which the mp4 muxer writes into the colr box
+  // and the encoder into the bitstream; an SDR output takes BT.709 from the scale filter.
+  private static List<String> hdrColourArgs(TranscodeJob job) {
+    return hdrTransferOf(job)
+        .map(
+            transfer ->
+                List.of(
+                    "-color_primaries",
+                    "bt2020",
+                    "-color_trc",
+                    transfer.ffmpegName(),
+                    "-colorspace",
+                    "bt2020nc",
+                    "-color_range",
+                    "tv"))
+        .orElse(List.of());
+  }
+
+  private static Optional<HdrTransfer> hdrTransferOf(TranscodeJob job) {
+    if (!(job.request().transcodeDecision().videoDecision()
+        instanceof VideoDecision.Encode encode)) {
+      return Optional.empty();
+    }
+
+    return HdrTransfer.of(encode.outputDynamicRange());
+  }
+
+  private static List<String> forcedSvtAv1Parameters(TranscodeJob job) {
+    return switch (job.request().transcodeDecision().videoDecision()) {
+      case VideoDecision.Copy _ -> List.of();
+      case VideoDecision.Encode encode -> HdrEncoderParameters.svtAv1(encode);
+    };
   }
 
   // The rate the frame-count GOP is computed from. The fps filter already emits frames at this
@@ -1222,12 +1334,14 @@ public class FfmpegCommandBuilder {
       boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
       @NonNull String eightBitPixelFormat,
+      @NonNull String tenBitPixelFormat,
       @NonNull List<String> frameTypeOptions,
       @NonNull CodecProfileForcing codecProfileForcing) {}
 
   private static EncoderTraits.EncoderTraitsBuilder traits() {
     return EncoderTraits.builder()
         .eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT)
+        .tenBitPixelFormat(PLANAR_TEN_BIT_PIXEL_FORMAT)
         .frameTypeOptions(List.of())
         .codecProfileForcing(CodecProfileForcing.NONE);
   }
@@ -1259,7 +1373,11 @@ public class FfmpegCommandBuilder {
 
     List<String> x265ParametersFor(VideoDecision.Encode encode) {
       return switch (this) {
-        case LIBX265 -> x265LevelAndTier(encode);
+        case LIBX265 -> {
+          var parameters = new ArrayList<>(x265LevelAndTier(encode));
+          parameters.addAll(HdrEncoderParameters.x265(encode));
+          yield List.copyOf(parameters);
+        }
         case NONE, LIBX264, LIBSVTAV1, NVENC -> List.of();
       };
     }
@@ -1286,6 +1404,7 @@ public class FfmpegCommandBuilder {
       return switch (profile) {
         case H264_HIGH -> "high";
         case HEVC_MAIN, AV1_MAIN -> "main";
+        case HEVC_MAIN_10 -> "main10";
       };
     }
 

@@ -77,6 +77,9 @@ public sealed interface VideoDecision {
    *     after the source's last frame
    * @param softwareEncoder whether the encode runs on the codec family's software encoder, which
    *     the server asks for after a hardware encoder failed (ADR 0044)
+   * @param outputPictureFormat the bit depth and chroma subsampling that the encoder writes
+   * @param staticHdrMetadata the HDR10 static metadata that the encoder writes; present exactly
+   *     when the output is PQ
    */
   @Builder
   record Encode(
@@ -91,13 +94,39 @@ public sealed interface VideoDecision {
       boolean sourcePacketsCarryPresentationTimes,
       @NonNull Optional<Deinterlace> deinterlace,
       boolean holdsLastFrameToAdvertisedEnd,
-      boolean softwareEncoder)
+      boolean softwareEncoder,
+      @NonNull PictureFormat outputPictureFormat,
+      @NonNull Optional<StaticHdrMetadata> staticHdrMetadata)
       implements VideoDecision {
 
-    // Lombok builder default — its generated setter assigns it
+    // A PQ or HLG picture in 8 bits bands visibly, and FFmpeg's tonemapx filter aborts the process
+    // when it reshapes Dolby Vision into PQ in an 8-bit format.
+    public Encode {
+      if (outputsHdr(outputDynamicRange) && outputPictureFormat.bitDepth() < 10) {
+        throw new IllegalArgumentException(
+            "a PQ or HLG encode writes 10 bits, not " + outputPictureFormat.bitDepth());
+      }
+
+      var outputsPq = outputDynamicRange.compatibleBase() == VideoDynamicRange.CompatibleBase.PQ;
+      if (outputsPq != staticHdrMetadata.isPresent()) {
+        throw new IllegalArgumentException(
+            "an encode carries static HDR metadata exactly when its output is PQ");
+      }
+    }
+
+    private static boolean outputsHdr(VideoDynamicRange range) {
+      return switch (range.compatibleBase()) {
+        case PQ, HLG -> true;
+        case SDR, NONE, UNSPECIFIED -> false;
+      };
+    }
+
+    // Lombok builder defaults — their generated setters assign them
     @SuppressWarnings({"java:S1068", "java:S9438"})
     public static class EncodeBuilder {
       private Optional<Deinterlace> deinterlace = Optional.empty();
+      private PictureFormat outputPictureFormat = PictureFormat.EIGHT_BIT_420;
+      private Optional<StaticHdrMetadata> staticHdrMetadata = Optional.empty();
     }
   }
 }
