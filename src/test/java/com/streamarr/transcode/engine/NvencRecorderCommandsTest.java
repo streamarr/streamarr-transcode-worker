@@ -21,6 +21,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Pins the FFmpeg commands that src/test/fmp4-recorder/record-nvenc.sh runs on an NVIDIA GPU host
@@ -32,6 +34,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 class NvencRecorderCommandsTest {
 
   private static final Path RECORDER = Path.of("src", "test", "fmp4-recorder", "record-nvenc.sh");
+  private static final Path COMMITTED_RECORDINGS =
+      Path.of("src", "test", "resources", "nvenc", "recordings.json");
   // The quiet, non-interactive logging that only the recording adds.
   private static final List<String> RECORDING_ONLY_OPTIONS =
       List.of("-hide_banner", "-nostdin", "-loglevel", "error");
@@ -114,6 +118,25 @@ class NvencRecorderCommandsTest {
         .containsOnly("5");
   }
 
+  @Test
+  @DisplayName(
+      "Should hold a committed recording of exactly the command the recorder plans when a change"
+          + " to the worker's command changes the planned commands")
+  void
+      shouldHoldACommittedRecordingOfExactlyTheCommandTheRecorderPlansWhenAChangeToTheWorkersCommandChangesThePlannedCommands() {
+    var recorded = new LinkedHashMap<String, List<String>>();
+    for (var recording : committedRecordings().get("recordings")) {
+      recorded.put(
+          recording.get("name").asString(),
+          recording.get("ffmpegArguments").valueStream().map(JsonNode::asString).toList());
+    }
+
+    var planned = new LinkedHashMap<String, List<String>>();
+    plannedRecordings().forEach(recording -> planned.put(recording.name(), recording.arguments()));
+
+    assertThat(recorded).isEqualTo(planned);
+  }
+
   private static List<String> workerCommandFor(PlannedRecording recording) {
     var pipeline =
         new FfmpegCommandBuilder("ffmpeg", WORKER_FRAGMENTATION_TARGET)
@@ -185,6 +208,10 @@ class NvencRecorderCommandsTest {
     var index = command.indexOf(option);
     assertThat(index).as("the worker's %s", option).isNotNegative();
     command.set(index + 1, value);
+  }
+
+  private static JsonNode committedRecordings() {
+    return JsonMapper.builder().build().readTree(COMMITTED_RECORDINGS.toFile());
   }
 
   private static List<PlannedRecording> plannedRecordings() {
