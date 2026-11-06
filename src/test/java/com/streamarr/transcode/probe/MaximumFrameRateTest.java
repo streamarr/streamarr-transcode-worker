@@ -29,12 +29,41 @@ class MaximumFrameRateTest {
   }
 
   @Test
-  @DisplayName("Should average every interval when the stream has fewer than 24 of them")
-  void shouldAverageEveryIntervalWhenTheStreamHasFewerThan24OfThem() {
-    // Four intervals of 30 and 50 ms: 160 ms in all.
-    var measured = MaximumFrameRate.measured(new long[] {0, 30, 80, 110, 160}, 1_000);
+  @DisplayName("Should report the rate of a single fast interval when the times are exact")
+  void shouldReportTheRateOfASingleFastIntervalWhenTheTimesAreExact() {
+    // 25 fps in 90 kHz ticks, with one frame that lasts 20 ms.
+    var measured = MaximumFrameRate.measured(new long[] {0, 3_600, 5_400, 9_000}, 90_000);
 
-    assertThat(measured).contains(ExactFraction.of(25, 1));
+    assertThat(measured).contains(ExactFraction.of(50, 1));
+  }
+
+  @Test
+  @DisplayName("Should report the lowest rate the times allow when no listed rate fits them")
+  void shouldReportTheLowestRateTheTimesAllowWhenNoListedRateFitsThem() {
+    // 120 fps in 1 ms ticks: intervals of 8, 8 and 9 ms. 23 intervals that span 191 ms prove the
+    // most: at least 23 frames in 192 ms, 119.8 fps. No listed rate lies between 119.8 and 121.1.
+    var times = new long[25];
+    for (var frame = 1; frame < times.length; frame++) {
+      times[frame] = times[frame - 1] + (frame % 3 == 0 ? 9 : 8);
+    }
+
+    var measured = MaximumFrameRate.measured(times, 1_000);
+
+    assertThat(measured).contains(ExactFraction.of(23_000, 192));
+  }
+
+  @Test
+  @DisplayName("Should report a burst of eight fast frames when 1 ms ticks round each time")
+  void shouldReportABurstOfEightFastFramesWhen1MsTicksRoundEachTime() {
+    // 25 fps with eight intervals at 50 fps: averaged over 24 intervals, the burst would read 30.
+    var times = new long[41];
+    for (var frame = 1; frame < times.length; frame++) {
+      times[frame] = times[frame - 1] + (frame > 16 && frame <= 24 ? 20 : 40);
+    }
+
+    var measured = MaximumFrameRate.measured(times, 1_000);
+
+    assertThat(measured).contains(ExactFraction.of(50, 1));
   }
 
   @Test

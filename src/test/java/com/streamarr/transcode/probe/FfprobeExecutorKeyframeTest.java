@@ -1394,6 +1394,21 @@ class FfprobeExecutorKeyframeTest {
 
     @Test
     @DisplayName(
+        "Should report 50 fps when an MP4 at 25 fps holds a burst of eight frames at 50 fps")
+    void shouldReport50FpsWhenAnMp4At25FpsHoldsABurstOfEightFramesAt50Fps(@TempDir Path directory)
+        throws Exception {
+      // Averaged over any 24 intervals, the burst would read only 30 fps.
+      var intervals =
+          IntStream.concat(IntStream.concat(repeated(40, 16), repeated(20, 8)), repeated(40, 16))
+              .toArray();
+
+      var video = probedVideo(directory, UNAGREED_RATES, intervals);
+
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(50, 1));
+    }
+
+    @Test
+    @DisplayName(
         "Should report 60 fps when 1 ms sample times of a 60 fps stream alternate between 16 and"
             + " 17 ms")
     void shouldReport60FpsWhen1MsSampleTimesOfA60FpsStreamAlternateBetween16And17Ms(
