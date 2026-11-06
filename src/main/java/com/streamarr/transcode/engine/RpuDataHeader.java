@@ -50,6 +50,9 @@ record RpuDataHeader(
       AcceptedRange.bitDepthMinus8("vdr_bit_depth_minus8");
   private static final AcceptedRange PREVIOUS_VDR_RPU_ID = AcceptedRange.id("prev_vdr_rpu_id");
   private static final int COMPRESSED_DM_METADATA = 1;
+  // The decoder implements metadata compression 0 and 1 of the 3-bit field.
+  private static final AcceptedRange DM_METADATA_COMPRESSION =
+      new AcceptedRange("reserved_zero_3bits", 0, COMPRESSED_DM_METADATA);
   // The VDR bit depth that tells profile 7 from profile 4, both of which carry a residual.
   private static final long PROFILE_7_VDR_BIT_DEPTH_MINUS8 = 4;
 
@@ -81,7 +84,17 @@ record RpuDataHeader(
       header.previousVdrRpuId(reader.unsignedExpGolomb(PREVIOUS_VDR_RPU_ID));
     }
 
-    return header.build();
+    return withDmMetadataForItsCompression(header.build());
+  }
+
+  // The decoder rejects compressed DM metadata that the RPU does not carry.
+  private static RpuDataHeader withDmMetadataForItsCompression(RpuDataHeader header) {
+    if (header.compressesDmMetadata() && !header.dmMetadataPresent()) {
+      throw new DolbyVisionRpuException(
+          "compressed DM metadata that the RPU does not carry, which the decoder rejects");
+    }
+
+    return header;
   }
 
   // The field holds el_bit_depth_minus8 in its low 8 bits and ext_mapping_idc above them, and the
@@ -121,7 +134,7 @@ record RpuDataHeader(
         .enhancementLayerBitDepthField(enhancementLayerBitDepthField(reader))
         .vdrBitDepthMinus8(reader.unsignedExpGolomb(VDR_BIT_DEPTH_MINUS8))
         .spatialResamplingFilter(reader.flag())
-        .reservedZero3Bits((int) reader.bits(3))
+        .reservedZero3Bits((int) reader.bits(3, DM_METADATA_COMPRESSION))
         .enhancementLayerSpatialResamplingFilter(reader.flag())
         .disableResidual(reader.flag());
   }

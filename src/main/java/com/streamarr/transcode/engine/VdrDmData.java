@@ -158,10 +158,22 @@ record VdrDmData(
   }
 
   static VdrDmData parse(RpuBitReader reader, RpuDataHeader header) {
+    var affectedDmMetadataId = reader.unsignedExpGolomb(AFFECTED_DM_METADATA_ID);
+    var currentDmMetadataId = reader.unsignedExpGolomb(CURRENT_DM_METADATA_ID);
+    // The decoder rejects an RPU whose two ids differ, as the syntax leaves their meaning open.
+    if (affectedDmMetadataId != currentDmMetadataId) {
+      throw new DolbyVisionRpuException(
+          "an affected_dm_metadata_id of "
+              + affectedDmMetadataId
+              + " beside a current_dm_metadata_id of "
+              + currentDmMetadataId
+              + ", which the decoder rejects");
+    }
+
     var dmData =
         VdrDmData.builder()
-            .affectedDmMetadataId(reader.unsignedExpGolomb(AFFECTED_DM_METADATA_ID))
-            .currentDmMetadataId(reader.unsignedExpGolomb(CURRENT_DM_METADATA_ID))
+            .affectedDmMetadataId(affectedDmMetadataId)
+            .currentDmMetadataId(currentDmMetadataId)
             .sceneRefreshFlag(reader.unsignedExpGolomb());
     var signal = Optional.<SignalDescription>empty();
     if (!header.compressesDmMetadata()) {

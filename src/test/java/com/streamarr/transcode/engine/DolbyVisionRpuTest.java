@@ -298,6 +298,18 @@ class DolbyVisionRpuTest {
             "floating-point coefficients, whose identity curve the conversion does not write",
             SyntheticRpus.profile7().floatingPointCoefficients().escaped()),
         Arguments.of(
+            "an affected DM metadata id of 1 beside a current id of 0, which the decoder rejects",
+            SyntheticRpus.profile7().affectedDmMetadataId(1).escaped()),
+        Arguments.of(
+            "a metadata compression of 2, which the decoder does not implement",
+            SyntheticRpus.profile7().dmMetadataCompression(2).escaped()),
+        Arguments.of(
+            "a metadata compression of 7, which the decoder does not implement",
+            SyntheticRpus.profile7().dmMetadataCompression(7).escaped()),
+        Arguments.of(
+            "compressed DM metadata that the RPU does not carry, which the decoder rejects",
+            SyntheticRpus.profile7().compressedDm().withoutDmMetadata().escaped()),
+        Arguments.of(
             "a previous RPU id of 4294967295, above the largest value a ue(v) codes",
             SyntheticRpus.profile7().previousRpu(4_294_967_295L).escaped()),
         Arguments.of(
