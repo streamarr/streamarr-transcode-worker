@@ -2260,7 +2260,10 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
-      launcher.process(awaitLaunch(launcher, job)).pauseReached().get(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      launcher
+          .process(awaitLaunch(launcher, job))
+          .pauseReached()
+          .get(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
 
       await()
           .atMost(EVENT_LIMIT)
@@ -2274,8 +2277,7 @@ class TranscodeWorkerJobAttemptTest {
           .atMost(EVENT_LIMIT)
           .untilAsserted(
               () ->
-                  assertThat(keyframePacketScanCapacitiesSentTo(connection))
-                      .containsExactly(0, 1));
+                  assertThat(keyframePacketScanCapacitiesSentTo(connection)).containsExactly(0, 1));
     }
   }
 
@@ -2283,8 +2285,7 @@ class TranscodeWorkerJobAttemptTest {
   @DisplayName(
       "Should reopen keyframe packet scans 30 s after a held encode's search finds no keyframe"
           + " before the read-back")
-  void shouldReopenKeyframePacketScans30SAfterAHeldEncodesSearchFindsNoKeyframe()
-      throws Exception {
+  void shouldReopenKeyframePacketScans30SAfterAHeldEncodesSearchFindsNoKeyframe() throws Exception {
     var clock = new SteppedClock();
     var source = new ScriptedKeyframeSource(List.of(), 20);
     var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
@@ -2302,8 +2303,7 @@ class TranscodeWorkerJobAttemptTest {
           .atMost(EVENT_LIMIT)
           .untilAsserted(
               () ->
-                  assertThat(keyframePacketScanCapacitiesSentTo(connection))
-                      .containsExactly(0, 1));
+                  assertThat(keyframePacketScanCapacitiesSentTo(connection)).containsExactly(0, 1));
     }
   }
 
@@ -2320,7 +2320,10 @@ class TranscodeWorkerJobAttemptTest {
     try (var worker = worker(launcher, clock)) {
       worker.start("localhost", 1);
       startVariant(runtime.connection(), job);
-      launcher.process(awaitLaunch(launcher, job)).pauseReached().get(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      launcher
+          .process(awaitLaunch(launcher, job))
+          .pauseReached()
+          .get(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
       worker.close();
       worker.start("localhost", 1);
       var nextSession = runtime.connection();

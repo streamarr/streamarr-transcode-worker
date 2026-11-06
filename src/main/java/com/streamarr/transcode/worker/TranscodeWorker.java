@@ -431,9 +431,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
     probeCapacities.jobAttemptEnded(jobAttemptId);
     log.error(
-        "The search for the video's last keyframe of job attempt {} failed",
-        jobAttemptId,
-        cause);
+        "The search for the video's last keyframe of job attempt {} failed", jobAttemptId, cause);
     reportFailure(job, failure);
   }
 

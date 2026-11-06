@@ -23,9 +23,9 @@ class KeyframeSearchSmokeTest {
   @TempDir Path root;
 
   // At 4 fps with three B-frames in a pyramid, each picture decodes 0.5 s before it presents. The
-  // attempt for the segment at 18 s reads back from 14 s, so the search reads 10 s to 14 s, then 2 s
-  // to 10 s. The keyframe that presents at 10 s decodes at 9.5 s, where FFmpeg's scan of an MPEG-TS
-  // source reads it in the interval before the one it presents in.
+  // attempt for the segment at 18 s reads back from 14 s, so the search reads from 10 s to 14 s and
+  // then from 2 s to 10 s. The keyframe that presents at 10 s decodes at 9.5 s, so FFmpeg's scan of
+  // an MPEG-TS source reads it in the interval before the one it presents in.
   @Test
   @DisplayName(
       "Should read from the decode time of the keyframe 0.5 s before the last when the last"
@@ -34,8 +34,7 @@ class KeyframeSearchSmokeTest {
       throws Exception {
     var source = delayedPicturesWithKeyframesUpToTenSeconds();
 
-    var readPosition =
-        engine().heldPictureReadPosition(heldRequest(source), _ -> {}).orElseThrow();
+    var readPosition = engine().heldPictureReadPosition(heldRequest(source), _ -> {}).orElseThrow();
 
     assertThat(readPosition)
         .as("the decode time of the keyframe that presents at 8 s")
@@ -46,8 +45,7 @@ class KeyframeSearchSmokeTest {
   // MPEG-TS, which carries no index.
   private Path delayedPicturesWithKeyframesUpToTenSeconds() throws Exception {
     var source = root.resolve("delayed-pictures.ts");
-    var command =
-        new ArrayList<>(List.of("ffmpeg", "-nostdin", "-y", "-loglevel", "error"));
+    var command = new ArrayList<>(List.of("ffmpeg", "-nostdin", "-y", "-loglevel", "error"));
     command.addAll(
         List.of(
             "-f",
@@ -83,7 +81,8 @@ class KeyframeSearchSmokeTest {
   private static FfmpegTranscodeEngine engine() {
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
-        .capabilityService(new TranscodeCapabilityService("ffmpeg", _ -> new FakeProcess("ffmpeg version 8.1", 0)))
+        .capabilityService(
+            new TranscodeCapabilityService("ffmpeg", _ -> new FakeProcess("ffmpeg version 8.1", 0)))
         .launcher(new ProcessBuilderLauncher())
         .encoderStallTimeout(Duration.ofSeconds(30))
         .build();
@@ -104,7 +103,9 @@ class KeyframeSearchSmokeTest {
                 .transcodeMode(TranscodeMode.FULL_TRANSCODE)
                 .videoCodecFamily("h264")
                 .videoDecision(
-                    VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+                    VideoDecisionFixtures.encodeBuilder()
+                        .holdsLastFrameToAdvertisedEnd(true)
+                        .build())
                 .audioDecision(
                     AudioDecision.builder()
                         .mode(AudioMode.TRANSCODE)
