@@ -477,9 +477,26 @@ public class FfmpegCommandBuilder {
   // enough before the boundary. The seek can still read from an earlier keyframe: for a stream
   // with B-frames, FFmpeg moves the target 3/23 s earlier unless the container seeks by
   // presentation time, as Matroska and MPEG-TS do not. The producer discards what a copy reads
-  // before its first segment as preroll.
+  // before its first segment as preroll. A copy from a later segment that encodes its audio reads
+  // from one period earlier, so that its audio encoder receives the samples of its lead before the
+  // first segment's start, which an AC-3, E-AC-3 or Opus encoder needs.
   private static Duration inputSeekPosition(TranscodeRequest request) {
-    return request.seekPosition().orElseGet(() -> inputSeekStart(request));
+    var position = request.seekPosition().orElseGet(() -> inputSeekStart(request));
+    if (!copiesVideoBesideEncodedAudioFromALaterSegment(request)) {
+      return position;
+    }
+
+    var earlier = position.minusSeconds(request.targetSegmentDuration());
+    if (earlier.isNegative()) {
+      return Duration.ZERO;
+    }
+
+    return earlier;
+  }
+
+  private static boolean copiesVideoBesideEncodedAudioFromALaterSegment(TranscodeRequest request) {
+    return request.transcodeDecision().transcodeMode() == TranscodeMode.AUDIO_TRANSCODE
+        && request.startSequenceNumber() > 0;
   }
 
   // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.

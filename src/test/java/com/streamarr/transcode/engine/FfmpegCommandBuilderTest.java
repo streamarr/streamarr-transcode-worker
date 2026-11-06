@@ -1988,28 +1988,21 @@ class FfmpegCommandBuilderTest {
     assertThat(videoFilter(cmd)).endsWith(FRAME_GRID + ",trim=start_pts=144");
   }
 
-  @ParameterizedTest
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @Test
   @DisplayName(
       "Should seek to its first segment when a stream-copy replacement attempt starts mid-stream")
-  void shouldSeekToItsFirstSegmentWhenAStreamCopyReplacementAttemptStartsMidStream(
-      TranscodeMode mode) {
-    var cmd = command(request(mode).startSequenceNumber(5).build(), "copy");
+  void shouldSeekToItsFirstSegmentWhenAStreamCopyReplacementAttemptStartsMidStream() {
+    var cmd = command(request(TranscodeMode.REMUX).startSequenceNumber(5).build(), "copy");
 
     assertThat(cmd).containsSubsequence("-ss", "30", "-i");
   }
 
-  @ParameterizedTest
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @Test
   @DisplayName(
       "Should seek a stream copy to the server's keyframe position when the job carries one")
-  void shouldSeekAStreamCopyToTheServersKeyframePositionWhenTheJobCarriesOne(TranscodeMode mode) {
+  void shouldSeekAStreamCopyToTheServersKeyframePositionWhenTheJobCarriesOne() {
     var request =
-        request(mode)
+        request(TranscodeMode.REMUX)
             .startSequenceNumber(5)
             .seekPosition(Optional.of(Duration.ofSeconds(29, 196_000_000)))
             .build();
@@ -2017,6 +2010,42 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request, "copy");
 
     assertThat(cmd).containsSubsequence("-ss", "29.196", "-i");
+  }
+
+  // The audio encoder's lead needs samples before the first segment's start, and a copy's own seek
+  // reaches no further back than the segment's keyframe. Segment 5 starts at 30 s of 6 s slots.
+  @ParameterizedTest(name = "server position {0} ms")
+  @CsvSource({", 24", "29196, 23.196"})
+  @DisplayName(
+      "Should seek one period before the copy's own seek when a stream copy replacement attempt"
+          + " encodes its audio")
+  void shouldSeekOnePeriodBeforeTheCopysOwnSeekWhenAStreamCopyReplacementEncodesItsAudio(
+      Long serverPositionMillis, String expectedSeek) {
+    var request =
+        request(TranscodeMode.AUDIO_TRANSCODE)
+            .startSequenceNumber(5)
+            .seekPosition(Optional.ofNullable(serverPositionMillis).map(Duration::ofMillis))
+            .build();
+
+    var cmd = command(request, "copy");
+
+    assertThat(cmd).containsSubsequence("-ss", expectedSeek, "-i");
+  }
+
+  @Test
+  @DisplayName(
+      "Should read from the source's start when a stream copy replacement attempt that encodes its"
+          + " audio starts less than a period in")
+  void shouldReadFromTheSourcesStartWhenACopyReplacementEncodingItsAudioStartsLessThanAPeriodIn() {
+    var request =
+        request(TranscodeMode.AUDIO_TRANSCODE)
+            .startSequenceNumber(1)
+            .seekPosition(Optional.of(Duration.ofMillis(5_500)))
+            .build();
+
+    var cmd = command(request, "copy");
+
+    assertThat(cmd).doesNotContain("-ss");
   }
 
   @Test
@@ -3502,13 +3531,13 @@ class FfmpegCommandBuilderTest {
             "copy");
 
     assertThat(cmd)
-        .containsSequence("-ss", "29.5", "-i")
+        .containsSequence("-ss", "23.5", "-i")
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "asetpts='PTS+round((0+floor(0*SR/(1024))*(1024))/SR/TB)',apad,"
+                + "asetpts='PTS+round((0+floor(5.5*SR/(1024))*(1024))/SR/TB)',apad,"
                 + "asetpts='if(isnan(PTS),30/TB+N/SR/TB,PTS)',atrim=start=30,"
-                + "asetpts='PTS-round((0+floor(0*SR/(1024))*(1024))/SR/TB)',atrim=end=67")
+                + "asetpts='PTS-round((0+floor(5.5*SR/(1024))*(1024))/SR/TB)',atrim=end=67")
         .doesNotContain("-noaccurate_seek", "-vf");
   }
 

@@ -1881,16 +1881,15 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // A copy that encodes its audio reads from one period earlier, for its audio encoder's lead.
   @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_AUDIO_TRANSCODE"})
+  @CsvSource({"TRANSCODE_MODE_REMUX, 30", "TRANSCODE_MODE_AUDIO_TRANSCODE, 24"})
   @DisplayName(
-      "Should seek a stream copy to its start sequence number's boundary when the job's seek"
+      "Should seek a stream copy from its start sequence number's boundary when the job's seek"
           + " position names another time")
   void
-      shouldSeekAStreamCopyToItsStartSequenceNumbersBoundaryWhenTheJobsSeekPositionNamesAnotherTime(
-          TranscodeMode mode) throws Exception {
+      shouldSeekAStreamCopyFromItsStartSequenceNumbersBoundaryWhenTheJobsSeekPositionNamesAnotherTime(
+          TranscodeMode mode, String expectedSeek) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(mode);
     job.getExecutionBuilder()
@@ -1905,7 +1904,7 @@ class TranscodeWorkerJobAttemptTest {
 
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
-          .containsSubsequence("-ss", "30", "-i");
+          .containsSubsequence("-ss", expectedSeek, "-i");
     }
   }
 
@@ -2188,14 +2187,14 @@ class TranscodeWorkerJobAttemptTest {
     assertRefusedAsAnInvalidSpecification(job.build());
   }
 
+  // A copy that encodes its audio reads from one period before the position, for its audio
+  // encoder's lead.
   @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_AUDIO_TRANSCODE"})
+  @CsvSource({"TRANSCODE_MODE_REMUX, 31.28125", "TRANSCODE_MODE_AUDIO_TRANSCODE, 25.28125"})
   @DisplayName(
-      "Should seek a stream copy to the server's keyframe position when the job carries one")
-  void shouldSeekAStreamCopyToTheServersKeyframePositionWhenTheJobCarriesOne(TranscodeMode mode)
-      throws Exception {
+      "Should seek a stream copy from the server's keyframe position when the job carries one")
+  void shouldSeekAStreamCopyFromTheServersKeyframePositionWhenTheJobCarriesOne(
+      TranscodeMode mode, String expectedSeek) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder();
     job.getDecisionBuilder().setMode(mode);
@@ -2214,7 +2213,7 @@ class TranscodeWorkerJobAttemptTest {
 
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
-          .containsSubsequence("-ss", "31.28125", "-i");
+          .containsSubsequence("-ss", expectedSeek, "-i");
     }
   }
 

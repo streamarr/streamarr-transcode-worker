@@ -282,12 +282,11 @@ const FIXTURES = [
     hlsComparisons: [],
   },
   {
-    name: '16-copy-encode-audio-seek30', source: 'cfr.mp4', mode: 'copy', audio: 'encode', encoder: null, seek: 30, start: 5,
-    proves: 'Replacement attempt at -ss 30 that copies the video and encodes the audio: the seek lands on the keyframe at ' +
-      '28.028 s, while the encoded audio starts at the seek point, 29.979 s with its priming frame. delay_moov writes ' +
-      'nothing until every track has a sample, so the first fragment runs from 28.028 s to 30.072 s and holds the ' +
-      'keyframe at 30.030 s in its middle, which opens segment 5 there; the samples before it are segment 4\'s ' +
-      'preroll, and segment 5 carries the start-0 recording\'s video samples.',
+    name: '16-copy-encode-audio-seek30', source: 'cfr.mp4', mode: 'copy', audio: 'encode', encoder: null, seek: 24, start: 5,
+    proves: 'Replacement attempt at -ss 24, one period before segment 5, that copies the video and encodes the audio: the ' +
+      'seek lands on the keyframe at 22.022 s, and the encoded audio, shifted so that an AAC frame starts on 30 s, starts ' +
+      'at 23.984 s with its priming frame, so the encoder has its lead before 30 s. The keyframe at 30.030 s opens ' +
+      'segment 5; the samples before it are preroll, and segment 5 carries the start-0 recording\'s video samples.',
     hlsComparisons: [],
   },
   {

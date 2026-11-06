@@ -3884,10 +3884,10 @@ class WorkerMediaSmokeTest {
   @Test
   @DisplayName(
       "Should upload the start-0 attempt's video packets for every media segment when a"
-          + " stream-copy replacement attempt that encodes its audio holds its first segment's"
-          + " keyframe inside FFmpeg's first fragment")
+          + " stream-copy replacement attempt that encodes its audio writes two keyframes into"
+          + " FFmpeg's first fragment")
   void
-      shouldUploadTheStartZeroAttemptsVideoPacketsWhenAReplacementAttemptHoldsItsFirstSegmentsKeyframeInsideFfmpegsFirstFragment()
+      shouldUploadTheStartZeroAttemptsVideoPacketsWhenACopyReplacementWritesTwoKeyframesIntoFfmpegsFirstFragment()
           throws Exception {
     var source = keyframeBeforeBoundarySource();
     var fromStart = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
@@ -3900,9 +3900,9 @@ class WorkerMediaSmokeTest {
     var replacementUploads =
         execute(engine(softwareCapabilities(), launcher), source.getParent(), replacement.build());
 
-    // The seek lands on the keyframe at 10.010 s while the encoded audio starts at 12 s, and FFmpeg
-    // writes nothing until every track has a sample, so its first fragment holds the keyframe at
-    // 12.012 s too.
+    // The attempt reads from one period early. Its seek lands on the keyframe at 4.004 s while the
+    // encoded audio starts just after 6 s, and FFmpeg writes nothing until every track has a
+    // sample, so its first fragment holds the keyframe at 6.006 s too.
     var output = Mp4Samples.read(launcher.outputOf(fromProto(replacement.getJobAttemptId())));
     var videoTrackId = output.videoTrack().trackId();
     assertThat(output.fragments().getFirst().samples())
@@ -7567,24 +7567,25 @@ class WorkerMediaSmokeTest {
   // A replacement attempt that copies the video seeks to its first segment's keyframe, whose exact
   // start lies between two samples of the 48 kHz audio. Its encoded audio must open on the first
   // sample at or after that start, where the start attempt's audio reaches, so the junction has no
-  // gap.
-  @Test
+  // gap. AC-3, E-AC-3 and Opus encoders need samples before that start for their lead.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"aac", "ac3", "eac3", "libopus"})
   @DisplayName(
       "Should open a copy's encoded audio on the first sample at or after each segment's exact"
           + " start when a replacement attempt copies the video and encodes the audio")
-  void shouldOpenACopysEncodedAudioOnTheFirstSampleAtOrAfterEachExactStartWhenAReplacementStarts()
-      throws Exception {
+  void shouldOpenACopysEncodedAudioOnTheFirstSampleAtOrAfterEachExactStartWhenAReplacementStarts(
+      String codec) throws Exception {
     var source = exactStartMpegTsSourceWithAudio();
     var starts = exactStarts(source);
     var startAttempt =
         execute(
             engine(softwareCapabilities()),
             source.getParent(),
-            copyEncodingAudioJob(source, starts).build());
+            copyEncodingAudioJob(source, starts, codec).build());
 
     for (var number = 1; number < starts.size(); number++) {
       var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
-      var replacementJob = copyEncodingAudioJob(source, starts);
+      var replacementJob = copyEncodingAudioJob(source, starts, codec);
       replacementJob
           .getExecutionBuilder()
           .setStartSequenceNumber(number)
@@ -7614,13 +7615,14 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  // A copy of the source's video on its exact starts that encodes its audio as stereo AAC.
-  private static VariantJob.Builder copyEncodingAudioJob(Path source, List<Long> starts) {
+  // A copy of the source's video on its exact starts that encodes its audio in stereo.
+  private static VariantJob.Builder copyEncodingAudioJob(
+      Path source, List<Long> starts, String codec) {
     var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE, starts);
     job.getDecisionBuilder()
         .getAudioBuilder()
         .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
-        .setCodec("aac")
+        .setCodec(codec)
         .setChannels(2)
         .setBitrateBitsPerSecond(128_000);
     return job;

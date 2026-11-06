@@ -342,7 +342,9 @@ run hls 15-copy-adjacent-keyframes.video-only video src/adjacent-keyframes.mp4 -
 
 # ------------------------------------------------------------------ 16. stream copy with encoded audio, and its replacement attempt
 run pipe 16-copy-encode-audio src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
-run pipe 16-copy-encode-audio-seek30 start=5 seek=30 src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
+# The replacement attempt reads from one period before its keyframe, so that the audio encoder
+# receives its lead before 30 s, and aligns its encoded audio on 30 s as an encode does.
+run pipe 16-copy-encode-audio-seek30 start=5 seek=24 src/cfr.mp4 -- "${COPY_VIDEO_PIPE[@]}" "${AAC_FROM_SEGMENT_5[@]}"
 
 # ------------------------------------------------------------------ 17. audio that ends 160 s before the video, copied and encoded
 run pipe 17-copy-audio-ends-long-before-video src/long-video.mp4 -- "${COPY_PIPE[@]}"
