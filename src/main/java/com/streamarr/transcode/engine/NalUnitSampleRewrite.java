@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -44,8 +45,25 @@ final class NalUnitSampleRewrite implements SampleRewrite {
 
   @Override
   public ByteBuffer rewrite(ByteBuffer sample) {
+    var units = unitsOf(sample);
     var kept = new ArrayList<ByteBuffer>();
     var changed = false;
+    for (var unit : units.nalUnits()) {
+      var rewritten = rewrittenUnit(unit);
+      changed |= rewritten.filter(each -> each == unit).isEmpty();
+      rewritten.ifPresent(kept::add);
+    }
+
+    if (!changed) {
+      return sample;
+    }
+
+    return joined(kept, units.trailing());
+  }
+
+  // The sample's NAL units, each sliced after its length, and the bytes after the last one.
+  private Units unitsOf(ByteBuffer sample) {
+    var units = new ArrayList<ByteBuffer>();
     var position = sample.position();
     while (sample.limit() - position >= lengthSize) {
       var length = lengthAt(sample, position);
@@ -59,18 +77,11 @@ final class NalUnitSampleRewrite implements SampleRewrite {
                 + " remain");
       }
 
-      var unit = sample.slice(unitStart, (int) length);
-      var rewritten = rewrittenUnit(unit);
-      changed |= rewritten.filter(each -> each == unit).isEmpty();
-      rewritten.ifPresent(kept::add);
+      units.add(sample.slice(unitStart, (int) length));
       position = unitStart + (int) length;
     }
 
-    if (!changed) {
-      return sample;
-    }
-
-    return joined(kept, sample.slice(position, sample.limit() - position));
+    return new Units(units, sample.slice(position, sample.limit() - position));
   }
 
   // The NAL unit as the copy keeps it: the same buffer, a rewritten SEI NAL unit, or nothing.
@@ -90,7 +101,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
 
     if (stripsHdr10Plus && syntax.wrapsNalUnits(type) && wrapsHdr10Plus(unit)) {
       throw new FragmentedMp4Exception(
-          FragmentedMp4Exception.Reason.OUTPUT_MISMATCH,
+          Reason.OUTPUT_MISMATCH,
           "an enhancement-layer NAL unit wraps HDR10+, which the copy cannot strip");
     }
 
@@ -104,8 +115,7 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     var messages = messagesOf(payload);
     if (messages.stream().anyMatch(message -> nestsHdr10Plus(payload, message))) {
       throw new FragmentedMp4Exception(
-          FragmentedMp4Exception.Reason.OUTPUT_MISMATCH,
-          "an SEI message nests HDR10+, which the copy cannot strip");
+          Reason.OUTPUT_MISMATCH, "an SEI message nests HDR10+, which the copy cannot strip");
     }
 
     var kept = messages.stream().filter(message -> !isHdr10Plus(payload, message)).toList();
@@ -120,13 +130,18 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     var rbsp = new ByteArrayOutputStream();
     kept.forEach(message -> rbsp.write(payload, message.start(), message.end() - message.start()));
     rbsp.write(RBSP_STOP_BYTE);
+    return Optional.of(withHeaderOf(unit, HevcEmulationPrevention.escaped(rbsp.toByteArray())));
+  }
+
+  // The unit's NAL unit header, then the escaped payload.
+  private ByteBuffer withHeaderOf(ByteBuffer unit, byte[] escapedPayload) {
     var rewritten = new ByteArrayOutputStream();
-    for (var index = 0; index < headerBytes; index++) {
+    for (var index = 0; index < syntax.headerBytes(); index++) {
       rewritten.write(unit.get(index));
     }
 
-    rewritten.writeBytes(HevcEmulationPrevention.escaped(rbsp.toByteArray()));
-    return Optional.of(ByteBuffer.wrap(rewritten.toByteArray()));
+    rewritten.writeBytes(escapedPayload);
+    return ByteBuffer.wrap(rewritten.toByteArray());
   }
 
   // The SEI messages of an SEI RBSP (ITU-T H.265 7.3.5), each from its payload type to the end of
@@ -249,6 +264,9 @@ final class NalUnitSampleRewrite implements SampleRewrite {
 
     return length;
   }
+
+  // The NAL units of a sample and the bytes after the last one too few to hold a length.
+  private record Units(List<ByteBuffer> nalUnits, ByteBuffer trailing) {}
 
   // An SEI message's bytes in the RBSP, from its payload type to the end of its payload.
   private record Message(int start, int type, int payloadStart, int end) {}
