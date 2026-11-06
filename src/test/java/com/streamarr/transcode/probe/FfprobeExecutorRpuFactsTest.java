@@ -125,8 +125,14 @@ class FfprobeExecutorRpuFactsTest {
             "an RPU cut inside its level 6 block",
             endingAfter(level6, level6.payload().length - 8)),
         Named.of(
-            "a mapping with two horizontal partitions, which the walk does not cover",
-            level6.toBuilder().xPartitionsMinus1(1).build().hevcNalUnit()),
+            "an RPU that reuses an earlier RPU's mapping, whose presence the walk does not track",
+            level6.toBuilder().usePreviousMapping(true).build().hevcNalUnit()),
+        Named.of(
+            "an el_bit_depth_minus8 whose upper bits name ext_mapping_idc 256, above FFmpeg's 255",
+            level6.toBuilder()
+                .header(level6.header().toBuilder().elBitDepthMinus8(0x1_00_02).build())
+                .build()
+                .hevcNalUnit()),
         Named.of(
             "an RPU that ends before its CRC and terminator",
             endingAfter(level6, level6.payload().length - 5)),
@@ -291,6 +297,31 @@ class FfprobeExecutorRpuFactsTest {
     }
 
     return rpu.build();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("headerAndMappingValuesThatFfmpegAccepts")
+  @DisplayName("Should parse an RPU when its header and mapping hold values that FFmpeg accepts")
+  void shouldParseAnRpuWhenItsHeaderAndMappingHoldValuesThatFfmpegAccepts(RpuBits rpu) {
+    var present = dolbyVisionOf(rpu, rpu, rpu);
+
+    assertThat(present.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL);
+    assertThat(present.hasRpuContentLightLevel()).isTrue();
+  }
+
+  static Stream<Named<RpuBits>> headerAndMappingValuesThatFfmpegAccepts() {
+    var level6 =
+        RpuBits.profile7(Nlq.identity()).extensionBlock(ExtensionBlock.level6(1_000, 400)).build();
+    return Stream.of(
+        Named.of(
+            "a mapping with two horizontal partitions, which FFmpeg reads past",
+            level6.toBuilder().xPartitionsMinus1(1).build()),
+        Named.of(
+            "an el_bit_depth_minus8 whose upper bits name ext_mapping_idc 255",
+            level6.toBuilder()
+                .header(level6.header().toBuilder().elBitDepthMinus8(0xFF_02).build())
+                .build()));
   }
 
   @ParameterizedTest(name = "ms_weight {0}")

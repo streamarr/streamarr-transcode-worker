@@ -90,8 +90,10 @@ record RpuBits(
       coefficient(bits, 1, 0);
     }
 
+    // el_bit_depth_minus8 holds ext_mapping_idc above its low 8 bits.
+    var enhancementLayerBits = (int) (header.elBitDepthMinus8() & 0xFF) + 8;
     for (var nlq : header.disableResidual() ? List.<Nlq>of() : nlqs) {
-      bits.put((int) header.elBitDepthMinus8() + 8, nlq.offset());
+      bits.put(enhancementLayerBits, nlq.offset());
       coefficient(bits, nlq.vdrInMaxInteger(), nlq.vdrInMaxFraction());
       coefficient(bits, nlq.slopeInteger(), nlq.slopeFraction());
       coefficient(bits, nlq.thresholdInteger(), nlq.thresholdFraction());

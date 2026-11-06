@@ -27,7 +27,9 @@ final class DolbyVisionRpuReader {
   private static final int LARGEST_LOG2_DENOMINATOR = 32;
   private static final int FLOAT_BITS = 32;
   private static final int LARGEST_BIT_DEPTH_MINUS_8 = 8;
+  // el_bit_depth_minus8 holds the 8-bit ext_mapping_idc above its low 8 bits.
   private static final int EL_BIT_DEPTH_BITS = 0xFF;
+  private static final int LARGEST_EXT_MAPPING_IDC = 0xFF;
   private static final int LARGEST_METADATA_ID = 15;
   private static final int LARGEST_PIVOTS_MINUS_2 = 7;
   private static final int COMPONENTS = 3;
@@ -171,14 +173,14 @@ final class DolbyVisionRpuReader {
   }
 
   /**
-   * The layer of the RPU's own mapping, UNSPECIFIED inside the optional when the RPU refers to an
-   * earlier RPU's mapping; empty when the mapping breaks the syntax.
+   * The layer of the RPU's own mapping; empty when the mapping breaks the syntax or the RPU refers
+   * to an earlier RPU's mapping. FFmpeg accepts such an RPU only when the decoder still holds that
+   * mapping, which the walk, reading each RPU alone, cannot tell.
    */
   private static Optional<DolbyVisionEnhancementLayer> ownMappingLayer(
       BitReader reader, Header header) {
     if (reader.flag()) {
-      reader.unsignedExpGolomb();
-      return Optional.of(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_UNSPECIFIED);
+      return Optional.empty();
     }
 
     return mappingLayer(reader, header);
@@ -186,7 +188,7 @@ final class DolbyVisionRpuReader {
 
   /**
    * The layer that the RPU's own mapping describes; empty when the mapping uses syntax that FFmpeg
-   * rejects or that the walk does not cover, such as more than one partition.
+   * rejects or that the walk does not cover.
    */
   private static Optional<DolbyVisionEnhancementLayer> mappingLayer(
       BitReader reader, Header header) {
@@ -212,9 +214,9 @@ final class DolbyVisionRpuReader {
       return Optional.empty();
     }
 
-    if (reader.unsignedExpGolomb() != 0 || reader.unsignedExpGolomb() != 0) {
-      return Optional.empty();
-    }
+    // FFmpeg reads the partition counts and then one set of curves, whatever the counts say.
+    reader.unsignedExpGolomb();
+    reader.unsignedExpGolomb();
 
     for (var component = 0; component < COMPONENTS; component++) {
       for (var piece = 0; piece < pivots[component] - 1; piece++) {
@@ -485,9 +487,11 @@ final class DolbyVisionRpuReader {
       }
 
       var baseLayerBitDepthMinus8 = reader.unsignedExpGolomb();
-      var enhancementLayerBitDepthMinus8 = reader.unsignedExpGolomb() & EL_BIT_DEPTH_BITS;
+      var enhancementLayerField = reader.unsignedExpGolomb();
+      var enhancementLayerBitDepthMinus8 = enhancementLayerField & EL_BIT_DEPTH_BITS;
       var vdrBitDepthMinus8 = reader.unsignedExpGolomb();
-      if (baseLayerBitDepthMinus8 > LARGEST_BIT_DEPTH_MINUS_8
+      if ((enhancementLayerField >> 8) > LARGEST_EXT_MAPPING_IDC
+          || baseLayerBitDepthMinus8 > LARGEST_BIT_DEPTH_MINUS_8
           || enhancementLayerBitDepthMinus8 > LARGEST_BIT_DEPTH_MINUS_8
           || vdrBitDepthMinus8 > LARGEST_BIT_DEPTH_MINUS_8) {
         return Optional.empty();
