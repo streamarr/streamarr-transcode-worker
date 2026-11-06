@@ -115,6 +115,15 @@ final class SyntheticRpus {
     private int fractionBits = COEFFICIENT_LOG2_DENOM;
     private OptionalInt emptyBlocks = OptionalInt.empty();
     private long lumaMappingIdc = 0;
+    private long vdrRpuId = 0;
+    private long xPartitionsMinus1 = 2;
+    private long yPartitionsMinus1 = 1;
+    private long baseLayerBitDepthMinus8 = BL_BIT_DEPTH - 8;
+    private long enhancementLayerBitDepthField = 2;
+    private long vdrBitDepthMinus8 = 4;
+    private long affectedDmMetadataId = 0;
+    private long currentDmMetadataId = 0;
+    private int signalBitDepth = 12;
 
     private Builder() {}
 
@@ -132,6 +141,55 @@ final class SyntheticRpus {
      */
     Builder lumaMappingIdc(long value) {
       lumaMappingIdc = value;
+      return this;
+    }
+
+    Builder vdrRpuId(long value) {
+      vdrRpuId = value;
+      return this;
+    }
+
+    /** num_x_partitions_minus1 and num_y_partitions_minus1, which follow the NLQ pivots. */
+    Builder partitionsMinus1(long x, long y) {
+      xPartitionsMinus1 = x;
+      yPartitionsMinus1 = y;
+      return this;
+    }
+
+    /**
+     * The header's bl_bit_depth_minus8 alone; the pivots and NLQ fields keep the width of a 10-bit
+     * base layer.
+     */
+    Builder baseLayerBitDepthMinus8(long value) {
+      baseLayerBitDepthMinus8 = value;
+      return this;
+    }
+
+    /** The ue(v) that holds el_bit_depth_minus8 in its low 8 bits and ext_mapping_idc above. */
+    Builder enhancementLayerBitDepthField(long value) {
+      enhancementLayerBitDepthField = value;
+      return this;
+    }
+
+    /** vdr_bit_depth_minus8; 4 tells profile 7 from profile 4. */
+    Builder vdrBitDepthMinus8(long value) {
+      vdrBitDepthMinus8 = value;
+      return this;
+    }
+
+    Builder affectedDmMetadataId(long value) {
+      affectedDmMetadataId = value;
+      return this;
+    }
+
+    Builder currentDmMetadataId(long value) {
+      currentDmMetadataId = value;
+      return this;
+    }
+
+    /** The signal description's 5-bit bit depth. */
+    Builder signalBitDepth(int value) {
+      signalBitDepth = value;
       return this;
     }
 
@@ -268,7 +326,8 @@ final class SyntheticRpus {
     private void writeHeader(BitSink sink) {
       sink.u(RPU_TYPE, 6).u(RPU_FORMAT, 11).u(vdrRpuProfile, 4).u(0, 4).bit(1);
       sink.bit(0).u(0, 2).ue(coefficientLog2Denom).u(1, 2).bit(fullRange ? 1 : 0);
-      sink.ue(BL_BIT_DEPTH - 8).ue(2).ue(4).bit(0).u(compressedDm ? 1 : 0, 3);
+      sink.ue(baseLayerBitDepthMinus8).ue(enhancementLayerBitDepthField).ue(vdrBitDepthMinus8);
+      sink.bit(0).u(compressedDm ? 1 : 0, 3);
       sink.bit(enhancementLayerFilter ? 1 : 0).bit(residual ? 0 : 1);
       sink.bit(dmMetadata ? 1 : 0);
       if (previousRpuId.isPresent()) {
@@ -280,7 +339,7 @@ final class SyntheticRpus {
     }
 
     private void writeMapping(BitSink sink) {
-      sink.ue(0).ue(0).ue(0);
+      sink.ue(vdrRpuId).ue(0).ue(0);
       for (var component = 0; component < 3; component++) {
         writePivots(sink, component == 0 ? lumaPieces : 1);
       }
@@ -289,7 +348,7 @@ final class SyntheticRpus {
         sink.u(0, 3).u(0, BL_BIT_DEPTH).u(1023, BL_BIT_DEPTH);
       }
 
-      sink.ue(2).ue(1);
+      sink.ue(xPartitionsMinus1).ue(yPartitionsMinus1);
       for (var piece = 0; piece < lumaPieces; piece++) {
         writeIdentityPolynomial(sink, lumaMappingIdc);
       }
@@ -345,7 +404,7 @@ final class SyntheticRpus {
     }
 
     private void writeDmData(BitSink sink) {
-      sink.ue(0).ue(0).ue(1);
+      sink.ue(affectedDmMetadataId).ue(currentDmMetadataId).ue(1);
       if (!compressedDm) {
         writeSignalDescription(sink);
       }
@@ -392,7 +451,7 @@ final class SyntheticRpus {
       }
 
       sink.u(65535, 16).u(0, 16).u(0, 16).u(0, 32);
-      sink.u(12, 5).u(1, 2).u(0, 2).u(1, 2).u(7, 12).u(3079, 12).u(42, 10);
+      sink.u(signalBitDepth, 5).u(1, 2).u(0, 2).u(1, 2).u(7, 12).u(3079, 12).u(42, 10);
     }
 
     // CRC-32/MPEG-2: polynomial 0x04C11DB7, initial value all ones, no reflection, no final xor.

@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.RpuBitReader.AcceptedRange;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -23,6 +24,13 @@ record RpuDataMapping(
     @NonNull Optional<RpuDataNlq> nlq) {
 
   private static final int COMPONENTS = 3;
+  private static final AcceptedRange VDR_RPU_ID = AcceptedRange.id("vdr_rpu_id");
+  // The decoder reads 1 to 65535 partitions each way, coded minus 1.
+  private static final long MOST_PARTITIONS_MINUS1 = 0xFFFE;
+  private static final AcceptedRange X_PARTITIONS_MINUS1 =
+      new AcceptedRange("num_x_partitions_minus1", 0, MOST_PARTITIONS_MINUS1);
+  private static final AcceptedRange Y_PARTITIONS_MINUS1 =
+      new AcceptedRange("num_y_partitions_minus1", 0, MOST_PARTITIONS_MINUS1);
 
   RpuDataMapping {
     curves = List.copyOf(curves);
@@ -31,7 +39,7 @@ record RpuDataMapping(
   static RpuDataMapping parse(RpuBitReader reader, RpuDataHeader header) {
     var mapping =
         RpuDataMapping.builder()
-            .vdrRpuId(reader.unsignedExpGolomb())
+            .vdrRpuId(reader.unsignedExpGolomb(VDR_RPU_ID))
             .colorSpace(reader.unsignedExpGolomb())
             .chromaFormatIdc(reader.unsignedExpGolomb());
     var pivots = new ArrayList<List<Integer>>();
@@ -44,8 +52,8 @@ record RpuDataMapping(
       predPivotValues = Optional.of(RpuDataNlq.parsePredPivotValues(reader, header));
     }
 
-    mapping.xPartitionsMinus1(reader.unsignedExpGolomb());
-    mapping.yPartitionsMinus1(reader.unsignedExpGolomb());
+    mapping.xPartitionsMinus1(reader.unsignedExpGolomb(X_PARTITIONS_MINUS1));
+    mapping.yPartitionsMinus1(reader.unsignedExpGolomb(Y_PARTITIONS_MINUS1));
     var curves = new ArrayList<RpuReshapingCurve>();
     for (var component = 0; component < COMPONENTS; component++) {
       curves.add(RpuReshapingCurve.parsePieces(reader, header, pivots.get(component)));

@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.RpuBitReader.AcceptedRange;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -31,6 +32,12 @@ record VdrDmData(
   private static final long MOST_BLOCKS_IN_A_LIST = 31;
   private static final int MATRIX_COEFFICIENTS = 9;
   private static final int OFFSETS = 3;
+  private static final AcceptedRange AFFECTED_DM_METADATA_ID =
+      AcceptedRange.id("affected_dm_metadata_id");
+  private static final AcceptedRange CURRENT_DM_METADATA_ID =
+      AcceptedRange.id("current_dm_metadata_id");
+  private static final AcceptedRange SIGNAL_BIT_DEPTH =
+      new AcceptedRange("signal_bit_depth", 8, 16);
 
   VdrDmData {
     cmv29Blocks = List.copyOf(cmv29Blocks);
@@ -110,7 +117,7 @@ record VdrDmData(
           .eotfParameter0((int) reader.bits(16))
           .eotfParameter1((int) reader.bits(16))
           .eotfParameter2(reader.bits(32))
-          .bitDepth((int) reader.bits(5))
+          .bitDepth((int) reader.bits(5, SIGNAL_BIT_DEPTH))
           .colorSpace((int) reader.bits(2))
           .chromaFormat((int) reader.bits(2))
           .fullRangeFlag((int) reader.bits(2))
@@ -153,8 +160,8 @@ record VdrDmData(
   static VdrDmData parse(RpuBitReader reader, RpuDataHeader header) {
     var dmData =
         VdrDmData.builder()
-            .affectedDmMetadataId(reader.unsignedExpGolomb())
-            .currentDmMetadataId(reader.unsignedExpGolomb())
+            .affectedDmMetadataId(reader.unsignedExpGolomb(AFFECTED_DM_METADATA_ID))
+            .currentDmMetadataId(reader.unsignedExpGolomb(CURRENT_DM_METADATA_ID))
             .sceneRefreshFlag(reader.unsignedExpGolomb());
     var signal = Optional.<SignalDescription>empty();
     if (!header.compressesDmMetadata()) {

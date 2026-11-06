@@ -17,8 +17,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.fixtures.Mp4Samples;
+import com.sun.management.ThreadMXBean;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -50,6 +52,9 @@ class SegmentAssemblerBitstreamRewriteTest {
   private static final String AV1_SEGMENT = "libsvtav1-1080p30.mp4";
   private static final String AV1_CODEC_STRING = "av01.0.08M.08";
   private static final byte[] AUDIO_SAMPLE = {0x21, 0x10, 0x05};
+  // A rewrite that drops most of a sample's units allocates the fragment's own copy, the kept
+  // units' buffer and the output; a sample's bytes bound each of them, its unit count none.
+  private static final int MOST_ALLOCATED_BYTES_PER_SAMPLE_BYTE = 4;
   private static final String H264_SEGMENT = "libx264-1080p30.mp4";
   private static final String H264_CODEC_STRING = "avc1.640028";
   // H.264 NAL unit headers (ITU-T H.264 table 7-1): an SEI NAL unit, and an IDR slice with
@@ -725,6 +730,9 @@ class SegmentAssemblerBitstreamRewriteTest {
             "an RPU with a block list of 32 extension blocks of no bytes",
             sample(aud(), slice(0), SyntheticRpus.profile7().emptyBlocks(32).nalUnit())),
         Arguments.of(
+            "an RPU that names previous RPU 16, above the 15 that the decoder reads",
+            sample(aud(), slice(0), SyntheticRpus.profile7().previousRpu(16).nalUnit())),
+        Arguments.of(
             "an RPU that names previous RPU 4294967295, which no ue(v) writes",
             sample(
                 aud(), slice(0), SyntheticRpus.profile7().previousRpu(4_294_967_295L).nalUnit())),
@@ -737,6 +745,54 @@ class SegmentAssemblerBitstreamRewriteTest {
         Arguments.of(
             "a profile 5 RPU",
             sample(aud(), slice(0), SyntheticRpus.profile7().profile5().nalUnit())));
+  }
+
+  // A sample's unit count must not size the rewrite's memory: a sample of a million small
+  // enhancement-layer units, well under the segment cap, would otherwise hold an object per unit,
+  // many times the sample's own bytes and outside the producer's budget.
+  @Test
+  @DisplayName(
+      "Should allocate no more than a few times the sample's bytes when a sample holds a million"
+          + " enhancement-layer units")
+  void
+      shouldAllocateNoMoreThanAFewTimesTheSamplesBytesWhenASampleHoldsAMillionEnhancementLayerUnits()
+          throws IOException {
+    var sample = sampleOfEnhancementLayerUnits(1_000_000);
+    var initialization = bytesOfInitializationSegment(HEVC_SEGMENT);
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                concat(
+                    initialization,
+                    fragmentBuilder().startsWithKeyframe(true).video(0, sample).build())));
+    var assembler = assemblerFor(profile7ConversionCopy());
+    var closed = new ArrayList<>(assembler.accept(output.initializationSegment()).closedSegments());
+    var fragment = output.fragments().getFirst();
+    var thread = (ThreadMXBean) ManagementFactory.getThreadMXBean();
+
+    var before = thread.getCurrentThreadAllocatedBytes();
+    closed.addAll(assembler.accept(fragment).closedSegments());
+    var allocated = thread.getCurrentThreadAllocatedBytes() - before;
+
+    closed.addAll(assembler.finish());
+    var converted = SyntheticRpus.nalUnit(SyntheticRpus.convertedProfile7());
+    assertThat(allocated).isLessThan((long) MOST_ALLOCATED_BYTES_PER_SAMPLE_BYTE * sample.length);
+    assertThat(videoSamplesOf(initialization, closed))
+        .containsExactly(hex(sample(aud(), slice(0), converted)));
+  }
+
+  // The AUD, the slice, that many enhancement-layer units and the picture's RPU.
+  private static byte[] sampleOfEnhancementLayerUnits(int count) {
+    var unit = enhancementLayer(0);
+    var rpu = SyntheticRpus.profile7().nalUnit();
+    var sample =
+        ByteBuffer.allocate(aud().length + slice(0).length + count * unit.length + rpu.length);
+    sample.put(aud()).put(slice(0));
+    for (var index = 0; index < count; index++) {
+      sample.put(unit);
+    }
+
+    return sample.put(rpu).array();
   }
 
   // The length-prefixed NAL unit with its second header byte, nuh_layer_id's low bits and
@@ -794,13 +850,24 @@ class SegmentAssemblerBitstreamRewriteTest {
     var closed = new ArrayList<>(assembler.accept(output.initializationSegment()).closedSegments());
     output.fragments().forEach(each -> closed.addAll(assembler.accept(each).closedSegments()));
     closed.addAll(assembler.finish());
-    var delivered = new ByteArrayOutputStream();
-    delivered.writeBytes(initialization);
-    closed.stream().skip(1).forEach(segment -> delivered.writeBytes(bytesOf(segment)));
-    var movie = Mp4Samples.read(delivered.toByteArray());
+    var movie = movieOf(initialization, closed);
     return new DeliveredSamples(
         hexOf(movie, movie.videoTrack()),
         movie.hasAudio() ? hexOf(movie, movie.audioTrack()) : List.of());
+  }
+
+  private static List<String> videoSamplesOf(byte[] initialization, List<ClosedSegment> closed) {
+    var movie = movieOf(initialization, closed);
+    return hexOf(movie, movie.videoTrack());
+  }
+
+  // The initialization segment and every closed media segment after the assembler's own
+  // initialization segment, read back as a movie.
+  private static Mp4Samples.Movie movieOf(byte[] initialization, List<ClosedSegment> closed) {
+    var delivered = new ByteArrayOutputStream();
+    delivered.writeBytes(initialization);
+    closed.stream().skip(1).forEach(segment -> delivered.writeBytes(bytesOf(segment)));
+    return Mp4Samples.read(delivered.toByteArray());
   }
 
   private static List<String> hexOf(Mp4Samples.Movie movie, Mp4Samples.Track track) {

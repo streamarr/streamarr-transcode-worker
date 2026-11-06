@@ -106,8 +106,18 @@ class DolbyVisionRpuTest {
         Arguments.of("no DM metadata", SyntheticRpus.profile7().withoutDmMetadata()),
         Arguments.of("the previous RPU's mapping", SyntheticRpus.profile7().previousRpu(0)),
         Arguments.of(
-            "a previous RPU id of 4294967294, the largest value a ue(v) codes",
-            SyntheticRpus.profile7().previousRpu(4_294_967_294L)),
+            "a previous RPU id of 15, the largest the decoder reads",
+            SyntheticRpus.profile7().previousRpu(15)),
+        Arguments.of(
+            "every id, partition count and bit depth at the largest value the decoder reads",
+            SyntheticRpus.profile7()
+                .vdrRpuId(15)
+                .partitionsMinus1(65_534, 65_534)
+                .enhancementLayerBitDepthField(0xFF02)
+                .vdrBitDepthMinus8(8)
+                .affectedDmMetadataId(15)
+                .currentDmMetadataId(15)
+                .signalBitDepth(16)),
         Arguments.of(
             "a block list of 31 extension blocks, as many as the decoder reads",
             SyntheticRpus.profile7().emptyBlocks(31)),
@@ -244,6 +254,46 @@ class DolbyVisionRpuTest {
         Arguments.of(
             "a block list of 32 extension blocks, above the 31 that the decoder reads",
             SyntheticRpus.profile7().emptyBlocks(32).escaped()),
+        Arguments.of(
+            "a coefficient denominator of 12, below the 13 that the decoder reads",
+            SyntheticRpus.profile7().coefficientLog2Denom(12).fractionBits(12).escaped()),
+        Arguments.of(
+            "a previous RPU id of 16, above the 15 that the decoder reads",
+            SyntheticRpus.profile7().previousRpu(16).escaped()),
+        Arguments.of(
+            "a vdr_rpu_id of 16, above the 15 that the decoder reads",
+            SyntheticRpus.profile7().vdrRpuId(16).escaped()),
+        Arguments.of(
+            "num_x_partitions_minus1 of 65535, above the 65534 that the decoder reads",
+            SyntheticRpus.profile7().partitionsMinus1(65_535, 1).escaped()),
+        Arguments.of(
+            "num_y_partitions_minus1 of 65535, above the 65534 that the decoder reads",
+            SyntheticRpus.profile7().partitionsMinus1(2, 65_535).escaped()),
+        Arguments.of(
+            "a base layer of 17 bits, above the 16 that the decoder reads",
+            SyntheticRpus.profile7().baseLayerBitDepthMinus8(9).escaped()),
+        Arguments.of(
+            "an enhancement layer of 17 bits, above the 16 that the decoder reads",
+            SyntheticRpus.profile7().enhancementLayerBitDepthField(9).escaped()),
+        Arguments.of(
+            "an ext_mapping_idc of 256 above the enhancement layer's bit depth, past the 255 that"
+                + " the decoder reads",
+            SyntheticRpus.profile7().enhancementLayerBitDepthField(0x10002).escaped()),
+        Arguments.of(
+            "a VDR bit depth of 17 bits, above the 16 that the decoder reads",
+            SyntheticRpus.profile7().vdrBitDepthMinus8(9).escaped()),
+        Arguments.of(
+            "an affected DM metadata id of 16, above the 15 that the decoder reads",
+            SyntheticRpus.profile7().affectedDmMetadataId(16).escaped()),
+        Arguments.of(
+            "a current DM metadata id of 16, above the 15 that the decoder reads",
+            SyntheticRpus.profile7().currentDmMetadataId(16).escaped()),
+        Arguments.of(
+            "a signal bit depth of 7, below the 8 that the decoder reads",
+            SyntheticRpus.profile7().signalBitDepth(7).escaped()),
+        Arguments.of(
+            "a signal bit depth of 17, above the 16 that the decoder reads",
+            SyntheticRpus.profile7().signalBitDepth(17).escaped()),
         Arguments.of(
             "a previous RPU id of 4294967295, above the largest value a ue(v) codes",
             SyntheticRpus.profile7().previousRpu(4_294_967_295L).escaped()),
