@@ -688,14 +688,15 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       var command = launcher.command(fromProto(job.getJobAttemptId()));
       assertThat(command).containsSequence("-ss", "54", "-noaccurate_seek");
-      assertThat(command.get(command.indexOf("-filter_complex") + 1))
+      assertThat(command.get(command.lastIndexOf("-filter_complex") + 1))
           .contains(
               ",fps=24/1:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1296:end_pts=2028"
-                  + "[held_video];")
+                  + "[held_video];");
+      assertThat(command.get(command.indexOf("-filter_complex") + 1))
           .endsWith(
               "apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
                   + ",asetpts='PTS-round((0+floor(6*SR/(1024))*(1024))/SR/TB)',atrim=end=85.5"
-                  + "[held_audio]");
+                  + "[filtered_held_audio]");
     }
   }
 

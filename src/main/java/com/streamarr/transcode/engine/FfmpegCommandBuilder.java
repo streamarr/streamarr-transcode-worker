@@ -27,6 +27,7 @@ public class FfmpegCommandBuilder {
   private static final int HELD_AUDIO_INPUT = 1;
   private static final String HELD_VIDEO_LABEL = "[held_video]";
   private static final String HELD_AUDIO_LABEL = "[held_audio]";
+  private static final String FILTERED_HELD_AUDIO_LABEL = "[filtered_held_audio]";
   // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final String PROFILE_OPTION = "-profile:v";
@@ -481,10 +482,10 @@ public class FfmpegCommandBuilder {
   // so the first segment after the video's end waited for the whole audio after it. The held
   // encode reads the encoded audio from a second input of the source instead, seeked as the first
   // and placed on its timeline by -isync: the first input reaches the file's end at the demuxer's
-  // pace. Both inputs' filters run in one filter graph, which filters each output in turn from the
-  // one with the earliest time, so the held pictures do not run ahead of the audio. That graph maps
-  // the encode's outputs (addOneFilterGraphOfBothInputs), and the audio's input keeps its video in
-  // use (addAudioInputsVideoInUse).
+  // pace. The video's filters and the filtered audio meet in one filter graph, which filters each
+  // output in turn from the one with the earliest time, so the held pictures do not run ahead of
+  // the audio. That graph maps the encode's outputs (addOneFilterGraphOfBothInputs), and the
+  // audio's input keeps its video in use (addAudioInputsVideoInUse).
   private void addSourceInputsAndStreamSelection(List<String> cmd, TranscodeRequest request) {
     addSourceInput(cmd, request);
     if (readsAudioFromItsOwnInput(request, EncoderInput.SOURCE)) {
@@ -506,26 +507,36 @@ public class FfmpegCommandBuilder {
         && (!namesAudioStream(audio) || request.sourceAudio().isPresent());
   }
 
-  // The encode's video and audio filters, as one filter graph of the two inputs, and the maps of
-  // its two outputs. The video's filters and the audio's, which may be a graph of their own whose
-  // one unlabelled input and output these labels name, leave the output's options for the graph.
+  // The encode's video filters and filtered audio, as one filter graph of the two inputs, and the
+  // maps of its two outputs. The video's filters and the audio's, which may be a graph of their own
+  // whose one unlabelled input and output these labels name, leave the output's options for the
+  // graphs. FFmpeg rebuilds a whole filter graph when the frames of one of its inputs change
+  // format,
+  // and a rebuilt tpad has no picture left to hold once the video has ended. The audio's filters
+  // therefore run in a graph of their own, whose output keeps its first format through a rebuild,
+  // so the graph that holds the picture is never rebuilt for the audio.
   private static void addOneFilterGraphOfBothInputs(List<String> cmd, TranscodeDecision decision) {
     var video = takeOptionValue(cmd, "-vf").orElseThrow();
     var audio = takeOptionValue(cmd, "-af").orElse("anull");
     cmd.addAll(
         List.of(
             "-filter_complex",
-            "[0:"
-                + decision.videoDecision().streamIndex()
-                + "]"
-                + video
-                + HELD_VIDEO_LABEL
-                + ";["
+            "["
                 + HELD_AUDIO_INPUT
                 + ":"
                 + decision.audioDecision().sourceStreamSpecifier()
                 + "]"
                 + audio
+                + FILTERED_HELD_AUDIO_LABEL,
+            "-filter_complex",
+            "[0:"
+                + decision.videoDecision().streamIndex()
+                + "]"
+                + video
+                + HELD_VIDEO_LABEL
+                + ";"
+                + FILTERED_HELD_AUDIO_LABEL
+                + "anull"
                 + HELD_AUDIO_LABEL,
             "-map",
             HELD_VIDEO_LABEL,

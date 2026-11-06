@@ -916,13 +916,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
     return cmd.get(cmd.indexOf("-af") + 1);
   }
 
-  // A held encode filters its audio from its second input, in one filter graph with its video.
+  // A held encode filters its audio from its second input, in a filter graph of its own that comes
+  // before its video's.
   private static String heldAudioFilter(List<String> cmd) {
-    assertThat(cmd).containsOnlyOnce("-filter_complex").doesNotContain("-af");
+    assertThat(cmd).doesNotContain("-af");
     var graph = cmd.get(cmd.indexOf("-filter_complex") + 1);
-    var audio =
-        graph.substring(graph.indexOf("[held_video];[1:a:0]") + "[held_video];[1:a:0]".length());
-    assertThat(audio).endsWith("[held_audio]");
-    return audio.substring(0, audio.length() - "[held_audio]".length());
+    assertThat(graph).startsWith("[1:a:0]").endsWith("[filtered_held_audio]");
+    return graph.substring("[1:a:0]".length(), graph.length() - "[filtered_held_audio]".length());
   }
 }

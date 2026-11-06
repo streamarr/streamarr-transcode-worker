@@ -6435,6 +6435,11 @@ class WorkerMediaSmokeTest {
                 VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT),
             Arguments.of(
                 Named.<ThrowingSupplier<Path>>of(
+                    "84 s of AC-3 that turns from stereo to 5.1 after the video's end",
+                    WorkerMediaSmokeTest::videoEndsBeforeAudioThatChangesLayoutSource),
+                VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT),
+            Arguments.of(
+                Named.<ThrowingSupplier<Path>>of(
                     "1,764 s of 5.1 AC-3", WorkerMediaSmokeTest::longAudioAfterVideoEndSource),
                 LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT))
         .flatMap(
@@ -8140,6 +8145,59 @@ class WorkerMediaSmokeTest {
               "48",
               "-c:a",
               "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source whose video ends before its audio, with AC-3 audio that turns from stereo to 5.1 at
+  // 70 s, inside segment 11: the audio decoder's frames change layout after the video's end.
+  private static synchronized Path videoEndsBeforeAudioThatChangesLayoutSource() throws Exception {
+    var source = seekableSources.resolve("video-ends-before-audio-that-changes-layout.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var stereo = seekableSources.resolve("stereo-before-the-layout-change.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=70,"
+                  + "pan=stereo|c0=c0|c1=c0",
+              "-c:a",
+              "ac3"),
+          stereo);
+      var surround = seekableSources.resolve("surround-after-the-layout-change.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=14,"
+                  + "pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
+              "-c:a",
+              "ac3"),
+          surround);
+      var audio = seekableSources.resolve("audio-that-changes-layout.ac3");
+      Files.write(audio, Files.readAllBytes(stereo));
+      Files.write(audio, Files.readAllBytes(surround), StandardOpenOption.APPEND);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-i",
+              audio.toString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "copy"),
           source);
       generatedSeekableSources.add(source);
     }

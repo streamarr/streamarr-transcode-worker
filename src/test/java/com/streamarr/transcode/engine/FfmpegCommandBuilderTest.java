@@ -14,7 +14,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
-import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -706,29 +706,46 @@ class FfmpegCommandBuilderTest {
     return cmd.get(cmd.indexOf("-vf") + 1);
   }
 
-  // A held encode that encodes its audio filters the source's video from its first input and the
-  // audio from its second, in one filter graph.
+  // A held encode that encodes its audio filters the source's video from its first input, and the
+  // audio from its second in a filter graph of its own whose output the video's graph takes in.
+  private static final String HELD_VIDEO_GRAPH_OUTPUTS =
+      "[held_video];[filtered_held_audio]anull[held_audio]";
+
   private static String heldVideoFilter(List<String> cmd) {
-    var video = heldFilterGraph(cmd).split(Pattern.quote("[held_video];"), 2)[0];
-    assertThat(video).as("the held video's input").startsWith("[0:0]");
-    return video.substring("[0:0]".length());
+    var video = heldVideoGraph(cmd);
+    assertThat(video)
+        .as("the held video's input and outputs")
+        .startsWith("[0:0]")
+        .endsWith(HELD_VIDEO_GRAPH_OUTPUTS);
+    return video.substring("[0:0]".length(), video.length() - HELD_VIDEO_GRAPH_OUTPUTS.length());
   }
 
   private static String heldAudioFilter(List<String> cmd) {
-    var audio = heldFilterGraph(cmd).split(Pattern.quote("[held_video];"), 2)[1];
+    var audio = heldAudioGraph(cmd);
     assertThat(audio)
         .as("the held audio's input and output")
         .startsWith("[1:a:0]")
-        .endsWith("[held_audio]");
-    return audio.substring("[1:a:0]".length(), audio.length() - "[held_audio]".length());
+        .endsWith("[filtered_held_audio]");
+    return audio.substring("[1:a:0]".length(), audio.length() - "[filtered_held_audio]".length());
   }
 
-  private static String heldFilterGraph(List<String> cmd) {
-    assertThat(cmd)
-        .as("the held encode's filter options")
-        .containsOnlyOnce("-filter_complex")
-        .doesNotContain("-vf", "-af");
-    return cmd.get(cmd.indexOf("-filter_complex") + 1);
+  private static String heldAudioGraph(List<String> cmd) {
+    return heldFilterGraphs(cmd).getFirst();
+  }
+
+  private static String heldVideoGraph(List<String> cmd) {
+    return heldFilterGraphs(cmd).getLast();
+  }
+
+  private static List<String> heldFilterGraphs(List<String> cmd) {
+    assertThat(cmd).as("the held encode's filter options").doesNotContain("-vf", "-af");
+    var graphs =
+        IntStream.range(0, cmd.size() - 1)
+            .filter(index -> cmd.get(index).equals("-filter_complex"))
+            .mapToObj(index -> cmd.get(index + 1))
+            .toList();
+    assertThat(graphs).as("the held encode's filter graphs").hasSize(2);
+    return graphs;
   }
 
   @Test
@@ -3625,12 +3642,15 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should map the video and the audio from one filter graph of both inputs and copy the first"
-          + " input's streams to the framecrc when an encode holds the last frame")
-  void shouldMapBothOutputsOfOneFilterGraphAndCopyTheFirstInputsStreamsWhenAnEncodeHoldsIt() {
+      "Should map the video and the audio from one filter graph of both inputs, which takes the"
+          + " audio from a graph of the audio's filters, and copy the first input's streams to the"
+          + " framecrc when an encode holds the last frame")
+  void
+      shouldMapBothOutputsOfOneFilterGraphFedByAGraphOfTheAudiosFiltersAndCopyTheFirstInputsStreamsWhenAnEncodeHoldsIt() {
     var cmd = command(heldAndPadded(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
-    assertThat(heldFilterGraph(cmd)).startsWith("[0:0]").contains("[held_video];[1:a:0]");
+    assertThat(heldAudioGraph(cmd)).startsWith("[1:a:0]").endsWith("[filtered_held_audio]");
+    assertThat(heldVideoGraph(cmd)).startsWith("[0:0]").endsWith(HELD_VIDEO_GRAPH_OUTPUTS);
     assertThat(cmd)
         .containsSequence("-map", "[held_video]", "-map", "[held_audio]")
         .containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "0:a:0", "-c", "copy")
@@ -3656,16 +3676,16 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(heldFilterGraph(cmd)).contains("[held_video];[1:2]");
+    assertThat(heldAudioGraph(cmd)).startsWith("[1:2]");
   }
 
-  // An attempt from the start that neither pads nor names its layout filters no audio; the graph
-  // still carries it, so that the audio paces the held pictures.
+  // An attempt from the start that neither pads nor names its layout filters no audio; the graphs
+  // still carry it, so that the audio paces the held pictures.
   @Test
   @DisplayName(
-      "Should pass the audio through the filter graph unchanged when an encode from the start holds"
+      "Should pass the audio through the filter graphs unchanged when an encode from the start holds"
           + " the last frame and neither pads nor names the audio's layout")
-  void shouldPassTheAudioThroughTheGraphUnchangedWhenAHoldingEncodeFiltersNoAudio() {
+  void shouldPassTheAudioThroughTheGraphsUnchangedWhenAHoldingEncodeFiltersNoAudio() {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
             .videoDecision(
