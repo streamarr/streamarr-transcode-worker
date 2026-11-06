@@ -124,6 +124,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -6452,8 +6453,8 @@ class WorkerMediaSmokeTest {
   }
 
   // The first segment after the video's end needs one period of held pictures and of audio, so it
-  // must not wait for the downmix of the 1,700 s of audio after it. The output end that the worker
-  // reports before that segment's upload shows how far past it FFmpeg had written the audio.
+  // must not wait for the downmix of the 1,700 s of audio after it. What FFmpeg had written when
+  // that segment's upload started shows how far past it FFmpeg had encoded the audio.
   @Test
   @DisplayName(
       "Should upload the first segment after the video's end before encoding the audio after it"
@@ -6469,25 +6470,50 @@ class WorkerMediaSmokeTest {
         .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
     var firstSegmentAfterTheVideo = VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1;
     job.getExecutionBuilder().setStartSequenceNumber(firstSegmentAfterTheVideo);
-    var uploadStartedAt = new ConcurrentHashMap<String, Long>();
+    var segment = segmentName(firstSegmentAfterTheVideo);
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var attempt = fromProto(job.getJobAttemptId());
+    var writtenWhenTheUploadStarted = new AtomicReference<byte[]>();
 
     var completion =
         executeToCompletion(
-            engine(softwareCapabilities()),
+            engine(softwareCapabilities(), launcher),
             source.getParent(),
             job.build(),
-            name -> uploadStartedAt.putIfAbsent(name, System.nanoTime()));
+            name -> {
+              if (name.equals(segment)) {
+                writtenWhenTheUploadStarted.compareAndSet(null, launcher.outputOf(attempt));
+              }
+            });
 
-    var segment = segmentName(firstSegmentAfterTheVideo);
     assertThat(completion.uploads().names()).contains(segment);
-    assertThat(
-            completion.progress().stream()
-                .filter(report -> report.receivedAtNanos() < uploadStartedAt.get(segment))
-                .map(TimedProgress::outputEnd))
+    var written = Mp4Samples.read(wholeFragmentsOf(writtenWhenTheUploadStarted.get()));
+    assertThat(written.samplesOf(written.audioTrack()))
+        .as("the audio FFmpeg had written when %s's upload started", segment)
+        .isNotEmpty();
+    assertThat(written.latestSampleEnd())
         .as(
-            "the output ends reported before %s's upload started; the audio ends at 1,764 s",
+            "how far FFmpeg had written when %s's upload started; the audio ends at 1,764 s",
             segment)
-        .allMatch(end -> end.compareTo(HALF_OF_THE_LONG_AUDIO) < 0);
+        .isGreaterThan(Duration.ofSeconds(6L * firstSegmentAfterTheVideo))
+        .isLessThan(HALF_OF_THE_LONG_AUDIO);
+  }
+
+  // The output's boxes up to the end of its last whole mdat, so that a snapshot taken while FFmpeg
+  // writes reads as whole fragments.
+  private static byte[] wholeFragmentsOf(byte[] output) {
+    var buffer = ByteBuffer.wrap(output);
+    var end = 0;
+    var start = 0;
+    while (start + 8 <= output.length && start + buffer.getInt(start) <= output.length) {
+      if (new String(output, start + 4, 4, StandardCharsets.US_ASCII).equals("mdat")) {
+        end = start + buffer.getInt(start);
+      }
+
+      start += buffer.getInt(start);
+    }
+
+    return Arrays.copyOf(output, end);
   }
 
   @Test
