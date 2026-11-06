@@ -418,8 +418,7 @@ public class FfmpegCommandBuilder {
     var decision = request.transcodeDecision();
     cmd.addAll(List.of(ffmpegPath, "-y"));
     if (input == EncoderInput.SOURCE) {
-      addSourceInput(cmd, request);
-      addStreamSelection(cmd, decision);
+      addSourceInputsAndStreamSelection(cmd, request);
       return;
     }
 
@@ -459,6 +458,11 @@ public class FfmpegCommandBuilder {
 
     return firstSegmentStartOfAnEncode(request)
         .map(start -> start.minus(Duration.ofSeconds(request.targetSegmentDuration())));
+  }
+
+  private void addSourceInputsAndStreamSelection(List<String> cmd, TranscodeRequest request) {
+    addSourceInput(cmd, request);
+    addStreamSelection(cmd, request.transcodeDecision());
   }
 
   private void addSourceInput(List<String> cmd, TranscodeRequest request) {
