@@ -127,6 +127,9 @@ class FfprobeExecutorRpuFactsTest {
             "an RPU cut inside its level 6 block",
             endingAfter(level6, level6.payload().length - 8)),
         Named.of(
+            "a partition count of 65,536, above the pinned FFmpeg's 65,535",
+            level6.toBuilder().xPartitionsMinus1(65_535).build().hevcNalUnit()),
+        Named.of(
             "a partition count of 2^32, whose 32 leading zeros FFmpeg reads as 31",
             level6.toBuilder().xPartitionsMinus1(0xFFFF_FFFFL).build().hevcNalUnit()),
         Named.of(
@@ -320,8 +323,8 @@ class FfprobeExecutorRpuFactsTest {
         RpuBits.profile7(Nlq.identity()).extensionBlock(ExtensionBlock.level6(1_000, 400)).build();
     return Stream.of(
         Named.of(
-            "a mapping with two horizontal partitions, which FFmpeg reads past",
-            level6.toBuilder().xPartitionsMinus1(1).build()),
+            "a mapping with 65,535 horizontal partitions, the pinned FFmpeg's largest count",
+            level6.toBuilder().xPartitionsMinus1(65_534).build()),
         Named.of(
             "an el_bit_depth_minus8 whose upper bits name ext_mapping_idc 255",
             level6.toBuilder()

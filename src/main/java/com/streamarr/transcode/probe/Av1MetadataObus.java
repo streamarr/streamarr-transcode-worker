@@ -51,7 +51,9 @@ final class Av1MetadataObus implements MetadataWalk {
   // under 6 bytes, which no RPU header that the probe reads fits in.
   private static final long EMDF_HEADER = 0x01BE6841L;
   private static final long EMDF_PROTECTION = 0x400;
+  private static final int SMALLEST_EMDF_PAYLOAD = 6;
   private static final int LARGEST_EMDF_PAYLOAD = 512;
+  private static final long UNSIGNED_32_BITS = 0xFFFF_FFFFL;
 
   // The walk keeps the first payload of each kind, which kinds showed and a few values from each
   // RPU, not every OBU, so that its memory stays small however large the OBUs are.
@@ -162,7 +164,7 @@ final class Av1MetadataObus implements MetadataWalk {
       }
 
       var size = variableBits(reader);
-      if (size > LARGEST_EMDF_PAYLOAD) {
+      if (size < SMALLEST_EMDF_PAYLOAD || size > LARGEST_EMDF_PAYLOAD) {
         return Optional.empty();
       }
 
@@ -183,13 +185,12 @@ final class Av1MetadataObus implements MetadataWalk {
 
   /**
    * EMDF's variable_bits(8): 8 bits, then while a read_more bit is set, the value plus one shifted
-   * by 8 with the next 8 bits. The value stops growing past the largest payload that the walk
-   * accepts, so that it cannot overflow.
+   * by 8 with the next 8 bits. FFmpeg keeps the value in an unsigned 32-bit integer, so it wraps.
    */
   private static long variableBits(BitReader reader) {
     var value = reader.bits(8);
     while (reader.flag()) {
-      value = Math.min(((value + 1) << 8) | reader.bits(8), LARGEST_EMDF_PAYLOAD + 1L);
+      value = (((value + 1) << 8) | reader.bits(8)) & UNSIGNED_32_BITS;
     }
 
     return value;

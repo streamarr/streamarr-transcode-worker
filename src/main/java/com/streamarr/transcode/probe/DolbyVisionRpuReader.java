@@ -30,6 +30,8 @@ final class DolbyVisionRpuReader {
   // el_bit_depth_minus8 holds the 8-bit ext_mapping_idc above its low 8 bits.
   private static final int EL_BIT_DEPTH_BITS = 0xFF;
   private static final int LARGEST_EXT_MAPPING_IDC = 0xFF;
+  private static final long LARGEST_PARTITIONS = 0xFFFF;
+  private static final long UNSIGNED_32_BITS = 0xFFFF_FFFFL;
   private static final int LARGEST_METADATA_ID = 15;
   private static final int LARGEST_PIVOTS_MINUS_2 = 7;
   private static final int COMPONENTS = 3;
@@ -214,9 +216,12 @@ final class DolbyVisionRpuReader {
       return Optional.empty();
     }
 
-    // FFmpeg reads the partition counts and then one set of curves, whatever the counts say.
-    reader.unsignedExpGolombLong();
-    reader.unsignedExpGolombLong();
+    // The pinned FFmpeg accepts 1 to 65,535 partitions each way, the count minus one wrapping to
+    // 32 bits, and then reads one set of curves whatever the counts say.
+    if (!isPartitionCount(reader.unsignedExpGolombLong() + 1)
+        || !isPartitionCount(reader.unsignedExpGolombLong() + 1)) {
+      return Optional.empty();
+    }
 
     for (var component = 0; component < COMPONENTS; component++) {
       for (var piece = 0; piece < pivots[component] - 1; piece++) {
@@ -246,6 +251,11 @@ final class DolbyVisionRpuReader {
     var method = reader.bits(3);
     reader.bits(2 * header.baseLayerBitDepth());
     return method == LINEAR_DEADZONE;
+  }
+
+  private static boolean isPartitionCount(long countInLong) {
+    var count = countInLong & UNSIGNED_32_BITS;
+    return count >= 1 && count <= LARGEST_PARTITIONS;
   }
 
   /** Skips one piece of a reshaping curve; false for syntax that FFmpeg rejects. */
