@@ -1,5 +1,8 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.engine.EncodeFeature.DOLBY_VISION_TO_PQ;
+import static com.streamarr.transcode.engine.EncodeFeature.HLG;
+import static com.streamarr.transcode.engine.EncodeFeature.TEN_BIT;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -15,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -138,9 +142,65 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     assertThat(inputsOfTheReshapeTests).allSatisfy(input -> assertThat(input).doesNotExist());
   }
 
+  @Test
+  @DisplayName(
+      "Should list no encode feature and stop the test encode when it outlasts its deadline")
+  void shouldListNoEncodeFeatureAndStopTheTestEncodeWhenItOutlastsItsDeadline() {
+    var hungTests = new ArrayList<HungTestEncode>();
+    var service =
+        serviceWhoseFeatureTestsRun(
+            test -> {
+              if (test.feature() != EncodeFeature.PQ) {
+                return TestEncodeOutput.faithful(test).process();
+              }
+
+              var hung = new HungTestEncode(false);
+              hungTests.add(hung);
+              return hung;
+            });
+
+    service.detectCapabilities();
+
+    assertThat(featuresByEncoder(service))
+        .containsEntry("libx265", Set.of(TEN_BIT, HLG, DOLBY_VISION_TO_PQ))
+        .containsEntry("libsvtav1", Set.of(TEN_BIT, HLG, DOLBY_VISION_TO_PQ));
+    assertThat(hungTests).hasSize(2).allSatisfy(hung -> assertThat(hung.isAlive()).isFalse());
+  }
+
+  @Test
+  @DisplayName(
+      "Should start no further test encode and restore the interrupt when detection is interrupted"
+          + " during a feature test")
+  void shouldStartNoFurtherTestEncodeAndRestoreTheInterruptWhenDetectionIsInterrupted() {
+    var startedTests = new ArrayList<FeatureTest>();
+    var service =
+        serviceWhoseFeatureTestsRun(
+            test -> {
+              startedTests.add(test);
+              return new HungTestEncode(true);
+            });
+
+    try {
+      service.detectCapabilities();
+
+      assertThat(startedTests).hasSize(1);
+      assertThat(featuresByEncoder(service))
+          .containsEntry("libx265", Set.of())
+          .containsEntry("libsvtav1", Set.of());
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
   private static TranscodeCapabilityService serviceWhoseTestEncodesWrite(
       Function<FeatureTest, TestEncodeOutput> outputs) {
-    return new TranscodeCapabilityService("ffmpeg", command -> resolve(command, outputs));
+    return serviceWhoseFeatureTestsRun(test -> outputs.apply(test).process());
+  }
+
+  private static TranscodeCapabilityService serviceWhoseFeatureTestsRun(
+      Function<FeatureTest, Process> featureTests) {
+    return new TranscodeCapabilityService("ffmpeg", command -> resolve(command, featureTests));
   }
 
   private static Map<String, Set<EncodeFeature>> featuresByEncoder(
@@ -153,7 +213,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
   }
 
   private static Process resolve(
-      ProcessBuilder command, Function<FeatureTest, TestEncodeOutput> featureTestOutputs) {
+      ProcessBuilder command, Function<FeatureTest, Process> featureTests) {
     var arguments = command.command();
     if (arguments.contains("muxer=mp4")) {
       return new FakeProcess(FRAGMENTED_MP4_MUXER_HELP, 0);
@@ -167,8 +227,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     var encoder = arguments.get(arguments.indexOf("-c:v") + 1);
     var filters = arguments.get(arguments.indexOf("-vf") + 1);
     return FeatureTest.of(encoder, filters, arguments)
-        .map(featureTestOutputs)
-        .map(output -> new FakeProcess(output.bytes(), output.exitCode()))
+        .map(featureTests)
         .orElseGet(() -> new FakeProcess("", 0));
   }
 
@@ -205,6 +264,10 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
       return new TestEncodeOutput(bytes, 0);
     }
 
+    private Process process() {
+      return new FakeProcess(bytes, exitCode);
+    }
+
     // The initialization segment that the encoder writes when it writes the feature's output.
     private static TestEncodeOutput faithful(FeatureTest test) {
       var colr =
@@ -215,6 +278,38 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
           };
       return of(
           test.encoder().equals("libsvtav1") ? tenBitAv1Segment(colr) : tenBitHevcSegment(colr));
+    }
+  }
+
+  // A test encode that writes nothing and never exits until it is killed; or, when interrupted, one
+  // whose wait the detection's interrupt ends.
+  private static final class HungTestEncode extends FakeProcess {
+
+    private final boolean interrupted;
+    private boolean alive = true;
+
+    private HungTestEncode(boolean interrupted) {
+      super("", 0);
+      this.interrupted = interrupted;
+    }
+
+    @Override
+    public boolean waitFor(long timeout, TimeUnit unit) throws InterruptedException {
+      if (interrupted) {
+        throw new InterruptedException("Detection interrupted");
+      }
+
+      return !alive;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return alive;
+    }
+
+    @Override
+    public void destroy() {
+      alive = false;
     }
   }
 
