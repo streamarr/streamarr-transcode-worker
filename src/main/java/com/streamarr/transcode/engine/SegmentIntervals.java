@@ -147,11 +147,11 @@ final class SegmentIntervals {
   }
 
   // Compares the start, in ticks of the start time base, with the presentation time, in ticks of
-  // the timescale, by cross-multiplication, so that neither is rounded; it fails rather than wraps.
+  // the timescale, exactly, so that neither is rounded.
   private boolean startsAtOrBefore(long start, long presentationTime, long timescale) {
-    var startInBoth =
-        Math.multiplyExact(Math.multiplyExact(start, startTimeBase.numerator()), timescale);
-    return startInBoth <= Math.multiplyExact(presentationTime, startTimeBase.denominator());
+    return new MediaTime(start, startTimeBase)
+            .compareTo(new MediaTime(presentationTime, new TimeBase(1, timescale)))
+        <= 0;
   }
 
   /** Where segment {@code number}'s interval starts, at its first tick of this timescale. */
@@ -185,10 +185,9 @@ final class SegmentIntervals {
     return shortest;
   }
 
+  // Throws ArithmeticException rather than wrap when the tick does not fit a long.
   private static long firstTickAtOrAfter(long start, TimeBase timeBase, long timescale) {
-    return Math.ceilDiv(
-        Math.multiplyExact(Math.multiplyExact(start, timeBase.numerator()), timescale),
-        timeBase.denominator());
+    return new MediaTime(start, timeBase).ceilIn(new TimeBase(1, timescale));
   }
 
   /**

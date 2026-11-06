@@ -256,15 +256,32 @@ class SegmentIntervalsTest {
     assertThat(intervals.endTimeOf(4)).as("past the list").isEmpty();
   }
 
+  // Twelve seconds at a time base of a nanosecond, which a copied track's timescale can keep, give
+  // cross products near 1.2 × 10^19, past a signed 64-bit value.
   @Test
   @DisplayName(
-      "Should fail instead of wrapping when comparing an exact start with a time overflows 64 bits")
-  void shouldFailInsteadOfWrappingWhenComparingAnExactStartWithATimeOverflowsSixtyFourBits() {
+      "Should number a time by the exact starts when comparing them takes more than 64 bits")
+  void shouldNumberATimeByTheExactStartsWhenComparingThemTakesMoreThanSixtyFourBits() {
     var intervals =
-        SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 1L << 40), 1, 90_000));
+        SegmentIntervals.onExactStarts(
+            3, new ExactSegmentStarts(List.of(0L, 12_000_000_000L), 1, 1_000_000_000));
 
-    assertThatExceptionOfType(ArithmeticException.class)
-        .isThrownBy(() -> intervals.numberAt(1, 1L << 32));
+    assertThat(intervals.numberAt(11_999_999_999L, 1_000_000_000L)).isZero();
+    assertThat(intervals.numberAt(12_000_000_000L, 1_000_000_000L)).isEqualTo(1);
+    assertThat(intervals.startOf(1, 1_000_000_000L)).isEqualTo(12_000_000_000L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail instead of wrapping when an exact start does not fit a 64-bit count of the"
+          + " timescale's ticks")
+  void
+      shouldFailInsteadOfWrappingWhenAnExactStartDoesNotFitASixtyFourBitCountOfTheTimescalesTicks() {
+    var intervals =
+        SegmentIntervals.onExactStarts(
+            3, new ExactSegmentStarts(List.of(0L, Long.MAX_VALUE), 1, 1));
+
+    assertThatExceptionOfType(ArithmeticException.class).isThrownBy(() -> intervals.startOf(1, 2));
   }
 
   @ParameterizedTest
