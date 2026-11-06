@@ -45,6 +45,8 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
   private static final int PQ_TRANSFER = 16;
   private static final int HLG_TRANSFER = 18;
   private static final int FAILED_EXIT_CODE = 187;
+  private static final String HEVC_NVENC_LISTING =
+      "V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)\n";
 
   @Test
   @DisplayName(
@@ -149,6 +151,34 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
             permissions ->
                 assertThat(permissions).isEqualTo(PosixFilePermissions.fromString("rw-------")));
     assertThat(inputsOfTheReshapeTests).allSatisfy(input -> assertThat(input).doesNotExist());
+  }
+
+  @Test
+  @DisplayName(
+      "Should list the software HEVC encoder's encode features when the worker offers a hardware"
+          + " HEVC encoder, and offer them once that encoder is withdrawn")
+  void shouldListTheSoftwareEncodersFeaturesWhenTheWorkerOffersAHardwareEncoderOfItsFamily() {
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command ->
+                command.command().contains("-encoders")
+                    ? new FakeProcess(HEVC_NVENC_LISTING, 0)
+                    : resolve(command, test -> TestEncodeOutput.faithful(test).process()));
+
+    service.detectCapabilities();
+    var offeredWithTheHardwareEncoder = featuresByEncoder(service);
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+
+    assertThat(offeredWithTheHardwareEncoder)
+        .containsEntry("hevc_nvenc", Set.of())
+        .doesNotContainKey("libx265");
+    assertThat(service.softwareEncoders())
+        .filteredOn(encoder -> encoder.backend().encoder().equals("libx265"))
+        .singleElement()
+        .extracting(WorkerVerifiedEncoder::encodeFeatures)
+        .isEqualTo(Set.of(EncodeFeature.values()));
+    assertThat(featuresByEncoder(service)).containsEntry("libx265", Set.of(EncodeFeature.values()));
   }
 
   @Test
