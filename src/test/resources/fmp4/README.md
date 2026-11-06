@@ -316,7 +316,8 @@ encoder keys exactly those frames.
 | libx264 | yes: 1, 1b, 3, 5a, 6 key only the forced frames, one per segment | yes: 12's backstop at frame 433 = 288 + 145 | an IDR (NAL type 5) at every keyframe of every H.264 recording, 12's backstop included | verified: 145 |
 | SVT-AV1 | yes: 9, 9b, on the frames libx264 chose in 3 | yes: 12b's backstop at frame 433 | a shown key frame at every keyframe of 9, 9b and 12b, 12b's backstop included | verified: 145 |
 | libx265, closed GOPs | yes: 13 and 13d key only the forced frames, one per segment | yes: 13b's backstop at frame 433 | an IDR (NAL type 20) at every keyframe of 13, 13b, 13c and 13d, 13b's backstop included | verified: 145 |
-| hardware encoders | not recorded | not recorded | not recorded | not verified: 143 until worker #14 |
+| h264_nvenc, hevc_nvenc | yes: every `extended-first` and `extended-replacement` recording in [`nvenc`](../nvenc/README.md) keys every forced frame | yes: each `extended-missed` recording's backstop one GOP after the forced keyframe at 12 s | an IDR (NAL type 5 or 19) with no leading pictures at every keyframe, the scene-cut keyframes included | verified: 145 |
+| other hardware encoders | not recorded | not recorded | not recorded | not verified: 143 until worker #14 |
 
 ## Anchoring on the zero-based timeline
 

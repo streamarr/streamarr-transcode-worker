@@ -382,6 +382,72 @@ class FfmpegCommandBuilderTest {
         .flatMap(source -> softwareEncodersFor(source, CompatibleBase.SDR));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264_nvenc", "hevc_nvenc"})
+  @DisplayName(
+      "Should decode and scale an SDR source on the CPU into 8-bit 4:2:0 frames when an NVENC"
+          + " encoder encodes")
+  void shouldDecodeAndScaleAnSdrSourceOnTheCpuInto8Bit420FramesWhenAnNvencEncoderEncodes(
+      String encoder) {
+    var encode =
+        nvencEncode(encoder)
+            .sourceDynamicRange(dynamicRange(CompatibleBase.SDR))
+            .outputDynamicRange(dynamicRange(CompatibleBase.SDR));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
+    assertThat(videoFilter(cmd))
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID);
+  }
+
+  @ParameterizedTest(name = "{1} from {0}")
+  @MethodSource("nvencToneMappedConversions")
+  @DisplayName(
+      "Should decode, scale and tone map an HDR source on the CPU into 8-bit 4:2:0 SDR frames when"
+          + " an NVENC encoder encodes")
+  void shouldDecodeScaleAndToneMapAnHdrSourceOnTheCpuInto8Bit420SdrFramesWhenAnNvencEncoderEncodes(
+      CompatibleBase source, String encoder) {
+    var encode =
+        nvencEncode(encoder)
+            .sourceDynamicRange(dynamicRange(source))
+            .outputDynamicRange(dynamicRange(CompatibleBase.SDR));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
+    assertThat(videoFilter(cmd))
+        .isEqualTo(
+            "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
+                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT"
+                + FRAME_GRID);
+  }
+
+  private static Stream<Arguments> nvencToneMappedConversions() {
+    return Stream.of(CompatibleBase.PQ, CompatibleBase.HLG)
+        .flatMap(
+            source ->
+                Stream.of("h264_nvenc", "hevc_nvenc")
+                    .map(encoder -> Arguments.of(source, encoder)));
+  }
+
+  private static VideoDecision.Encode.EncodeBuilder nvencEncode(String encoder) {
+    return switch (encoder) {
+      case "h264_nvenc" -> VideoDecisionFixtures.encodeBuilder();
+      case "hevc_nvenc" -> hevcEncode();
+      default -> throw new AssertionError("No NVENC encode for " + encoder);
+    };
+  }
+
+  // A GPU decode, a GPU device for filters, or a filter that uploads frames or runs on CUDA.
+  private static boolean movesFramesToTheGpu(String argument) {
+    return argument.startsWith("-hwaccel")
+        || argument.equals("-init_hw_device")
+        || argument.equals("-filter_hw_device")
+        || argument.contains("hwupload")
+        || argument.contains("cuda");
+  }
+
   private static Stream<Arguments> softwareEncodersFor(
       CompatibleBase source, CompatibleBase output) {
     return Stream.of("libx264", "libx265", "libsvtav1")
@@ -492,16 +558,78 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-level:v", "41").doesNotContain("-profile:v");
   }
 
+  @ParameterizedTest(name = "level {0}")
+  @CsvSource({"10, 1.0", "31, 3.1", "40, 4.0", "52, 5.2"})
+  @DisplayName("Should force the High profile and the level by name when h264_nvenc encodes")
+  void shouldForceTheHighProfileAndTheLevelByNameWhenH264NvencEncodes(int level, String name) {
+    var encode = VideoDecisionFixtures.encodeBuilder().level(level);
+
+    var cmd = command(request(encoding(encode)).build(), "h264_nvenc");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "h264_nvenc")
+        .containsSequence("-profile:v", "high", "-level:v", name)
+        .doesNotContain("-tier:v", "-x265-params");
+  }
+
+  @ParameterizedTest(name = "{0} tier")
+  @CsvSource({"MAIN, main", "HIGH, high"})
+  @DisplayName("Should force the Main profile, the level and the tier when hevc_nvenc encodes")
+  void shouldForceTheMainProfileTheLevelAndTheTierWhenHevcNvencEncodes(
+      VideoCodecTier tier, String tierName) {
+    var encode = hevcEncode().tier(Optional.of(tier));
+
+    var cmd = command(request(encoding(encode)).build(), "hevc_nvenc");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "hevc_nvenc")
+        .containsSequence("-profile:v", "main", "-level:v", "4.1", "-tier:v", tierName)
+        .doesNotContain("-x265-params");
+  }
+
+  @Test
+  @DisplayName("Should force no tier when hevc_nvenc encodes without one")
+  void shouldForceNoTierWhenHevcNvencEncodesWithoutOne() {
+    var cmd = command(request(encoding(hevcEncode())).build(), "hevc_nvenc");
+
+    assertThat(cmd)
+        .containsSequence("-profile:v", "main", "-level:v", "4.1")
+        .doesNotContain("-tier:v");
+  }
+
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"h264_nvenc", "h264_videotoolbox", "h264_qsv", "h264_vaapi"})
+  @ValueSource(strings = {"h264_nvenc", "hevc_nvenc"})
   @DisplayName(
-      "Should leave the codec profile and level to the encoder when a hardware encoder runs")
-  void shouldLeaveTheCodecProfileAndLevelToTheEncoderWhenAHardwareEncoderRuns(String encoder) {
+      "Should pass three B-frames and a 20-frame lookahead when an H.264 or HEVC NVENC encoder"
+          + " encodes")
+  void shouldPassThreeBFramesAndA20FrameLookaheadWhenAnH264OrHevcNvencEncoderEncodes(
+      String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).containsSequence("-bf", "3", "-rc-lookahead", "20");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "libsvtav1", "av1_nvenc", "hevc_qsv"})
+  @DisplayName("Should leave B-frames and lookahead to the encoder when the encoder is not NVENC")
+  void shouldLeaveBFramesAndLookaheadToTheEncoderWhenTheEncoderIsNotNvenc(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-bf", "-rc-lookahead");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"av1_nvenc", "h264_videotoolbox", "h264_qsv", "h264_vaapi"})
+  @DisplayName(
+      "Should leave the codec profile and level to the encoder when a hardware encoder the worker"
+          + " cannot force runs")
+  void shouldLeaveTheCodecProfileAndLevelToTheEncoderWhenAHardwareEncoderTheWorkerCannotForceRuns(
+      String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
 
     assertThat(cmd)
         .containsSequence("-c:v", encoder)
-        .doesNotContain("-profile:v", "-level:v", "-x265-params");
+        .doesNotContain("-profile:v", "-level:v", "-tier:v", "-x265-params");
   }
 
   @ParameterizedTest
@@ -541,14 +669,19 @@ class FfmpegCommandBuilderTest {
     "libx264, true",
     "libx265, true",
     "libsvtav1, true",
-    "h264_nvenc, false",
+    "h264_nvenc, true",
+    "hevc_nvenc, true",
+    "av1_nvenc, false",
     "hevc_qsv, false",
     "av1_vaapi, false",
     "h264_videotoolbox, false"
   })
-  @DisplayName("Should force the job's codec profile and level only on a software encoder")
-  void shouldForceTheJobsCodecProfileAndLevelOnlyOnASoftwareEncoder(
-      String encoder, boolean forces) {
+  @DisplayName(
+      "Should force the job's codec profile and level only on the software encoders and the H.264"
+          + " and HEVC NVENC encoders")
+  void
+      shouldForceTheJobsCodecProfileAndLevelOnlyOnTheSoftwareEncodersAndTheH264AndHevcNvencEncoders(
+          String encoder, boolean forces) {
     assertThat(FfmpegCommandBuilder.forcesCodecProfile(encoder)).isEqualTo(forces);
   }
 
@@ -1094,7 +1227,7 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265", "h264_nvenc", "hevc_nvenc"})
   @DisplayName(
       "Should lengthen the GOP one frame past the rounded-up period when the encoder is verified")
   void shouldLengthenTheGopOneFramePastTheRoundedUpPeriodWhenTheEncoderIsVerified(String encoder) {
@@ -1111,7 +1244,7 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
-        "h264_nvenc",
+        "av1_nvenc",
         "hevc_qsv",
         "av1_amf",
         "h264_vaapi",
@@ -1168,7 +1301,7 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0}")
   @CsvSource({
     "libsvtav1, 145",
-    "h264_nvenc, 143",
+    "h264_nvenc, 145",
     "hevc_qsv, 143",
     "av1_amf, 143",
     "hevc_rkmpp, 143"

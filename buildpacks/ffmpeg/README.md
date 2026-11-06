@@ -394,3 +394,27 @@ storage. Jellyfin also publishes the versioned binaries at its
 automatic buildpack fallback. Neither channel provides portable-tarball signatures
 or a permanent-retention promise. A Streamarr-owned archive would be needed for
 rebuilds independent of both upstream channels; that is not part of this migration.
+
+## NVENC checks after an upgrade
+
+CI has no GPU, so it cannot see how a new FFmpeg build's NVENC encoders handle the worker's
+recipe. `h264_nvenc` and `hevc_nvenc` are keyframe-verified only on the strength of recordings
+made with the pinned build (worker #56, ADR 0037 as amended). Each upgrade of the pinned build
+therefore re-runs these checks on an NVIDIA GPU host before the server pins a worker image that
+carries it:
+
+1. On the GPU host, run `src/test/fmp4-recorder/record-nvenc.sh --image IMAGE` with the worker
+   image built from the upgrade. [The recordings README](../../src/test/resources/nvenc/README.md)
+   lists what the host needs.
+2. The recordings show, for both encoders at every rung of the default ladder:
+   - that every forced keyframe is a sync sample and an IDR picture with no leading pictures
+   - that the GOP count restarts at a forced keyframe (the `extended-missed` recordings)
+   - which keyframes the encoder adds itself
+   - that each replacement attempt's initialization segment is byte-identical to its first
+     attempt's
+   - that every initialization segment passes the output check of worker #25
+3. Read the summary the script prints and `git diff src/test/resources/nvenc`. The `environment`
+   block names the new FFmpeg version and the driver. Commit the results; CI then derives every
+   verdict again from them.
+4. If an encoder fails any check, take it off the keyframe-verified list in `FfmpegCommandBuilder`
+   in the same pull request, so that it gets the floored GOP again.
