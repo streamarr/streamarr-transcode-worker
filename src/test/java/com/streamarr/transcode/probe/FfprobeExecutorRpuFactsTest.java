@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The enhancement layer and the level 6 light levels that probe version 8 reads from the RPUs of an
@@ -140,6 +141,32 @@ class FfprobeExecutorRpuFactsTest {
                 .build()
                 .hevcNalUnit()),
         Named.of(
+            "an RPU whose affected and current DM metadata IDs differ",
+            level6.toBuilder().currentDmId(1).build().hevcNalUnit()),
+        Named.of(
+            "a signal bit depth of 7, below FFmpeg's 8",
+            level6.toBuilder().signalBitDepth(7).build().hevcNalUnit()),
+        Named.of(
+            "a signal bit depth of 17, above FFmpeg's 16",
+            level6.toBuilder().signalBitDepth(17).build().hevcNalUnit()),
+        Named.of(
+            "a level 2 block whose ms_weight is -2, below FFmpeg's -1",
+            level6.toBuilder().extensionBlock(ExtensionBlock.level2(-2)).build().hevcNalUnit()),
+        Named.of(
+            "a level 2 block whose ms_weight is -4096 in a compressed DM payload",
+            level6.toBuilder()
+                .header(level6.header().toBuilder().dmCompression(1).build())
+                .extensionBlock(ExtensionBlock.level2(-4096))
+                .build()
+                .hevcNalUnit()),
+        Named.of(
+            "DM compression without a DM payload",
+            level6.toBuilder()
+                .header(level6.header().toBuilder().dmCompression(1).build())
+                .hasDisplayManagement(false)
+                .build()
+                .hevcNalUnit()),
+        Named.of(
             "an rpu_format without bit depths",
             level6.toBuilder()
                 .header(level6.header().toBuilder().rpuFormat(0x112).build())
@@ -219,6 +246,44 @@ class FfprobeExecutorRpuFactsTest {
 
   private static List<Integer> zeros(int bytes) {
     return Collections.nCopies(bytes, 0);
+  }
+
+  @ParameterizedTest(name = "ms_weight {0}")
+  @ValueSource(ints = {-1, 0, 4095})
+  @DisplayName("Should parse a level 2 block when its ms_weight lies within FFmpeg's -1 to 4095")
+  void shouldParseALevel2BlockWhenItsMsWeightLiesWithinFfmpegsRange(int msWeight) {
+    var rpu =
+        RpuBits.profile7(Nlq.identity())
+            .extensionBlock(ExtensionBlock.level2(msWeight))
+            .extensionBlock(ExtensionBlock.level6(1_000, 400))
+            .build();
+
+    var present = dolbyVisionOf(rpu, rpu, rpu);
+
+    assertThat(present.getEnhancementLayer())
+        .isEqualTo(DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_MEL);
+    assertThat(present.hasRpuContentLightLevel()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should take the level 6 values from the next parsed RPU when FFmpeg rejects the first one")
+  void shouldTakeTheLevel6ValuesFromTheNextParsedRpuWhenFfmpegRejectsTheFirstOne() {
+    var rejected =
+        RpuBits.profile81()
+            .extensionBlock(ExtensionBlock.level6(4_000, 1_000))
+            .currentDmId(1)
+            .build();
+    var parsed = RpuBits.profile81().extensionBlock(ExtensionBlock.level6(1_000, 400)).build();
+
+    var present = dolbyVisionOf(rejected, parsed, parsed);
+
+    assertThat(present.getRpuContentLightLevel())
+        .isEqualTo(
+            ContentLightLevel.newBuilder()
+                .setMaxContentLightLevel(1_000)
+                .setMaxFrameAverageLightLevel(400)
+                .build());
   }
 
   @Test

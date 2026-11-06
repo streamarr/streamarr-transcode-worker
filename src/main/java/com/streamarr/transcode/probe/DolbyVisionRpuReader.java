@@ -38,9 +38,20 @@ final class DolbyVisionRpuReader {
   private static final int LINEAR_DEADZONE = 0;
   // The color metadata that an uncompressed DM payload carries ahead of its extension blocks: the
   // two 3x3 matrices of 16-bit values, three 32-bit offsets, the signal's EOTF and its parameters,
-  // its bit depth, color space, chroma format and range, and the source's PQ range and diagonal.
-  private static final int UNCOMPRESSED_COLOR_METADATA_BITS =
-      9 * 16 + 3 * 32 + 9 * 16 + 16 + 16 + 16 + 32 + 5 + 2 + 2 + 2 + 12 + 12 + 10;
+  // its 5-bit bit depth, which FFmpeg accepts from 8 to 16, then its color space, chroma format and
+  // range, and the source's PQ range and diagonal.
+  private static final int BITS_BEFORE_SIGNAL_BIT_DEPTH =
+      9 * 16 + 3 * 32 + 9 * 16 + 16 + 16 + 16 + 32;
+  private static final int BITS_AFTER_SIGNAL_BIT_DEPTH = 2 + 2 + 2 + 12 + 12 + 10;
+  private static final int SMALLEST_SIGNAL_BIT_DEPTH = 8;
+  private static final int LARGEST_SIGNAL_BIT_DEPTH = 16;
+  // A level 2 block's six 12-bit trims ahead of its 13-bit signed ms_weight, which FFmpeg accepts
+  // from -1 to 4095: every 13-bit pattern but those of -4096 to -2.
+  private static final int LEVEL_2 = 2;
+  private static final int LEVEL_2_TRIM_BITS = 6 * 12;
+  private static final int MS_WEIGHT_BITS = 13;
+  private static final long SMALLEST_NEGATIVE_MS_WEIGHT = 1L << 12;
+  private static final long MS_WEIGHT_OF_MINUS_1 = (1L << 13) - 1;
   private static final int LEVEL_6 = 6;
   private static final int LEVEL_6_BYTES = 8;
   // Up to 7 bits of alignment, the 32-bit CRC and the 8-bit terminator.
@@ -96,7 +107,8 @@ final class DolbyVisionRpuReader {
     }
 
     var hasDisplayManagement = reader.flag();
-    if (header.get().displayManagementCompression() > 1) {
+    var compression = header.get().displayManagementCompression();
+    if (compression > 1 || (compression == 1 && !hasDisplayManagement)) {
       return Optional.empty();
     }
 
@@ -312,14 +324,15 @@ final class DolbyVisionRpuReader {
    * inside the optional, and an empty outer optional when the payload's syntax breaks.
    */
   private static Optional<Optional<ContentLightLevel>> level6(BitReader reader, Header header) {
-    if (reader.unsignedExpGolomb() > LARGEST_METADATA_ID
-        || reader.unsignedExpGolomb() > LARGEST_METADATA_ID) {
+    var affectedId = reader.unsignedExpGolomb();
+    var currentId = reader.unsignedExpGolomb();
+    if (affectedId > LARGEST_METADATA_ID || affectedId != currentId) {
       return Optional.empty();
     }
 
     reader.unsignedExpGolomb();
     if (header.displayManagementCompression() == 0) {
-      reader.bits(UNCOMPRESSED_COLOR_METADATA_BITS);
+      requireValidColorMetadata(reader);
     }
 
     var blocks = reader.unsignedExpGolomb();
@@ -329,6 +342,12 @@ final class DolbyVisionRpuReader {
       var length = reader.unsignedExpGolomb();
       var level = reader.bits(8);
       requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
+      if (level == LEVEL_2) {
+        requireValidMsWeight(reader);
+        reader.skip(length * 8 - LEVEL_2_TRIM_BITS - MS_WEIGHT_BITS);
+        continue;
+      }
+
       // FFmpeg parses a static block, such as level 6, of a compressed DM payload but ignores it.
       var isReadable = header.displayManagementCompression() == 0;
       if (level == LEVEL_6 && isReadable && level6.isEmpty()) {
@@ -350,7 +369,29 @@ final class DolbyVisionRpuReader {
     return Optional.of(level6);
   }
 
-  /** An extension block shorter than its level's payload, which FFmpeg rejects. */
+  private static void requireValidColorMetadata(BitReader reader) {
+    reader.skip(BITS_BEFORE_SIGNAL_BIT_DEPTH);
+    var signalBitDepth = reader.bits(5);
+    if (signalBitDepth < SMALLEST_SIGNAL_BIT_DEPTH || signalBitDepth > LARGEST_SIGNAL_BIT_DEPTH) {
+      throw new MalformedRpuException();
+    }
+
+    reader.skip(BITS_AFTER_SIGNAL_BIT_DEPTH);
+  }
+
+  // FFmpeg validates ms_weight in a compressed DM payload too, where it ignores the block.
+  private static void requireValidMsWeight(BitReader reader) {
+    reader.skip(LEVEL_2_TRIM_BITS);
+    var msWeight = reader.bits(MS_WEIGHT_BITS);
+    if (msWeight >= SMALLEST_NEGATIVE_MS_WEIGHT && msWeight != MS_WEIGHT_OF_MINUS_1) {
+      throw new MalformedRpuException();
+    }
+  }
+
+  /**
+   * A DM payload that FFmpeg rejects: an extension block shorter than its level's payload, or a
+   * value out of FFmpeg's range.
+   */
   private static final class MalformedRpuException extends RuntimeException {
     MalformedRpuException() {
       super(null, null, false, false);

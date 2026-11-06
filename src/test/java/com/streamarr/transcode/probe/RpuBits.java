@@ -13,7 +13,8 @@ import lombok.Singular;
  * payload whose first group of extension blocks the test lists, followed by a second group when
  * {@code secondGroupBlockCount} is positive. A second group declares that many blocks and holds
  * {@code secondGroupBlocks}. The CRC32 is not checked by the probe, so the RPU carries zeros in its
- * place, then the terminator, 0x80 unless {@code terminator} names another byte.
+ * place, then the terminator, 0x80 unless {@code terminator} names another byte. The DM payload's
+ * metadata IDs are 0 and its signal is 12-bit unless the test names other values.
  */
 @Builder(toBuilder = true)
 record RpuBits(
@@ -22,6 +23,9 @@ record RpuBits(
     long xPartitionsMinus1,
     @Singular List<Nlq> nlqs,
     boolean hasDisplayManagement,
+    long affectedDmId,
+    long currentDmId,
+    Integer signalBitDepth,
     @Singular List<ExtensionBlock> extensionBlocks,
     long secondGroupBlockCount,
     @Singular List<ExtensionBlock> secondGroupBlocks,
@@ -106,7 +110,7 @@ record RpuBits(
   }
 
   private void writeDisplayManagement(Bits bits) {
-    bits.unsignedExpGolomb(0).unsignedExpGolomb(0).unsignedExpGolomb(0);
+    bits.unsignedExpGolomb(affectedDmId).unsignedExpGolomb(currentDmId).unsignedExpGolomb(0);
     if (header.dmCompression() == 0) {
       writeColorMetadata(bits);
     }
@@ -118,7 +122,7 @@ record RpuBits(
   }
 
   // The color metadata of an uncompressed DM payload.
-  private static void writeColorMetadata(Bits bits) {
+  private void writeColorMetadata(Bits bits) {
     for (var matrixValue = 0; matrixValue < 9; matrixValue++) {
       bits.put(16, 0);
     }
@@ -131,7 +135,14 @@ record RpuBits(
       bits.put(16, 0);
     }
 
-    bits.put(16, 0).put(16, 0).put(16, 0).put(32, 0).put(5, 12).put(2, 0).put(2, 0).put(2, 0);
+    bits.put(16, 0)
+        .put(16, 0)
+        .put(16, 0)
+        .put(32, 0)
+        .put(5, signalBitDepth == null ? 12 : signalBitDepth)
+        .put(2, 0)
+        .put(2, 0)
+        .put(2, 0);
     bits.put(12, 62).put(12, 3696).put(10, 42);
   }
 
@@ -189,6 +200,13 @@ record RpuBits(
     /** A level 254 block of the second group: the DM mode and version index. */
     static ExtensionBlock level254() {
       return new ExtensionBlock(254, List.of(0x00, 0x02));
+    }
+
+    /** A level 2 block: six 12-bit trims of zero, then ms_weight as a 13-bit two's complement. */
+    static ExtensionBlock level2(int msWeight) {
+      var shifted = (msWeight & 0x1FFF) << 3;
+      return new ExtensionBlock(
+          2, List.of(0, 0, 0, 0, 0, 0, 0, 0, 0, shifted >> 8, shifted & 0xFF));
     }
 
     /** A level 1 block, whose 36 bits of PQ values fill five bytes. */
