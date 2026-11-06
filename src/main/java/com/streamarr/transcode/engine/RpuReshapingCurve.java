@@ -28,10 +28,7 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
     void write(RpuBitWriter writer, RpuDataHeader header);
   }
 
-  /**
-   * A polynomial of order {@code orderMinus1 + 1} with {@code orderMinus1 + 2} coefficients. The
-   * integer parts are empty in floating point.
-   */
+  /** A polynomial of order {@code orderMinus1 + 1} with {@code orderMinus1 + 2} coefficients. */
   record Polynomial(
       long orderMinus1, @NonNull List<Long> integerParts, @NonNull List<Long> fractions)
       implements Piece {
@@ -59,10 +56,7 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
       var integerParts = new ArrayList<Long>();
       var fractions = new ArrayList<Long>();
       for (var coefficient = 0; coefficient < orderMinus1 + 2; coefficient++) {
-        if (header.codesIntegerParts()) {
-          integerParts.add(reader.signedExpGolomb());
-        }
-
+        integerParts.add(reader.signedExpGolomb());
         fractions.add(reader.bits(header.coefficientBits()));
       }
 
@@ -77,10 +71,7 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
       }
 
       for (var coefficient = 0; coefficient < fractions.size(); coefficient++) {
-        if (header.codesIntegerParts()) {
-          writer.signedExpGolomb(integerParts.get(coefficient));
-        }
-
+        writer.signedExpGolomb(integerParts.get(coefficient));
         writer.bits(fractions.get(coefficient), header.coefficientBits());
       }
     }
@@ -88,7 +79,7 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
 
   /**
    * A multivariate multiple regression of order {@code orderMinus1 + 1}: a constant, then seven
-   * coefficients for each order. The integer parts are empty in floating point.
+   * coefficients for each order.
    */
   record Mmr(
       int orderMinus1,
@@ -110,11 +101,7 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
         throw new DolbyVisionRpuException("an MMR piece of order " + (orderMinus1 + 1));
       }
 
-      var constantIntegerPart = new ArrayList<Long>();
-      if (header.codesIntegerParts()) {
-        constantIntegerPart.add(reader.signedExpGolomb());
-      }
-
+      var constantIntegerPart = List.of(reader.signedExpGolomb());
       var constantFraction = reader.bits(header.coefficientBits());
       var integerParts = new ArrayList<List<Long>>();
       var fractions = new ArrayList<List<Long>>();
@@ -122,10 +109,7 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
         var orderIntegerParts = new ArrayList<Long>();
         var orderFractions = new ArrayList<Long>();
         for (var coefficient = 0; coefficient < MMR_COEFFICIENTS_PER_ORDER; coefficient++) {
-          if (header.codesIntegerParts()) {
-            orderIntegerParts.add(reader.signedExpGolomb());
-          }
-
+          orderIntegerParts.add(reader.signedExpGolomb());
           orderFractions.add(reader.bits(header.coefficientBits()));
         }
 
@@ -148,10 +132,7 @@ record RpuReshapingCurve(@NonNull List<Integer> pivots, @NonNull List<Piece> pie
 
     private void writeOrder(RpuBitWriter writer, RpuDataHeader header, int order) {
       for (var coefficient = 0; coefficient < MMR_COEFFICIENTS_PER_ORDER; coefficient++) {
-        if (header.codesIntegerParts()) {
-          writer.signedExpGolomb(integerParts.get(order).get(coefficient));
-        }
-
+        writer.signedExpGolomb(integerParts.get(order).get(coefficient));
         writer.bits(fractions.get(order).get(coefficient), header.coefficientBits());
       }
     }
