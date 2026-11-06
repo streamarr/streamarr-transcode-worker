@@ -192,6 +192,40 @@ class SegmentIntervalsTest {
     assertThat(intervals.endOf(0, AUDIO_TIMESCALE)).hasValue(170_170);
   }
 
+  // The server sends a plain grid's starts as whole seconds in time base 1/1.
+  @ParameterizedTest(name = "audio sample at {0} of 48 kHz")
+  @ValueSource(longs = {-1, 0, 143_999, 144_000, 287_999, 288_000, 431_999, 432_000, 2_880_000})
+  @DisplayName(
+      "Should place a time in the same segment as the slot list does when the exact starts are a"
+          + " plain grid's whole seconds")
+  void shouldPlaceATimeInTheSameSegmentAsTheSlotListWhenTheExactStartsAreAPlainGridsSeconds(
+      long presentationTime) {
+    var onSlots = SegmentIntervals.onSegmentList(3, List.of(0L, 1L, 2L, 3L));
+    var onSeconds =
+        SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 3L, 6L, 9L), 1, 1));
+
+    assertThat(onSeconds.numberAt(presentationTime, AUDIO_TIMESCALE))
+        .isEqualTo(onSlots.numberAt(presentationTime, AUDIO_TIMESCALE));
+  }
+
+  @ParameterizedTest(name = "segment {0}")
+  @ValueSource(longs = {0, 1, 2, 3})
+  @DisplayName(
+      "Should start and end each segment where the slot list does when the exact starts are a"
+          + " plain grid's whole seconds")
+  void shouldStartAndEndEachSegmentWhereTheSlotListDoesWhenTheExactStartsAreAPlainGridsSeconds(
+      long segment) {
+    var onSlots = SegmentIntervals.onSegmentList(3, List.of(0L, 1L, 2L, 3L));
+    var onSeconds =
+        SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 3L, 6L, 9L), 1, 1));
+
+    assertThat(onSeconds.startTimeOf(segment))
+        .isEqualTo(onSlots.startTimeOf(segment))
+        .isEqualTo(MediaTime.of(Duration.ofSeconds(3 * segment)));
+    assertThat(onSeconds.endTimeOf(segment)).isEqualTo(onSlots.endTimeOf(segment));
+    assertThat(onSeconds.shortestInterval()).isEqualTo(onSlots.shortestInterval());
+  }
+
   @Test
   @DisplayName(
       "Should end the last exact segment's audio at the advertised end when the job carries one")

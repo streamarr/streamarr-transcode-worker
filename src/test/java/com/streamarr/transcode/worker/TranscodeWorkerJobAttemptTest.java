@@ -2122,6 +2122,54 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // The server sends a plain grid's starts as whole seconds in time base 1/1. Each row names one
+  // argument that the starts decide: the seek, the forced keyframes and the GOP.
+  @ParameterizedTest(name = "{0}: {1} {2}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, -ss, 6",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, -ss, 3",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, -force_key_frames:0, '6,9'",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, -g:v:0, 73"
+  })
+  @DisplayName(
+      "Should launch the same FFmpeg command as for the slot list when the job carries a plain"
+          + " grid's starts in whole seconds")
+  void shouldLaunchTheSameCommandAsForTheSlotListWhenTheJobCarriesAPlainGridsStartsInSeconds(
+      TranscodeMode mode, String option, String value) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var onSlots = laterSegmentJobOnAThreeSecondGrid(mode);
+    onSlots.getExecutionBuilder().addAllSegmentStartSlots(List.of(0, 1, 2, 3));
+    var onSeconds = laterSegmentJobOnAThreeSecondGrid(mode);
+    onSeconds
+        .getExecutionBuilder()
+        .addAllSegmentStartTicks(List.of(0L, 3L, 6L, 9L))
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(1));
+    var slotsAttempt = fromProto(onSlots.getJobAttemptId());
+    var secondsAttempt = fromProto(onSeconds.getJobAttemptId());
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, onSlots.build());
+      startVariant(connection, onSeconds.build());
+
+      promptly()
+          .until(() -> launcher.hasLaunched(slotsAttempt) && launcher.hasLaunched(secondsAttempt));
+      var slotCommand = launcher.command(slotsAttempt);
+      assertThat(slotCommand).containsSequence(option, value);
+      assertThat(launcher.command(secondsAttempt)).isEqualTo(slotCommand);
+    }
+  }
+
+  private static VariantJob.Builder laterSegmentJobOnAThreeSecondGrid(TranscodeMode mode) {
+    var job = variantJobBuilder(mode);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .setStartSequenceNumber(2);
+    return job;
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("exactSegmentStartsThatBreakTheContract")
   @DisplayName(
