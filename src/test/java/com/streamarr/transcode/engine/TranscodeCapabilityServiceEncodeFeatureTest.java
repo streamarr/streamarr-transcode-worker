@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
@@ -119,18 +121,20 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
 
   @Test
   @DisplayName(
-      "Should run the Dolby Vision reshape test on the worker's profile 5 test frame and delete"
-          + " the copy when detection ends")
-  void shouldRunTheDolbyVisionReshapeTestOnTheWorkersTestFrameAndDeleteTheCopyWhenDetectionEnds()
+      "Should run the Dolby Vision reshape test on an owner-only copy of the worker's profile 5"
+          + " test frame and delete the copy when detection ends")
+  void shouldRunTheDolbyVisionReshapeTestOnAnOwnerOnlyCopyOfTheTestFrameWhenDetectionRuns()
       throws Exception {
     var inputsOfTheReshapeTests = new ArrayList<Path>();
     var inputBytes = new ArrayList<byte[]>();
+    var inputPermissions = new ArrayList<Set<PosixFilePermission>>();
     var service =
         serviceWhoseTestEncodesWrite(
             test -> {
               if (test.feature() == EncodeFeature.DOLBY_VISION_TO_PQ) {
                 inputsOfTheReshapeTests.add(test.input().orElseThrow());
                 inputBytes.add(readAllBytes(test.input().orElseThrow()));
+                inputPermissions.add(posixPermissions(test.input().orElseThrow()));
               }
 
               return TestEncodeOutput.faithful(test);
@@ -139,6 +143,11 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     service.detectCapabilities();
 
     assertThat(inputBytes).hasSize(2).allSatisfy(bytes -> assertThat(bytes).isEqualTo(testFrame()));
+    assertThat(inputPermissions)
+        .hasSize(2)
+        .allSatisfy(
+            permissions ->
+                assertThat(permissions).isEqualTo(PosixFilePermissions.fromString("rw-------")));
     assertThat(inputsOfTheReshapeTests).allSatisfy(input -> assertThat(input).doesNotExist());
   }
 
@@ -350,6 +359,14 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         TranscodeCapabilityService.class.getResourceAsStream("dolby-vision-5-test-frame.mp4")) {
       assertThat(resource).as("the Dolby Vision test frame").isNotNull();
       return resource.readAllBytes();
+    }
+  }
+
+  private static Set<PosixFilePermission> posixPermissions(Path path) {
+    try {
+      return Files.getPosixFilePermissions(path);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
     }
   }
 

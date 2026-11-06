@@ -3,7 +3,10 @@ package com.streamarr.transcode.engine;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -17,6 +20,8 @@ final class DolbyVisionTestFrame implements AutoCloseable {
   // One 64x64 frame of Dolby Vision profile 5 under dvh1, with its RPU;
   // src/test/sample-entry-fixtures/record-dolby-vision-5-fixture.sh records it.
   private static final String RESOURCE = "dolby-vision-5-test-frame.mp4";
+  private static final FileAttribute<Set<PosixFilePermission>> OWNER_ONLY =
+      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"));
 
   private final Path path;
 
@@ -25,13 +30,18 @@ final class DolbyVisionTestFrame implements AutoCloseable {
   }
 
   static DolbyVisionTestFrame extract() throws IOException {
-    var path = Files.createTempFile("streamarr-dolby-vision-test-frame", ".mp4");
+    var path = Files.createTempFile("streamarr-dolby-vision-test-frame", ".mp4", OWNER_ONLY);
     try (var resource = DolbyVisionTestFrame.class.getResourceAsStream(RESOURCE)) {
       if (resource == null) {
         throw new IOException("The worker's resources hold no " + RESOURCE);
       }
 
-      Files.copy(resource, path, StandardCopyOption.REPLACE_EXISTING);
+      // Writing into the created file keeps its owner-only permissions, which replacing it would
+      // drop.
+      try (var copy = Files.newOutputStream(path)) {
+        resource.transferTo(copy);
+      }
+
       return new DolbyVisionTestFrame(path);
     } catch (IOException e) {
       Files.deleteIfExists(path);
