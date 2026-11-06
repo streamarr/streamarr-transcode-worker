@@ -24,6 +24,7 @@ import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -56,6 +57,13 @@ class SegmentAssemblerBitstreamRewriteTest {
   // A rewrite that drops most of a sample's units allocates the fragment's own copy, the kept
   // units' buffer and the output; a sample's bytes bound each of them, its unit count none.
   private static final int MOST_ALLOCATED_BYTES_PER_SAMPLE_BYTE = 4;
+  // A fragment whose converted RPU grows copies its media data into a longer array a bounded number
+  // of times, and the sample's rewrite takes a few copies of the sample; a fragment's bytes bound
+  // them, its sample count none. The fragment below allocates about 14 times its bytes; a copy
+  // sized by the sample's growth times the remaining samples allocated 632 MB, about 200 times.
+  private static final int MOST_ALLOCATED_BYTES_PER_GROWING_FRAGMENT_BYTE = 40;
+  // A cap above the initialization segment and below a sample that grows by 100 KB.
+  private static final long SMALL_SEGMENT_CAP = 64 * 1024;
   // An SEI rewrite unescapes, parses and escapes each unit again, a few copies of its bytes, and
   // the room for the kept units doubles as they outgrow the sample; a sample's bytes bound each of
   // them, its unit count none. The sample below allocates about 21 times its bytes; one copy of
@@ -680,6 +688,85 @@ class SegmentAssemblerBitstreamRewriteTest {
         .containsExactly(
             hex(sample(aud(), slice(0), converted)), hex(sample(aud(), slice(1), converted)));
     assertThat(delivered.audio()).containsExactly(hex(AUDIO_SAMPLE), hex(AUDIO_SAMPLE));
+  }
+
+  // The fragment's copy was sized by a sample's growth times every remaining sample, audio
+  // included:
+  // a product that ran to hundreds of megabytes, or past an int, for a fragment of a few.
+  @Test
+  @DisplayName(
+      "Should deliver the fragment within a few times its bytes when one converted RPU grows by a"
+          + " megabyte ahead of five thousand audio samples")
+  void
+      shouldDeliverTheFragmentWithinAFewTimesItsBytesWhenOneConvertedRpuGrowsByAMegabyteAheadOfFiveThousandAudioSamples()
+          throws IOException {
+    var source = SyntheticRpus.profile7().withoutDmMetadata().zeroBytesBeforeCrc32(2_000_000);
+    var unit = source.nalUnitWithoutEmulationPrevention();
+    var audio = Collections.nCopies(5_000, AUDIO_SAMPLE).toArray(byte[][]::new);
+    var fragment =
+        fragmentBuilder()
+            .startsWithKeyframe(true)
+            .video(0, sample(aud(), slice(0), unit))
+            .audio(0, audio)
+            .build();
+    var initialization = bytesOfInitializationSegment(HEVC_SEGMENT);
+    var output = Mp4Stream.read(Mp4Stream.readerOf(concat(initialization, fragment)));
+    var assembler = assemblerFor(profile7ConversionCopy());
+    var closed = new ArrayList<>(assembler.accept(output.initializationSegment()).closedSegments());
+    var read = output.fragments().getFirst();
+    var thread = (ThreadMXBean) ManagementFactory.getThreadMXBean();
+
+    var before = thread.getCurrentThreadAllocatedBytes();
+    closed.addAll(assembler.accept(read).closedSegments());
+    var allocated = thread.getCurrentThreadAllocatedBytes() - before;
+
+    closed.addAll(assembler.finish());
+    var converted =
+        SyntheticRpus.nalUnit(
+            DolbyVisionRpu.parse(ByteBuffer.wrap(source.withoutEmulationPrevention()))
+                .convertedToProfile81()
+                .write());
+    assertThat(converted).hasSizeGreaterThan(unit.length + 900_000);
+    assertThat(allocated)
+        .isLessThan((long) MOST_ALLOCATED_BYTES_PER_GROWING_FRAGMENT_BYTE * fragment.length);
+    var movie = movieOf(initialization, closed);
+    assertThat(hexOf(movie, movie.videoTrack()))
+        .containsExactly(hex(sample(aud(), slice(0), converted)));
+    assertThat(hexOf(movie, movie.audioTrack())).isNotEmpty().containsOnly(hex(AUDIO_SAMPLE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse a fragment as over the cap when its rewritten samples would take more media"
+          + " data than the cap")
+  void shouldRefuseAFragmentAsOverTheCapWhenItsRewrittenSamplesWouldTakeMoreMediaDataThanTheCap()
+      throws IOException {
+    var unit =
+        SyntheticRpus.profile7()
+            .withoutDmMetadata()
+            .zeroBytesBeforeCrc32(200_000)
+            .nalUnitWithoutEmulationPrevention();
+    var fragment =
+        fragmentBuilder().startsWithKeyframe(true).video(0, sample(aud(), slice(0), unit)).build();
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(concat(bytesOfInitializationSegment(HEVC_SEGMENT), fragment)));
+    var assembler =
+        SegmentAssembler.builder()
+            .intervals(SegmentIntervals.onPlainGrid(1))
+            .startSequenceNumber(0)
+            .maximumSegmentBytes(SMALL_SEGMENT_CAP)
+            .encodedFrameRate(Optional.empty())
+            .videoDecision(profile7ConversionCopy())
+            .paddedAudioEnd(Optional.empty())
+            .build();
+    assembler.accept(output.initializationSegment());
+    var read = output.fragments().getFirst();
+
+    assertThatThrownBy(() -> assembler.accept(read))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.EXCEEDS_SEGMENT_CAP));
   }
 
   @Test

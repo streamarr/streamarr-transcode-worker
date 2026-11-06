@@ -115,7 +115,7 @@ final class SegmentAssembler {
     requireWithinTheCap(delivered);
     requireSoundTrack(delivered);
     VideoOutputCheck.requireMatch(videoDecision, delivered);
-    sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
+    sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered, maximumSegmentBytes);
     return new ClosedSegment.Initialization(delivered, read.bytes().length);
   }
 
