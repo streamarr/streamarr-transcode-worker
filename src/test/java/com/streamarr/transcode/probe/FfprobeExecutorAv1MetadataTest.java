@@ -20,6 +20,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.stream.Stream;
@@ -298,6 +299,29 @@ class FfprobeExecutorAv1MetadataTest {
   class DolbyVisionTests {
 
     @Test
+    @DisplayName(
+        "Should report the level 6 values of a later RPU when the first RPU carries no level 6"
+            + " block")
+    void shouldReportTheLevel6ValuesOfALaterRpuWhenTheFirstRpuCarriesNoLevel6Block() {
+      var withoutLevel6 = RpuBits.profile81().build();
+      var withLevel6 =
+          RpuBits.profile81().extensionBlock(RpuBits.ExtensionBlock.level6(1_000, 400)).build();
+
+      var video =
+          probed(
+              AV1C,
+              temporalUnit(rpuObu(emdfOf(withoutLevel6))),
+              temporalUnit(rpuObu(emdfOf(withLevel6))));
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getRpuContentLightLevel())
+          .isEqualTo(
+              ContentLightLevel.newBuilder()
+                  .setMaxContentLightLevel(1_000)
+                  .setMaxFrameAverageLightLevel(400)
+                  .build());
+    }
+
+    @Test
     @DisplayName("Should report the walk's RPU and its header when the frames show none")
     void shouldReportTheWalksRpuAndItsHeaderWhenTheFramesShowNone() {
       var video = probed(AV1C, temporalUnit(rpuObu(profile100Emdf().build())));
@@ -344,6 +368,33 @@ class FfprobeExecutorAv1MetadataTest {
           .isEqualTo(PROFILE_10_0_HEADER);
     }
 
+    @Test
+    @DisplayName(
+        "Should read the RPU's facts when its EMDF payload size wraps past 32 bits, as FFmpeg's"
+            + " unsigned size does")
+    void shouldReadTheRpusFactsWhenItsEmdfPayloadSizeWrapsPast32Bits() {
+      var rpu =
+          RpuBits.profile81().extensionBlock(RpuBits.ExtensionBlock.level6(1_000, 400)).build();
+      var payload = rpu.payload();
+      // variable_bits(8) reaches 2^32 - 1 after the 0xFF group, so the next group wraps to its own
+      // value: the RPU's length.
+      var container =
+          profile100Emdf()
+              .rpu(hex(Arrays.copyOfRange(payload, 1, payload.length)))
+              .payloadSizeGroups(
+                  List.of(0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFF, payload.length - 1))
+              .build();
+
+      var video = probed(AV1C, temporalUnit(rpuObu(container)));
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getRpuContentLightLevel())
+          .isEqualTo(
+              ContentLightLevel.newBuilder()
+                  .setMaxContentLightLevel(1_000)
+                  .setMaxFrameAverageLightLevel(400)
+                  .build());
+    }
+
     static Stream<Named<String>> containersThatFfmpegCannotOpen() {
       return Stream.of(
           Named.of("a header other than EMDF's", profile100Emdf().header(0x01BE6840).build().hex()),
@@ -354,13 +405,9 @@ class FfprobeExecutorAv1MetadataTest {
                   .payloadSizeGroups(List.of(1, 1))
                   .build()
                   .hex()),
-          // Without its bound, the size would wrap past 64 bits to the RPU's 12 bytes.
           Named.of(
-              "a payload size of more than 64 bits",
-              profile100Emdf()
-                  .payloadSizeGroups(List.of(0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFF, 12))
-                  .build()
-                  .hex()),
+              "a payload of 5 bytes, below FFmpeg's 6",
+              profile100Emdf().rpu(PROFILE_10_0_RPU.substring(0, 14)).build().hex()),
           Named.of(
               "an emdf_protection other than 0x400",
               profile100Emdf().protection(0x401).build().hex()),
@@ -918,6 +965,12 @@ class FfprobeExecutorAv1MetadataTest {
         .header(EMDF_HEADER)
         .rpu(PROFILE_10_0_RPU)
         .protection(EMDF_PROTECTION);
+  }
+
+  /** The RPU, without the 0x19 prefix that only an HEVC RPU NAL unit has, in EMDF. */
+  private static EmdfContainer emdfOf(RpuBits rpu) {
+    var payload = rpu.payload();
+    return profile100Emdf().rpu(hex(Arrays.copyOfRange(payload, 1, payload.length))).build();
   }
 
   /** An RPU metadata OBU, whose values the trailing bits end. */

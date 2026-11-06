@@ -132,6 +132,8 @@ final class DynamicRangeReader {
                     .orElse(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
     dolbyVisionRecord.ifPresent(claim -> present.setDeclared(configuration(claim)));
     rpus.flatMap(RpuObservation::firstHeader).ifPresent(present::setFirstRpuHeader);
+    rpus.map(RpuObservation::enhancementLayer).ifPresent(present::setEnhancementLayer);
+    rpus.flatMap(RpuObservation::level6).ifPresent(present::setRpuContentLightLevel);
     return present.build();
   }
 
@@ -174,7 +176,8 @@ final class DynamicRangeReader {
    * What the frames and, for H.264, HEVC and AV1, the packets that hold them show of the RPUs. A
    * decoder can ignore or drop an RPU, so no RPU in the frames rules out none: only a walk that
    * rules out every unit does. The header comes from the frames, or from the packets when the
-   * frames show no RPU.
+   * frames show no RPU. The placement, the enhancement layer and the level 6 values come from the
+   * packets, whose RPU bytes the probe parses.
    */
   private static Optional<RpuObservation> rpus(
       Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
@@ -191,13 +194,23 @@ final class DynamicRangeReader {
       return fromPackets;
     }
 
+    var header = inFrames.get().firstHeader();
     return Optional.of(
-        new RpuObservation(
-            Presence.PRESENCE_PRESENT,
-            inFrames.get().firstHeader(),
-            fromPackets
-                .map(RpuObservation::placement)
-                .orElse(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)));
+        fromPackets
+            .map(
+                packets ->
+                    new RpuObservation(
+                        Presence.PRESENCE_PRESENT,
+                        header,
+                        packets.placement(),
+                        packets.enhancementLayer(),
+                        packets.level6()))
+            .orElseGet(
+                () ->
+                    new RpuObservation(
+                        Presence.PRESENCE_PRESENT,
+                        header,
+                        DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)));
   }
 
   // A decoder hides where an RPU sits in its sample.

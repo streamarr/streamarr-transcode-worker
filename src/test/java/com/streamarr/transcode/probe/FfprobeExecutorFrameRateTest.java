@@ -15,6 +15,8 @@ import build.buf.gen.streamarr.transcode.v1.FrameRateRuleResult;
 import build.buf.gen.streamarr.transcode.v1.MatroskaStatistics;
 import build.buf.gen.streamarr.transcode.v1.OutputFrameRateBasis;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
+import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
@@ -238,6 +240,76 @@ class FfprobeExecutorFrameRateTest {
 
       assertThat(rule.getFrameRateRule().getOutputFrameRate()).isEqualTo(fraction(60, 1));
       assertThat(rule.getFrameRateRule().getBasis()).isEqualTo(PACKET_SCAN);
+    }
+  }
+
+  @Nested
+  @DisplayName("Maximum Frame Rate")
+  class MaximumFrameRateTests {
+
+    @Test
+    @DisplayName("Should report the base rate as the maximum when the declared rates agree on it")
+    void shouldReportTheBaseRateAsTheMaximumWhenTheDeclaredRatesAgreeOnIt() {
+      var media = probeFixture("mov-phone-hlg-dovi-p84.mov");
+
+      assertThat(chosenStream(media).getMaximumFrameRate()).isEqualTo(fraction(30, 1));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"tt", "bb", "tb", "bt"})
+    @DisplayName("Should report no maximum when an interlaced stream declares its field rate")
+    void shouldReportNoMaximumWhenAnInterlacedStreamDeclaresItsFieldRate(String fieldOrder) {
+      // The base rate of 50 counts fields; the stream presents 25 frames a second.
+      var stream =
+          VideoStream.builder()
+              .baseRate("50/1")
+              .averageRate("25/1")
+              .fieldOrder(fieldOrder)
+              .timeBase("1/90000")
+              .build();
+
+      var media = probeOutput(stream.ffprobeOutput());
+
+      assertThat(media.getFrameRateRule().getBasis()).isEqualTo(DECLARED_RATES);
+      assertThat(chosenStream(media).hasMaximumFrameRate()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"mov-phone-60.mov", "mov-phone-120-declared.mov"})
+    @DisplayName(
+        "Should report no maximum when the packet scan covers only the first 30 seconds of a"
+            + " variable-rate stream")
+    void shouldReportNoMaximumWhenThePacketScanCoversOnlyTheFirst30SecondsOfAVariableRateStream(
+        String fixture) {
+      var media = probeFixture(fixture);
+
+      assertThat(media.getFrameRateRule().getBasis()).isEqualTo(PACKET_SCAN);
+      assertThat(chosenStream(media).hasMaximumFrameRate()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no maximum when the declared rates fall back to the average rate")
+    void shouldReportNoMaximumWhenTheDeclaredRatesFallBackToTheAverageRate() {
+      // The base rate of 90,000 is unusable, and the scan finds no frames.
+      var stream =
+          VideoStream.builder()
+              .baseRate("90000/1")
+              .averageRate("1201/50")
+              .timeBase("1/90000")
+              .build();
+
+      var media = probeOutput(stream.ffprobeOutput());
+
+      assertThat(media.getFrameRateRule().getBasis())
+          .isEqualTo(OutputFrameRateBasis.OUTPUT_FRAME_RATE_BASIS_DECLARED_RATE_FALLBACK);
+      assertThat(chosenStream(media).hasMaximumFrameRate()).isFalse();
+    }
+
+    private static ProbeStreamInfo chosenStream(ProbeMediaInfo media) {
+      return media.getStreamsList().stream()
+          .filter(stream -> stream.getIndex() == media.getChosenVideoStreamIndex())
+          .findFirst()
+          .orElseThrow();
     }
   }
 

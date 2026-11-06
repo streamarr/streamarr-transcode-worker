@@ -4,9 +4,12 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
+import com.streamarr.transcode.probe.DolbyVisionRpuReader.RpuFacts;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -48,13 +51,16 @@ final class Av1MetadataObus implements MetadataWalk {
   // under 6 bytes, which no RPU header that the probe reads fits in.
   private static final long EMDF_HEADER = 0x01BE6841L;
   private static final long EMDF_PROTECTION = 0x400;
+  private static final int SMALLEST_EMDF_PAYLOAD = 6;
   private static final int LARGEST_EMDF_PAYLOAD = 512;
+  private static final long UNSIGNED_32_BITS = 0xFFFF_FFFFL;
 
-  // The walk keeps the first payload of each kind and which kinds showed, not every OBU, so that
-  // its memory stays bounded however many OBUs the packets hold.
+  // The walk keeps the first payload of each kind, which kinds showed and a few values from each
+  // RPU, not every OBU, so that its memory stays small however large the OBUs are.
   private final Map<HdrMessage, ByteBuffer> firstPayloads;
   private final Set<HdrMessage> layeredMessages;
   private final Optional<byte[]> firstRpu;
+  private final List<RpuFacts> parsedRpus;
   private final boolean hasLayeredRpu;
   private final boolean readAll;
 
@@ -62,6 +68,7 @@ final class Av1MetadataObus implements MetadataWalk {
     this.firstPayloads = walk.firstPayloads;
     this.layeredMessages = walk.layeredMessages;
     this.firstRpu = Optional.ofNullable(walk.firstRpu);
+    this.parsedRpus = List.copyOf(walk.parsedRpus);
     this.hasLayeredRpu = walk.hasLayeredRpu;
     this.readAll = walk.readAll;
   }
@@ -117,11 +124,13 @@ final class Av1MetadataObus implements MetadataWalk {
   @Override
   public Optional<RpuObservation> rpus() {
     if (firstRpu.isPresent()) {
+      var rpu = unwrapped(firstRpu.get());
       return Optional.of(
           new RpuObservation(
-              Presence.PRESENCE_PRESENT,
-              header(firstRpu.get()),
-              DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
+                  Presence.PRESENCE_PRESENT,
+                  rpu.flatMap(Av1MetadataObus::header),
+                  DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)
+              .withParsed(parsedRpus));
     }
 
     if (readAll && !hasLayeredRpu) {
@@ -135,11 +144,19 @@ final class Av1MetadataObus implements MetadataWalk {
     return Optional.empty();
   }
 
+  private static Optional<DolbyVisionRpuHeader> header(byte[] rpu) {
+    try {
+      return DolbyVisionRpuHeaderReader.readWithoutPrefix(rpu);
+    } catch (TruncatedBitstreamException _) {
+      return Optional.empty();
+    }
+  }
+
   /**
-   * The header of the RPU that the EMDF container after the T.35 identifier wraps; empty when the
-   * container is not one that FFmpeg opens.
+   * The RPU that the EMDF container after the T.35 identifier wraps; empty when the container is
+   * not one that FFmpeg opens.
    */
-  private static Optional<DolbyVisionRpuHeader> header(byte[] container) {
+  private static Optional<byte[]> unwrapped(byte[] container) {
     var reader = new BitReader(container);
     try {
       if (reader.bits(27) != EMDF_HEADER) {
@@ -147,7 +164,7 @@ final class Av1MetadataObus implements MetadataWalk {
       }
 
       var size = variableBits(reader);
-      if (size > LARGEST_EMDF_PAYLOAD) {
+      if (size < SMALLEST_EMDF_PAYLOAD || size > LARGEST_EMDF_PAYLOAD) {
         return Optional.empty();
       }
 
@@ -160,7 +177,7 @@ final class Av1MetadataObus implements MetadataWalk {
         return Optional.empty();
       }
 
-      return DolbyVisionRpuHeaderReader.readWithoutPrefix(rpu);
+      return Optional.of(rpu);
     } catch (TruncatedBitstreamException _) {
       return Optional.empty();
     }
@@ -168,13 +185,12 @@ final class Av1MetadataObus implements MetadataWalk {
 
   /**
    * EMDF's variable_bits(8): 8 bits, then while a read_more bit is set, the value plus one shifted
-   * by 8 with the next 8 bits. The value stops growing past the largest payload that the walk
-   * accepts, so that it cannot overflow.
+   * by 8 with the next 8 bits. FFmpeg keeps the value in an unsigned 32-bit integer, so it wraps.
    */
   private static long variableBits(BitReader reader) {
     var value = reader.bits(8);
     while (reader.flag()) {
-      value = Math.min(((value + 1) << 8) | reader.bits(8), LARGEST_EMDF_PAYLOAD + 1L);
+      value = (((value + 1) << 8) | reader.bits(8)) & UNSIGNED_32_BITS;
     }
 
     return value;
@@ -185,6 +201,7 @@ final class Av1MetadataObus implements MetadataWalk {
     private final Map<HdrMessage, ByteBuffer> firstPayloads = new EnumMap<>(HdrMessage.class);
     private final Set<HdrMessage> layeredMessages = EnumSet.noneOf(HdrMessage.class);
     private byte[] firstRpu;
+    private final List<RpuFacts> parsedRpus = new ArrayList<>();
     private boolean hasLayeredRpu;
     private boolean readAll = true;
 
@@ -306,11 +323,16 @@ final class Av1MetadataObus implements MetadataWalk {
         return;
       }
 
+      var remaining = values.duplicate().position(values.position() + RPU_IDENTIFIER.length);
+      var container = new byte[remaining.remaining()];
+      remaining.get(container);
       if (firstRpu == null) {
-        var container = values.duplicate().position(values.position() + RPU_IDENTIFIER.length);
-        firstRpu = new byte[container.remaining()];
-        container.get(firstRpu);
+        firstRpu = container;
       }
+
+      unwrapped(container)
+          .flatMap(DolbyVisionRpuReader::readWithoutPrefix)
+          .ifPresent(parsedRpus::add);
     }
 
     private void addHdr10Plus(ByteBuffer values, boolean isLayered) {

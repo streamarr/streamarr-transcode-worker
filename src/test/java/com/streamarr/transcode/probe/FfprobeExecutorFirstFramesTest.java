@@ -14,6 +14,8 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
+import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionEnhancementLayer;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
@@ -2178,6 +2180,9 @@ class FfprobeExecutorFirstFramesTest {
                           .setDisableResidual(true)
                           .setVdrBitDepth(12))
                   .setRpuPlacement(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE)
+                  .setEnhancementLayer(
+                      DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_NONE)
+                  .setRpuContentLightLevel(ContentLightLevel.getDefaultInstance())
                   .build());
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
@@ -2238,6 +2243,9 @@ class FfprobeExecutorFirstFramesTest {
                           .setVdrRpuProfile(1)
                           .setDisableResidual(true)
                           .setVdrBitDepth(12))
+                  .setEnhancementLayer(
+                      DolbyVisionEnhancementLayer.DOLBY_VISION_ENHANCEMENT_LAYER_NONE)
+                  .setRpuContentLightLevel(ContentLightLevel.getDefaultInstance())
                   .setRpuPlacement(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)
                   .build());
       assertThat(dynamicRange.getCompatibleBase()).isEqualTo(CompatibleBase.COMPATIBLE_BASE_PQ);

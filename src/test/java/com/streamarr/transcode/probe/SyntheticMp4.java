@@ -27,6 +27,7 @@ record SyntheticMp4(
     long mediaTimescale,
     int sampleCount,
     int sampleDuration,
+    @Singular List<DurationRun> durationRuns,
     Integer sampleSizeCount,
     int sampleSize,
     boolean compactSampleSizes,
@@ -61,6 +62,12 @@ record SyntheticMp4(
 
   /** One ctts entry: {@code count} samples whose composition offset is {@code offset}. */
   record CompositionRun(int count, int offset) {}
+
+  /**
+   * One stts entry: {@code count} samples that each last {@code duration} ticks. A track with runs
+   * writes them in place of its single {@code sampleCount} entry.
+   */
+  record DurationRun(int count, int duration) {}
 
   byte[] bytes() {
     var fileType = box("ftyp", ascii("isom"), int32(0));
@@ -98,7 +105,7 @@ record SyntheticMp4(
               concat(sampleEntries.toArray(byte[][]::new))));
     }
 
-    sampleTable.add(fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration)));
+    sampleTable.add(sampleTimeBox());
     sampleTable.add(sampleSizeBox());
     if (largeChunkOffset != 0) {
       sampleTable.add(fullBox("co64", 0, int32(1), int64(largeChunkOffset)));
@@ -160,8 +167,25 @@ record SyntheticMp4(
     }
   }
 
+  private byte[] sampleTimeBox() {
+    if (durationRuns.isEmpty()) {
+      return fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration));
+    }
+
+    var entries = new ArrayList<byte[]>();
+    entries.add(int32(durationRuns.size()));
+    durationRuns.forEach(run -> entries.add(concat(int32(run.count()), int32(run.duration()))));
+    return fullBox("stts", 0, entries.toArray(byte[][]::new));
+  }
+
+  private int totalSampleCount() {
+    return durationRuns.isEmpty()
+        ? sampleCount
+        : durationRuns.stream().mapToInt(DurationRun::count).sum();
+  }
+
   private byte[] sampleSizeBox() {
-    var count = sampleSizeCount == null ? sampleCount : sampleSizeCount;
+    var count = sampleSizeCount == null ? totalSampleCount() : sampleSizeCount;
     var size = sampleSizeCount == null ? 1 : sampleSize;
     if (compactSampleSizes) {
       // stz2: three reserved bytes, the field size, the count, then the fields.

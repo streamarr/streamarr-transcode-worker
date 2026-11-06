@@ -10,6 +10,7 @@ import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
 import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import com.streamarr.transcode.probe.CopiedSampleSizes.SourceMovie;
+import com.streamarr.transcode.probe.MaximumFrameRate.MeasuredFrameRate;
 import com.streamarr.transcode.probe.Mp4SampleTables.Edit;
 import com.streamarr.transcode.probe.Mp4SampleTables.Run;
 import com.streamarr.transcode.probe.Mp4SampleTables.RunCursor;
@@ -139,6 +140,7 @@ final class Mp4StreamMeasurer {
     private final long measuredDuration;
     private final int[] intervalBytes;
     private final int[] intervalPacketCounts;
+    private final MeasuredFrameRate maximumFrameRate;
 
     @Builder
     private TrackMeasurement(
@@ -148,7 +150,8 @@ final class Mp4StreamMeasurer {
         long timescale,
         long measuredDuration,
         int[] intervalBytes,
-        int[] intervalPacketCounts) {
+        int[] intervalPacketCounts,
+        MeasuredFrameRate maximumFrameRate) {
       this.streamIndex = streamIndex;
       this.measuredBytes = measuredBytes;
       this.packetCount = packetCount;
@@ -156,6 +159,7 @@ final class Mp4StreamMeasurer {
       this.measuredDuration = measuredDuration;
       this.intervalBytes = intervalBytes;
       this.intervalPacketCounts = intervalPacketCounts;
+      this.maximumFrameRate = maximumFrameRate;
     }
 
     int streamIndex() {
@@ -181,6 +185,14 @@ final class Mp4StreamMeasurer {
     /** The unsigned 32-bit byte counts, in interval order. The array is a copy. */
     int[] intervalBytes() {
       return intervalBytes.clone();
+    }
+
+    /**
+     * The chosen video track's {@link MaximumFrameRate#measured} rate over the samples that a
+     * stream copy keeps; empty for every other track and when the times give none.
+     */
+    Optional<MeasuredFrameRate> maximumFrameRate() {
+      return Optional.ofNullable(maximumFrameRate);
     }
 
     /** The unsigned 32-bit sample counts, in interval order. The array is a copy. */
@@ -345,6 +357,12 @@ final class Mp4StreamMeasurer {
               .measuredDuration(Math.subtractExact(lastEnd, firstPresentation))
               .intervalBytes(counts)
               .intervalPacketCounts(packets)
+              .maximumFrameRate(
+                  this == chosen
+                      ? MaximumFrameRate.measured(
+                              Arrays.copyOfRange(presentationTimes, first, sizes.length), timescale)
+                          .orElse(null)
+                      : null)
               .build());
     }
 
