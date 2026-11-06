@@ -35,7 +35,7 @@ import tools.jackson.databind.ObjectMapper;
 public final class FfprobeExecutor {
 
   /** The only probe version that this worker answers. */
-  public static final int PROBE_VERSION = 7;
+  public static final int PROBE_VERSION = 8;
 
   /** The only stream measurement version (ADR 0054) whose bitrate scan chunks this worker runs. */
   public static final int MEASUREMENT_VERSION = 2;
