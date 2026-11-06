@@ -389,35 +389,46 @@ final class DolbyVisionRpuReader {
     reader.alignToByte();
     var level6 = Optional.<ContentLightLevel>empty();
     for (long block = 0; block < blocks; block++) {
-      var length = reader.unsignedExpGolomb31();
-      var level = reader.bits(8);
-      counts.add(level);
-      requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
-      if (level == LEVEL_2) {
-        requireValidMsWeight(reader);
-        reader.skip(length * 8 - LEVEL_2_TRIM_BITS - MS_WEIGHT_BITS);
-        continue;
+      var blockLevel6 = firstGroupBlockLevel6(reader, header, counts);
+      if (level6.isEmpty()) {
+        level6 = blockLevel6;
       }
-
-      // FFmpeg parses a static block, such as level 6, of a compressed DM payload but ignores it.
-      var isReadable = header.displayManagementCompression() == 0;
-      if (level == LEVEL_6 && isReadable && level6.isEmpty()) {
-        reader.bits(16);
-        reader.bits(16);
-        level6 =
-            Optional.of(
-                ContentLightLevel.newBuilder()
-                    .setMaxContentLightLevel((int) reader.bits(16))
-                    .setMaxFrameAverageLightLevel((int) reader.bits(16))
-                    .build());
-        reader.skip((length - LEVEL_6_BYTES) * 8);
-        continue;
-      }
-
-      reader.skip(length * 8);
     }
 
     return Optional.of(level6);
+  }
+
+  /**
+   * Reads one extension block of the first group: its light levels when it is a readable level 6
+   * block, and empty for any other block.
+   */
+  private static Optional<ContentLightLevel> firstGroupBlockLevel6(
+      BitReader reader, Header header, BlockCounts counts) {
+    var length = reader.unsignedExpGolomb31();
+    var level = reader.bits(8);
+    counts.add(level);
+    requireLength(FIRST_GROUP_BLOCK_BYTES, level, length);
+    if (level == LEVEL_2) {
+      requireValidMsWeight(reader);
+      reader.skip(length * 8 - LEVEL_2_TRIM_BITS - MS_WEIGHT_BITS);
+      return Optional.empty();
+    }
+
+    // FFmpeg parses a static block, such as level 6, of a compressed DM payload but ignores it.
+    if (level != LEVEL_6 || header.displayManagementCompression() != 0) {
+      reader.skip(length * 8);
+      return Optional.empty();
+    }
+
+    reader.bits(16);
+    reader.bits(16);
+    var lightLevel =
+        ContentLightLevel.newBuilder()
+            .setMaxContentLightLevel((int) reader.bits(16))
+            .setMaxFrameAverageLightLevel((int) reader.bits(16))
+            .build();
+    reader.skip((length - LEVEL_6_BYTES) * 8);
+    return Optional.of(lightLevel);
   }
 
   private static void requireValidColorMetadata(BitReader reader) {
