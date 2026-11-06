@@ -29,6 +29,9 @@ final class RpuBitReader {
     private static final long LARGEST_ID = 15;
     // The decoder reads each layer's bit depth as 8 to 16, coded minus 8.
     private static final long LARGEST_BIT_DEPTH_MINUS8 = 8;
+    // The decoder reads most Exp-Golomb fields through a 9-bit table that decodes 0 to 30; a longer
+    // code reads as 31 or 32, or past 9 leading zeros loses the bit position.
+    private static final long LARGEST_DECODED_EXP_GOLOMB = 30;
 
     static AcceptedRange id(String field) {
       return new AcceptedRange(field, 0, LARGEST_ID);
@@ -36,6 +39,11 @@ final class RpuBitReader {
 
     static AcceptedRange bitDepthMinus8(String field) {
       return new AcceptedRange(field, 0, LARGEST_BIT_DEPTH_MINUS8);
+    }
+
+    /** The values of a field that the decoder reads with its 31-value Exp-Golomb table. */
+    static AcceptedRange decodedExpGolomb(String field) {
+      return new AcceptedRange(field, 0, LARGEST_DECODED_EXP_GOLOMB);
     }
 
     /**

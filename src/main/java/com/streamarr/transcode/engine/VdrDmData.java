@@ -46,6 +46,10 @@ record VdrDmData(
       AcceptedRange.id("current_dm_metadata_id");
   private static final AcceptedRange SIGNAL_BIT_DEPTH =
       new AcceptedRange("signal_bit_depth", 8, 16);
+  private static final AcceptedRange SCENE_REFRESH_FLAG =
+      AcceptedRange.decodedExpGolomb("scene_refresh_flag");
+  private static final AcceptedRange EXT_BLOCK_LENGTH =
+      AcceptedRange.decodedExpGolomb("ext_block_length");
 
   VdrDmData {
     cmv29Blocks = List.copyOf(cmv29Blocks);
@@ -187,7 +191,7 @@ record VdrDmData(
         VdrDmData.builder()
             .affectedDmMetadataId(affectedDmMetadataId)
             .currentDmMetadataId(currentDmMetadataId)
-            .sceneRefreshFlag(reader.unsignedExpGolomb());
+            .sceneRefreshFlag(reader.unsignedExpGolomb(SCENE_REFRESH_FLAG));
     var signal = Optional.<SignalDescription>empty();
     if (!header.compressesDmMetadata()) {
       signal = Optional.of(SignalDescription.parse(reader));
@@ -238,7 +242,7 @@ record VdrDmData(
     reader.alignmentZeroBits();
     var blocks = new ArrayList<ExtensionBlock>();
     for (var block = 0; block < count; block++) {
-      var length = reader.unsignedExpGolomb();
+      var length = reader.unsignedExpGolomb(EXT_BLOCK_LENGTH);
       var level = (int) reader.bits(8);
       blocks.add(new ExtensionBlock(level, reader.bytes(length)));
     }

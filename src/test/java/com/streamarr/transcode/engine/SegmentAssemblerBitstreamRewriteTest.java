@@ -724,21 +724,21 @@ class SegmentAssemblerBitstreamRewriteTest {
                     aud(), slice(1), SyntheticRpus.nalUnit(SyntheticRpus.convertedPreviousRpu()))));
   }
 
-  // The decoder falls back to mapping 0 when no RPU defined the mapping a reference names.
   @Test
   @DisplayName(
-      "Should convert an RPU that reuses an undefined previous RPU's mapping when an RPU since the"
-          + " random access point defined mapping 0")
+      "Should convert an RPU that reuses the previous RPU's mapping when an RPU since the random"
+          + " access point defined it under that id")
   void
-      shouldConvertAnRpuThatReusesAnUndefinedPreviousRpusMappingWhenAnRpuSinceTheRandomAccessPointDefinedMapping0()
+      shouldConvertAnRpuThatReusesThePreviousRpusMappingWhenAnRpuSinceTheRandomAccessPointDefinedItUnderThatId()
           throws IOException {
-    var reusing = SyntheticRpus.profile7().previousRpu(3);
+    var defining = SyntheticRpus.profile7().vdrRpuId(5);
+    var reusing = SyntheticRpus.profile7().previousRpu(5);
     var fragment =
         fragmentBuilder()
             .startsWithKeyframe(true)
             .video(
                 0,
-                sample(aud(), slice(0), SyntheticRpus.profile7().nalUnit()),
+                sample(aud(), slice(0), defining.nalUnit()),
                 sample(aud(), slice(1), reusing.nalUnit()))
             .build();
 
@@ -746,13 +746,15 @@ class SegmentAssemblerBitstreamRewriteTest {
 
     assertThat(delivered.video())
         .containsExactly(
-            hex(sample(aud(), slice(0), SyntheticRpus.nalUnit(SyntheticRpus.convertedProfile7()))),
+            hex(sample(aud(), slice(0), convertedNalUnitOf(defining))),
             hex(sample(aud(), slice(1), convertedNalUnitOf(reusing))));
   }
 
   // A decoder that starts at a random access point holds no mapping, and one that never saw the
   // mapping a reference names, nor mapping 0, rejects the RPU; the conversion refuses what it
-  // would reject.
+  // would reject. The decoder's fall-back to mapping 0 is not honoured either: a decoder that
+  // played on from before the random access point may still hold the named mapping and reshape
+  // the picture differently from one that started there.
   @ParameterizedTest(name = "{0}")
   @MethodSource("samplesWhoseRpuReusesAMappingTheDecoderDoesNotHold")
   @DisplayName(
@@ -780,7 +782,20 @@ class SegmentAssemblerBitstreamRewriteTest {
             "an RPU reuses mapping 3 where the RPU before it defined mapping 5 and none defined 0",
             List.of(
                 sample(aud(), slice(0), SyntheticRpus.profile7().vdrRpuId(5).nalUnit()),
-                sample(aud(), slice(1), SyntheticRpus.profile7().previousRpu(3).nalUnit()))));
+                sample(aud(), slice(1), SyntheticRpus.profile7().previousRpu(3).nalUnit()))),
+        Arguments.of(
+            "an RPU reuses mapping 3 where only mapping 0 is defined since the random access point,"
+                + " which a decoder that played on from earlier may hold as another mapping",
+            List.of(
+                sample(aud(), slice(0), SyntheticRpus.profile7().nalUnit()),
+                sample(aud(), slice(1), SyntheticRpus.profile7().previousRpu(3).nalUnit()))),
+        Arguments.of(
+            "an RPU reuses mapping 5, defined before the random access point whose RPU defined"
+                + " mapping 0, which a decoder that played on holds and one that starts there does not",
+            List.of(
+                sample(aud(), slice(0), SyntheticRpus.profile7().vdrRpuId(5).nalUnit()),
+                sample(aud(), idrSlice, SyntheticRpus.profile7().nalUnit()),
+                sample(aud(), slice(2), SyntheticRpus.profile7().previousRpu(5).nalUnit()))));
   }
 
   // The room a growing copy keeps beyond its last sample must not count as media data against the
@@ -942,6 +957,10 @@ class SegmentAssemblerBitstreamRewriteTest {
         Arguments.of(
             "an RPU with eight static extension blocks, above the seven that the decoder keeps",
             sample(aud(), slice(0), SyntheticRpus.profile7().emptyBlocks(8, 0).nalUnit())),
+        Arguments.of(
+            "an RPU with a scene_refresh_flag of 65535, past what the decoder's Exp-Golomb read"
+                + " decodes",
+            sample(aud(), slice(0), SyntheticRpus.profile7().sceneRefreshFlag(65_535).nalUnit())),
         Arguments.of(
             "an RPU that names previous RPU 16, above the 15 that the decoder reads",
             sample(aud(), slice(0), SyntheticRpus.profile7().previousRpu(16).nalUnit())),
