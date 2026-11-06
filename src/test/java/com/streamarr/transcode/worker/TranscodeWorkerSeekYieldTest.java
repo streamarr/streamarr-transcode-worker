@@ -116,20 +116,18 @@ class TranscodeWorkerSeekYieldTest {
 
   @Test
   @DisplayName(
-      "Should keep a job attempt paused for the later hold limit when a later yield lists it again")
-  void shouldKeepAJobAttemptPausedForTheLaterHoldLimitWhenALaterYieldListsItAgain()
+      "Should resume a job attempt at its first hold limit when a later yield lists it again while"
+          + " it is paused")
+  void shouldResumeAJobAttemptAtItsFirstHoldLimitWhenALaterYieldListsItAgainWhileItIsPaused()
       throws Exception {
     try (var worker = worker()) {
       var connection = startThreeAttempts(worker);
-      yieldToSeek(connection, Duration.ofMillis(300), steady);
-      promptly().until(() -> pausedAttempts().equals(List.of(steady)));
+      yieldToSeek(connection, Duration.ofMillis(300), steady, otherSteady);
+      promptly().until(() -> pausedAttempts().equals(List.of(steady, otherSteady)));
 
-      yieldToSeek(connection, LONG_HOLD, steady);
+      yieldToSeek(connection, LONG_HOLD, steady, otherSteady);
 
-      await()
-          .during(Duration.ofSeconds(1))
-          .atMost(EVENT_LIMIT)
-          .until(() -> pausedAttempts().equals(List.of(steady)));
+      promptly().until(() -> pausedAttempts().isEmpty());
       exitAll();
     }
   }

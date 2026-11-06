@@ -17,7 +17,7 @@ import lombok.NonNull;
 /**
  * The job attempts that a worker session pauses while a seek's first media segment is pending on
  * the worker (ADR 0044, seek priority). Each yield replaces the previous one's attempts, and each
- * paused attempt resumes at the latest once the yield's hold limit has passed.
+ * paused attempt resumes at the latest once the hold limit of the yield that paused it has passed.
  */
 final class SeekYields implements AutoCloseable {
 
@@ -31,8 +31,9 @@ final class SeekYields implements AutoCloseable {
   private long holds;
 
   /**
-   * Pauses each listed attempt that runs, resumes each paused attempt that is not listed, and
-   * starts every listed attempt's hold limit afresh. A hold limit that is not positive pauses
+   * Pauses each listed attempt that runs, and resumes each paused attempt that is not listed. A
+   * listed attempt resumes once the hold limit has passed since the yield that paused it; listing
+   * an attempt that is still paused keeps that deadline. A hold limit that is not positive pauses
    * nothing.
    */
   synchronized void yieldTo(
@@ -50,20 +51,17 @@ final class SeekYields implements AutoCloseable {
       }
     }
 
-    listed.forEach(
-        attemptId ->
-            runningProducers
-                .apply(attemptId)
-                .ifPresent(producer -> hold(attemptId, producer, holdLimit)));
+    listed.stream()
+        .filter(attemptId -> !paused.containsKey(attemptId))
+        .forEach(
+            attemptId ->
+                runningProducers
+                    .apply(attemptId)
+                    .ifPresent(producer -> hold(attemptId, producer, holdLimit)));
   }
 
   // Guarded by this monitor.
   private void hold(UUID attemptId, Producer producer, Duration holdLimit) {
-    var previous = paused.remove(attemptId);
-    if (previous != null) {
-      previous.release().cancel(false);
-    }
-
     producer.pauseFfmpeg();
     var hold = ++holds;
     var release =
@@ -72,7 +70,7 @@ final class SeekYields implements AutoCloseable {
     paused.put(attemptId, new PausedAttempt(producer, hold, release));
   }
 
-  // A release that a later yield replaced finds the later hold and leaves it.
+  // A release of an earlier pause, which a yield ended, finds the later hold and leaves it.
   private synchronized void release(UUID attemptId, long hold) {
     var held = paused.get(attemptId);
     if (held == null || held.hold() != hold) {
