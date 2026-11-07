@@ -3714,9 +3714,9 @@ class FfmpegCommandBuilderTest {
   }
 
   // The audio's graph ends in the encoder's input as FFmpeg negotiates it: the sample formats and
-  // rates the encoder lists, and the layout FFmpeg gives the channel count where the encoder's
-  // table names one. AC-3 lists quad(side) as its first four-channel layout, which FFmpeg chooses
-  // for itself; ALAC is not in the table, so FFmpeg converts its audio before the encoder.
+  // rates the encoder lists, and the layout FFmpeg gives -ac's count, the encoder's first listed
+  // layout of that count: quad(side) for AC-3. An encoder outside the table, as ALAC, keeps
+  // FFmpeg's choice of its input and takes the count's default layout.
   @ParameterizedTest(name = "{1} channels of {0}")
   @CsvSource(
       delimiter = ';',
@@ -3724,10 +3724,10 @@ class FfmpegCommandBuilderTest {
         "aac; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=AAC_RATES:channel_layouts=5.1"
             + "[filtered_held_audio]",
         "ac3; 4; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
-            + "[filtered_held_audio]",
+            + ":channel_layouts=quad(side)[filtered_held_audio]",
         "eac3; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
             + ":channel_layouts=5.1(side)[filtered_held_audio]",
-        "alac; 8; [1:a:0]anull[filtered_held_audio]"
+        "alac; 2; [1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]"
       })
   @DisplayName(
       "Should end the audio's graph in the encoder's input when an encode holds the last frame and"

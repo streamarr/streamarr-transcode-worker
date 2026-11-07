@@ -6267,23 +6267,25 @@ class WorkerMediaSmokeTest {
         .isGreaterThan(1_000);
   }
 
-  // An encode that holds the last frame reads its audio from a second input; its audio must not
-  // change for that. FFmpeg downmixes integer samples with a gain that keeps them from clipping and
-  // floating-point samples without one, so the format the encoder takes must reach the downmix.
-  @Test
+  // An encode that holds the last frame reads its audio from a second input and filters it in a
+  // graph of its own; its audio must not change for that. The encoder's input must reach that
+  // graph: FFmpeg downmixes integer samples with a gain that keeps them from clipping, rounds a
+  // resampler's output to integers, and gives a source whose layout changes the layout it started
+  // with.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("heldAudioCases")
   @DisplayName(
       "Should encode the same audio as an encode that holds no frame when an encode holds the last"
-          + " frame and downmixes 16-bit 5.1 FLAC at 96 kHz to stereo AC-3")
-  void shouldEncodeTheSameAudioAsAnEncodeThatHoldsNoFrameWhenAHeldEncodeDownmixesIntegerSurround()
-      throws Exception {
-    var source = integerSurroundFlacSource();
-    var held = integerSurroundJob(source);
+          + " frame")
+  void shouldEncodeTheSameAudioAsAnEncodeThatHoldsNoFrameWhenAnEncodeHoldsTheLastFrame(
+      HeldAudioCase heldAudio) throws Throwable {
+    var source = heldAudio.source().get();
+    var held = heldAudio.job(source);
     held.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
 
     var heldUploads = execute(engine(softwareCapabilities()), source.getParent(), held.build());
     var uploads =
-        execute(
-            engine(softwareCapabilities()), source.getParent(), integerSurroundJob(source).build());
+        execute(engine(softwareCapabilities()), source.getParent(), heldAudio.job(source).build());
 
     assertThat(decodedAudio(heldUploads.contentOf(heldUploads.names())))
         .as("the held encode's decoded audio")
@@ -6291,16 +6293,71 @@ class WorkerMediaSmokeTest {
         .isEqualTo(decodedAudio(uploads.contentOf(uploads.names())));
   }
 
-  private static VariantJob.Builder integerSurroundJob(Path source) {
-    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    job.getExecutionBuilder().setMediaSegmentCount(2);
-    job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(12);
-    job.getDecisionBuilder()
-        .getAudioBuilder()
-        .setCodec("ac3")
-        .setChannels(2)
-        .setBitrateBitsPerSecond(192_000);
-    return job;
+  static Stream<HeldAudioCase> heldAudioCases() {
+    return Stream.of(
+        HeldAudioCase.builder()
+            .name("16-bit 5.1 FLAC at 96 kHz downmixed to stereo AC-3")
+            .source(WorkerMediaSmokeTest::integerSurroundFlacSource)
+            .segmentCount(2)
+            .codec("ac3")
+            .channels(2)
+            .build(),
+        HeldAudioCase.builder()
+            .name("16-bit stereo FLAC at 96 kHz near full scale, in named stereo AC-3")
+            .source(WorkerMediaSmokeTest::loudIntegerStereoFlacSource)
+            .segmentCount(2)
+            .codec("ac3")
+            .channels(2)
+            .layout(Optional.of(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO))
+            .build(),
+        HeldAudioCase.builder()
+            .name("AC-3 that turns from mono to stereo, as stereo ALAC")
+            .source(WorkerMediaSmokeTest::monoThenStereoSource)
+            .segmentCount(2)
+            .codec("alac")
+            .channels(2)
+            .build(),
+        HeldAudioCase.builder()
+            .name("AC-3 that turns from mono to stereo, as four channels of AC-3")
+            .source(WorkerMediaSmokeTest::monoThenStereoSource)
+            .segmentCount(2)
+            .codec("ac3")
+            .channels(4)
+            .build());
+  }
+
+  // A source, and the audio that a job encodes from it over this many 6 s segments.
+  @Builder
+  private record HeldAudioCase(
+      String name,
+      ThrowingSupplier<Path> source,
+      int segmentCount,
+      String codec,
+      int channels,
+      Optional<AudioChannelLayout> layout) {
+
+    HeldAudioCase {
+      layout = layout == null ? Optional.empty() : layout;
+    }
+
+    VariantJob.Builder job(Path source) {
+      var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+      job.getExecutionBuilder().setMediaSegmentCount(segmentCount);
+      job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(segmentCount * 6L);
+      var audio =
+          job.getDecisionBuilder()
+              .getAudioBuilder()
+              .setCodec(codec)
+              .setChannels(channels)
+              .setBitrateBitsPerSecond(192_000);
+      layout.ifPresent(audio::setChannelLayout);
+      return job;
+    }
+
+    @Override
+    public String toString() {
+      return name;
+    }
   }
 
   // FFmpeg encodes -ac 4 in AC-3 as quad(side), the first four-channel layout its encoder lists,
@@ -8348,6 +8405,87 @@ class WorkerMediaSmokeTest {
               "48",
               "-c:a",
               "copy"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 12 s, and AC-3 that plays 440 Hz in
+  // mono for 6 s and then 440 Hz on the left and 880 Hz on the right for 6 s.
+  private static synchronized Path monoThenStereoSource() throws Exception {
+    var source = seekableSources.resolve("mono-then-stereo.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var mono = seekableSources.resolve("six-seconds-of-mono.ac3");
+      runFfmpeg(List.of("-f", "lavfi", "-i", "sine=f=440:r=48000:d=6", "-c:a", "ac3"), mono);
+      var stereo = seekableSources.resolve("six-seconds-of-stereo.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=440:r=48000:d=6",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=880:r=48000:d=6",
+              "-filter_complex",
+              "[0][1]join=inputs=2:channel_layout=stereo",
+              "-c:a",
+              "ac3"),
+          stereo);
+      var audio = seekableSources.resolve("mono-then-stereo.ac3");
+      Files.write(audio, Files.readAllBytes(mono));
+      Files.write(audio, Files.readAllBytes(stereo), StandardOpenOption.APPEND);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=12",
+              "-i",
+              audio.toString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "copy"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 16-bit stereo FLAC at 96 kHz of a
+  // 1 kHz tone at 99% of full scale, both for 12 s.
+  private static synchronized Path loudIntegerStereoFlacSource() throws Exception {
+    var source = seekableSources.resolve("loud-integer-stereo-flac.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=12",
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc=0.99*sin(2*PI*1000*t)|0.99*sin(2*PI*1000*t):s=96000:d=12:c=stereo",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s16"),
           source);
       generatedSeekableSources.add(source);
     }

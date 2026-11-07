@@ -176,7 +176,7 @@ public class FfmpegCommandBuilder {
   private static final String LIBOPUS = "libopus";
 
   private static final Map<Integer, String> AC3_CHANNEL_LAYOUTS =
-      Map.of(1, "mono", 2, STEREO, 6, "5.1(side)");
+      Map.of(1, "mono", 2, STEREO, 3, "3.0(back)", 4, "quad(side)", 5, "5.0(side)", 6, "5.1(side)");
 
   private static final Map<String, AudioEncoderInput> AUDIO_ENCODER_INPUTS =
       Map.of(
@@ -547,18 +547,20 @@ public class FfmpegCommandBuilder {
             HELD_AUDIO_LABEL));
   }
 
-  // The encoder's input as FFmpeg would negotiate it from the encoder: a named layout's
-  // -ch_layout, or the sample formats, rates and layout of the job's encoder and channel count.
+  // The encoder's input as FFmpeg negotiates it: the sample formats and rates that the encoder
+  // lists, and a named layout's -ch_layout or the layout FFmpeg gives -ac's count, which is the
+  // count's default layout for an encoder that lists none.
   private static String encoderInputOfTheAudio(List<String> cmd, AudioDecision audio) {
-    return optionValue(cmd, "-ch_layout")
-        .map(layout -> ",aformat=channel_layouts=" + layout)
-        .orElseGet(
-            () -> {
-              var conversion = encoderInputConversion(audio);
-              return conversion.isEmpty()
-                  ? ""
-                  : "," + conversion.substring(0, conversion.length() - 1);
-            });
+    var input =
+        Optional.ofNullable(AUDIO_ENCODER_INPUTS.get(optionValue(cmd, "-c:a").orElseThrow()));
+    var layout =
+        optionValue(cmd, "-ch_layout")
+            .or(() -> input.flatMap(encoder -> encoder.layoutOf(audio.channels())))
+            .orElse(audio.channels() + "c");
+    return ",aformat="
+        + input.map(encoder -> encoder.formatsAndRates() + ":").orElse("")
+        + "channel_layouts="
+        + layout;
   }
 
   private static Optional<String> optionValue(List<String> cmd, String option) {
@@ -1130,12 +1132,19 @@ public class FfmpegCommandBuilder {
     }
 
     String conversionFor(int channels) {
-      return "aformat=sample_fmts="
+      return "aformat="
+          + formatsAndRates()
+          + layoutOf(channels).map(layout -> ":channel_layouts=" + layout).orElse("");
+    }
+
+    String formatsAndRates() {
+      return "sample_fmts="
           + sampleFormats
-          + sampleRates.map(rates -> ":sample_rates=" + rates).orElse("")
-          + Optional.ofNullable(channelLayouts.get(channels))
-              .map(layout -> ":channel_layouts=" + layout)
-              .orElse("");
+          + sampleRates.map(rates -> ":sample_rates=" + rates).orElse("");
+    }
+
+    Optional<String> layoutOf(int channels) {
+      return Optional.ofNullable(channelLayouts.get(channels));
     }
   }
 

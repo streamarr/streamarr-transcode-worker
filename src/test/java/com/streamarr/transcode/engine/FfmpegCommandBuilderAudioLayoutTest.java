@@ -768,18 +768,29 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
 
     @ParameterizedTest(name = "{0} in {1}")
-    @CsvSource({"aac, stereo", "eac3, 5.1"})
+    @CsvSource(
+        delimiter = ';',
+        value = {
+          "aac; stereo; sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000"
+              + "|22050|16000|12000|11025|8000|7350",
+          "eac3; 5.1; sample_fmts=fltp:sample_rates=48000|44100|32000"
+        })
     @DisplayName(
-        "Should keep the named layout as the audio enters the held video's graph when an encode"
-            + " holds the last frame and names its layout")
-    void shouldKeepTheNamedLayoutAsTheAudioEntersTheHeldVideosGraphWhenAnEncodeHolds(
-        String codec, String layout) {
+        "Should give the audio the encoder's formats and rates in the named layout as it enters the"
+            + " held video's graph when an encode holds the last frame and names its layout")
+    void shouldGiveTheAudioTheEncodersInputInTheNamedLayoutWhenAnEncodeHolds(
+        String codec, String layout, String formatsAndRates) {
       var held = VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build();
 
       var cmd = encodeCommand(encode(codec, layout), held);
 
       assertThat(heldAudioGraph(cmd))
-          .endsWith(",aformat=channel_layouts=" + layout + "[filtered_held_audio]");
+          .endsWith(
+              ",aformat="
+                  + formatsAndRates
+                  + ":channel_layouts="
+                  + layout
+                  + "[filtered_held_audio]");
     }
 
     private List<String> encodeCommand(AudioDecision audio, VideoDecision video) {
