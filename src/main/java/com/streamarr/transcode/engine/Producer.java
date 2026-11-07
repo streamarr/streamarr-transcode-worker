@@ -95,11 +95,14 @@ public final class Producer {
   private OptionalInt lastDeliveredMediaSegment = OptionalInt.empty();
   // Guarded by lock. Once the attempt is decided or its output has ended, FFmpeg stays running.
   private boolean ffmpegPaused;
+  private boolean heldBack;
   private boolean pausesEnded;
   // Guarded by lock. After a resume, FFmpeg runs for as long as it was paused and until the sink
-  // accepts another media segment before it pauses again.
+  // accepts another media segment before it pauses again. Only running time serves that run: while
+  // a hold stops FFmpeg, the run still owed waits in owedRunNanos.
   private long pausedAtNanos;
   private OptionalLong restEndsAtNanos = OptionalLong.empty();
+  private long owedRunNanos;
   private boolean deliveredSinceResume = true;
   private long resumes;
   private List<PausedProcess> pausedProcesses = List.of();
@@ -275,7 +278,8 @@ public final class Producer {
    * once the attempt has an outcome, once FFmpeg's output has ended, and after a resume until
    * FFmpeg has run for as long as it was paused and the sink has accepted another media segment, so
    * that pauses take at most half of FFmpeg's time and at most one pause falls between two media
-   * segments.
+   * segments. Time that a hold stops FFmpeg serves none of that run. While a hold stops FFmpeg, the
+   * pause keeps it stopped after the hold ends.
    */
   public boolean pauseFfmpeg() {
     synchronized (lock) {
@@ -283,20 +287,30 @@ public final class Producer {
         return false;
       }
 
-      // One stopped process of a pipe holds the other back through the pipe between them.
-      var stopped =
-          ffmpeg.processes().stream().map(launcher::pause).flatMap(Optional::stream).toList();
-      if (stopped.isEmpty()) {
+      // A hold already stopped FFmpeg; the seek's pause keeps it stopped once the hold ends.
+      if (!heldBack && !stopFfmpegProcesses()) {
         return false;
       }
 
       ffmpegPaused = true;
       pausedAtNanos = clock.nanoTime();
-      productionTimer.pause();
-      watchdog.pause();
-      pausedProcesses = stopped;
       return true;
     }
+  }
+
+  // Guarded by lock. One stopped process of a pipe holds the other back through the pipe between
+  // them.
+  private boolean stopFfmpegProcesses() {
+    var stopped =
+        ffmpeg.processes().stream().map(launcher::pause).flatMap(Optional::stream).toList();
+    if (stopped.isEmpty()) {
+      return false;
+    }
+
+    productionTimer.pause();
+    watchdog.pause();
+    pausedProcesses = stopped;
+    return true;
   }
 
   /** Continues FFmpeg after {@link #pauseFfmpeg}; does nothing while FFmpeg is not paused. */
@@ -314,9 +328,80 @@ public final class Producer {
 
     ffmpegPaused = false;
     var resumedAt = clock.nanoTime();
-    restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
     deliveredSinceResume = false;
     resumes++;
+    if (heldBack) {
+      owedRunNanos = resumedAt - pausedAtNanos;
+      return;
+    }
+
+    restEndsAtNanos = OptionalLong.of(resumedAt + (resumedAt - pausedAtNanos));
+    continueFfmpegProcesses();
+  }
+
+  /**
+   * Holds FFmpeg back until {@link #releaseHeldFfmpeg}, because the attempt runs far ahead of its
+   * viewer, and answers whether FFmpeg is held. A hold has neither the rest nor the delivered
+   * segment that {@link #pauseFfmpeg} waits for after a resume: the server releases it before the
+   * viewer needs the attempt's next segment. FFmpeg runs again once neither a hold nor a seek's
+   * pause stops it. Held time counts neither as production time nor toward the stall timeout. Does
+   * nothing once the attempt has an outcome or FFmpeg's output has ended.
+   */
+  public boolean holdBackFfmpeg() {
+    synchronized (lock) {
+      if (pausesEnded) {
+        return false;
+      }
+
+      if (heldBack) {
+        return true;
+      }
+
+      if (!ffmpegPaused && !stopFfmpegProcesses()) {
+        return false;
+      }
+
+      heldBack = true;
+      owedRunNanos = remainingRunNanos();
+      restEndsAtNanos = OptionalLong.empty();
+      return true;
+    }
+  }
+
+  /** Ends the hold of {@link #holdBackFfmpeg}; FFmpeg stays paused while a seek's pause lasts. */
+  public void releaseHeldFfmpeg() {
+    synchronized (lock) {
+      releaseHold();
+    }
+  }
+
+  // Guarded by lock.
+  private void releaseHold() {
+    if (!heldBack) {
+      return;
+    }
+
+    heldBack = false;
+    if (ffmpegPaused) {
+      return;
+    }
+
+    restEndsAtNanos = OptionalLong.of(clock.nanoTime() + owedRunNanos);
+    owedRunNanos = 0;
+    continueFfmpegProcesses();
+  }
+
+  // Guarded by lock. The run after the latest resume that FFmpeg has still to serve.
+  private long remainingRunNanos() {
+    if (restEndsAtNanos.isEmpty()) {
+      return owedRunNanos;
+    }
+
+    return Math.max(0, restEndsAtNanos.getAsLong() - clock.nanoTime());
+  }
+
+  // Guarded by lock.
+  private void continueFfmpegProcesses() {
     pausedProcesses.forEach(PausedProcess::resume);
     pausedProcesses = List.of();
     watchdog.resume();
@@ -325,13 +410,15 @@ public final class Producer {
 
   // Guarded by lock.
   private boolean isResting() {
-    return restEndsAtNanos.isPresent() && clock.nanoTime() - restEndsAtNanos.getAsLong() < 0;
+    return owedRunNanos > 0
+        || restEndsAtNanos.isPresent() && clock.nanoTime() - restEndsAtNanos.getAsLong() < 0;
   }
 
   // FFmpeg must run to quit, to exit after its output ends and to be terminated.
   private void endPauses() {
     synchronized (lock) {
       pausesEnded = true;
+      releaseHold();
       resumePausedFfmpeg();
     }
   }
@@ -389,6 +476,7 @@ public final class Producer {
 
       decision = Optional.of(decided);
       pausesEnded = true;
+      releaseHold();
       resumePausedFfmpeg();
       assembler.discardHeldFragments();
       readerReleasedBytes = readerHeldBytes;
