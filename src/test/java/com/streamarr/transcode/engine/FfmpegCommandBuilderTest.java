@@ -176,11 +176,42 @@ class FfmpegCommandBuilderTest {
         .containsOnlyOnce("-preset");
   }
 
+  // Automatic's `faster` is p4, NVENC's own default; p1 is left out (ADR 0044's NVENC rows).
+  @ParameterizedTest(name = "{1} at {0} is {2}")
+  @CsvSource({
+    "VERYSLOW, h264_nvenc, p7",
+    "SLOWER, h264_nvenc, p7",
+    "SLOW, h264_nvenc, p7",
+    "MEDIUM, h264_nvenc, p6",
+    "FAST, h264_nvenc, p5",
+    "FASTER, h264_nvenc, p4",
+    "VERYFAST, h264_nvenc, p3",
+    "SUPERFAST, h264_nvenc, p2",
+    "VERYSLOW, hevc_nvenc, p7",
+    "SLOWER, hevc_nvenc, p7",
+    "SLOW, hevc_nvenc, p7",
+    "MEDIUM, hevc_nvenc, p6",
+    "FAST, hevc_nvenc, p5",
+    "FASTER, hevc_nvenc, p4",
+    "VERYFAST, hevc_nvenc, p3",
+    "SUPERFAST, hevc_nvenc, p2"
+  })
+  @DisplayName(
+      "Should pass the scale's NVENC preset when the encoder is a keyframe-verified NVENC encoder")
+  void shouldPassTheScalesNvencPresetWhenTheEncoderIsAKeyframeVerifiedNvencEncoder(
+      EncoderPreset preset, String encoder, String nvencPreset) {
+    var request = request(TranscodeMode.FULL_TRANSCODE).encoderPreset(preset).build();
+
+    var cmd = command(request, encoder);
+
+    assertThat(cmd)
+        .containsSequence("-c:v", encoder, "-preset", nvencPreset)
+        .containsOnlyOnce("-preset");
+  }
+
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
-        "h264_nvenc",
-        "hevc_nvenc",
         "av1_nvenc",
         "h264_qsv",
         "hevc_qsv",
@@ -194,8 +225,8 @@ class FfmpegCommandBuilderTest {
         "hevc_videotoolbox",
         "h264_vaapi"
       })
-  @DisplayName("Should pass no preset when the encoder is hardware")
-  void shouldPassNoPresetWhenEncoderIsHardware(String hardwareEncoder) {
+  @DisplayName("Should pass no preset when the hardware encoder has no column in the preset scale")
+  void shouldPassNoPresetWhenTheHardwareEncoderHasNoColumnInThePresetScale(String hardwareEncoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), hardwareEncoder);
 
     assertThat(cmd).contains(hardwareEncoder).doesNotContain("-preset");

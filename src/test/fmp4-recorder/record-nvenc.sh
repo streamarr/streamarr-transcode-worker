@@ -8,7 +8,9 @@
 # worker's own arguments, from the start and as a replacement attempt that seeks, under the floored
 # GOP an encoder that is not keyframe-verified gets and under the extended GOP a keyframe-verified
 # encoder gets, which the worker passes both NVENC encoders. One more recording leaves a forced
-# keyframe time out. nvenc-recordings.mjs then derives, from the recordings alone:
+# keyframe time out. Every recording takes p4, the NVENC preset of Automatic's `faster`; at 1080p the
+# extended-GOP recordings are repeated at every other NVENC preset of the preset scale (ADR 0044).
+# nvenc-recordings.mjs then derives, from the recordings alone:
 #   - whether every forced keyframe is a sync sample
 #   - whether every forced keyframe is an IDR picture with no leading pictures (a closed GOP)
 #   - whether the GOP count restarts at a forced keyframe
@@ -54,6 +56,11 @@ MEDIA_SEGMENT_COUNT=${#SEGMENT_START_SLOTS[@]}
 REPLACEMENT_START=3
 # The forced keyframe time that the missed-keyframe recording leaves out.
 SKIPPED_FORCED_TIME=18
+# The NVENC presets of ADR 0044's preset scale. Automatic's `faster` is p4, which every recording
+# takes; the other presets are recorded with the extended GOP at PRESET_RUNG.
+AUTOMATIC_PRESET=p4
+OTHER_PRESETS="p2 p3 p5 p6 p7"
+PRESET_RUNG=1080p
 # floor(P x fps), the GOP the worker passes an encoder that is not keyframe-verified, and
 # ceil(P x fps) + 1, the GOP a keyframe-verified encoder gets (ADR 0037 as amended).
 GOP_FLOORED=143
@@ -195,15 +202,20 @@ level_name() {
   printf '%s.%s' "$(($1 / 10))" "$(($1 % 10))"
 }
 
-# plan_recording <encoder> <rung> <variant>: sets NAME, META (the job, one key=value per line) and
-# COMMAND (the worker's FFmpeg command for that job, with the quiet, non-interactive logging that
-# only the recording adds). The variants: first and replacement take the floored GOP;
+# plan_recording <encoder> <rung> <variant> [preset]: sets NAME, META (the job, one key=value per
+# line) and COMMAND (the worker's FFmpeg command for that job, with the quiet, non-interactive
+# logging that only the recording adds). The variants: first and replacement take the floored GOP;
 # extended-first, extended-replacement and extended-missed take the extended GOP, as the worker
-# does, and extended-missed also leaves SKIPPED_FORCED_TIME out of the forced keyframe times.
+# does, and extended-missed also leaves SKIPPED_FORCED_TIME out of the forced keyframe times. The
+# preset defaults to AUTOMATIC_PRESET; a recording at another preset names it.
 plan_recording() {
-  local encoder=$1 rung=$2 variant=$3
+  local encoder=$1 rung=$2 variant=$3 preset=${4:-$AUTOMATIC_PRESET}
   local height bitrate level codec_string tag profile tier=() start=0 gop=$GOP_FLOORED recipe=floored
   local skipped="" replaces="" seek=()
+  local NAME_PREFIX="$encoder-$rung-"
+  if [[ $preset != "$AUTOMATIC_PRESET" ]]; then
+    NAME_PREFIX="$encoder-$rung-$preset-"
+  fi
   height=$(rung_field "$rung" 2)
   bitrate=$(rung_field "$rung" 3)
   case "$encoder" in
@@ -214,7 +226,7 @@ plan_recording() {
     extended-*) gop=$GOP_EXTENDED; recipe=extended ;;
   esac
   case "$variant" in
-    *replacement) start=$REPLACEMENT_START; replaces="$encoder-$rung-${variant%replacement}first" ;;
+    *replacement) start=$REPLACEMENT_START; replaces="$NAME_PREFIX${variant%replacement}first" ;;
     extended-missed) skipped=$SKIPPED_FORCED_TIME ;;
   esac
   local video_filter="scale=-2:$height:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=$FRAME_RATE:eof_action=pass"
@@ -226,9 +238,10 @@ plan_recording() {
   fi
   local times
   times=$(forced_times "$start" "$skipped")
-  NAME="$encoder-$rung-$variant"
+  NAME="$NAME_PREFIX$variant"
   META="encoder=$encoder
 rung=$rung
+preset=$preset
 recipe=$recipe
 height=$height
 bitrate=$bitrate
@@ -245,7 +258,7 @@ replaces=$replaces"
   COMMAND=(ffmpeg -hide_banner -nostdin -loglevel error -y ${seek[@]+"${seek[@]}"} -i /work/source.mp4
     -map 0:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled
     -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000
-    -c:v "$encoder" -tag:v "$tag" -profile:v "$profile" -level:v "$(level_name "$level")" ${tier[@]+"${tier[@]}"}
+    -c:v "$encoder" -preset "$preset" -tag:v "$tag" -profile:v "$profile" -level:v "$(level_name "$level")" ${tier[@]+"${tier[@]}"}
     -vf "$video_filter"
     -b:v "$bitrate" -maxrate "$bitrate" -bufsize "$((bitrate * 2))"
     -r:v:0 "$FRAME_RATE" -forced-idr 1 -force_key_frames:0 "$times" -g:v:0 "$gop" -keyint_min:v:0 "$gop"
@@ -256,15 +269,23 @@ replaces=$replaces"
 }
 
 VARIANTS="first replacement extended-first extended-replacement extended-missed"
+EXTENDED_VARIANTS="extended-first extended-replacement extended-missed"
 
 # for_each_recording <function>: calls the function after plan_recording for every recording.
 for_each_recording() {
-  local encoder rung variant
+  local encoder rung variant preset
   for encoder in $ENCODERS; do
     for rung in $RUNGS; do
       for variant in $VARIANTS; do
         plan_recording "$encoder" "$rung" "$variant"
         "$1"
+      done
+      [[ $rung == "$PRESET_RUNG" ]] || continue
+      for preset in $OTHER_PRESETS; do
+        for variant in $EXTENDED_VARIANTS; do
+          plan_recording "$encoder" "$rung" "$variant" "$preset"
+          "$1"
+        done
       done
     done
   done

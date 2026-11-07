@@ -27,6 +27,7 @@ public class FfmpegCommandBuilder {
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final String PROFILE_OPTION = "-profile:v";
   private static final String LEVEL_OPTION = "-level:v";
+  private static final String PRESET_OPTION = "-preset";
   // The planar 10-bit 4:2:0 format that the software encoders and the Dolby Vision reshape take.
   private static final String PLANAR_TEN_BIT_PIXEL_FORMAT = "yuv420p10le";
   // The filter that converts each frame into the pixel format named after it.
@@ -54,6 +55,7 @@ public class FfmpegCommandBuilder {
   private static final EncoderTraits NVENC =
       traits()
           .keyframeVerified(true)
+          .takesNvencPreset(true)
           .fixedGop(true)
           .tenBitPixelFormat(P010)
           .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
@@ -760,16 +762,22 @@ public class FfmpegCommandBuilder {
     return List.of("-tag:v", entry.tag());
   }
 
-  // Hardware encoders take no preset until the preset scale has rows for them (ADR 0044).
+  // A hardware encoder takes a preset only once it has a column in the preset scale (ADR 0044).
   private static void addPresetArgs(List<String> cmd, TranscodeJob job) {
     var traits = traitsOf(job);
     if (traits.takesPresetName()) {
-      cmd.addAll(List.of("-preset", job.request().encoderPreset().scaleName()));
+      cmd.addAll(List.of(PRESET_OPTION, job.request().encoderPreset().scaleName()));
+      return;
+    }
+
+    if (traits.takesNvencPreset()) {
+      cmd.addAll(List.of(PRESET_OPTION, job.request().encoderPreset().nvencPreset()));
       return;
     }
 
     if (traits.takesSvtAv1PresetNumber()) {
-      cmd.addAll(List.of("-preset", String.valueOf(job.request().encoderPreset().svtAv1Preset())));
+      cmd.addAll(
+          List.of(PRESET_OPTION, String.valueOf(job.request().encoderPreset().svtAv1Preset())));
     }
   }
 
@@ -1486,6 +1494,7 @@ public class FfmpegCommandBuilder {
       boolean keyframeVerified,
       boolean takesPresetName,
       boolean takesSvtAv1PresetNumber,
+      boolean takesNvencPreset,
       boolean fixedGop,
       boolean disablesSceneCutsByThreshold,
       boolean closesGopsByX265Parameters,

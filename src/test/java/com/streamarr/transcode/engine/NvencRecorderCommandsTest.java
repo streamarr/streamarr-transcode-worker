@@ -90,16 +90,48 @@ class NvencRecorderCommandsTest {
     var variants =
         List.of(
             "first", "replacement", "extended-first", "extended-replacement", "extended-missed");
-    var expected =
-        Stream.of("h264_nvenc", "hevc_nvenc")
-            .flatMap(
-                encoder ->
-                    Stream.of("1080p", "720p", "480p", "360p")
-                        .flatMap(
-                            rung -> variants.stream().map(v -> encoder + "-" + rung + "-" + v)))
-            .toList();
 
-    assertThat(plannedRecordings()).extracting(PlannedRecording::name).isEqualTo(expected);
+    assertThat(plannedRecordings())
+        .filteredOn(recording -> recording.job().get("preset").equals("p4"))
+        .extracting(PlannedRecording::name)
+        .isEqualTo(
+            Stream.of("h264_nvenc", "hevc_nvenc")
+                .flatMap(
+                    encoder ->
+                        Stream.of("1080p", "720p", "480p", "360p")
+                            .flatMap(
+                                rung -> variants.stream().map(v -> encoder + "-" + rung + "-" + v)))
+                .toList());
+  }
+
+  @Test
+  @DisplayName(
+      "Should plan every other NVENC preset on the preset scale at 1080p with the extended GOP when"
+          + " the recorder runs with its defaults")
+  void
+      shouldPlanEveryOtherNvencPresetOnThePresetScaleAt1080pWithTheExtendedGopWhenTheRecorderRunsWithItsDefaults() {
+    var otherPresets =
+        Arrays.stream(EncoderPreset.values())
+            .map(EncoderPreset::nvencPreset)
+            .filter(preset -> !preset.equals(EncoderPreset.FASTER.nvencPreset()))
+            .distinct()
+            .sorted()
+            .toList();
+    var variants = List.of("extended-first", "extended-replacement", "extended-missed");
+
+    assertThat(plannedRecordings())
+        .filteredOn(recording -> !recording.job().get("preset").equals("p4"))
+        .extracting(PlannedRecording::name)
+        .isEqualTo(
+            Stream.of("h264_nvenc", "hevc_nvenc")
+                .flatMap(
+                    encoder ->
+                        otherPresets.stream()
+                            .flatMap(
+                                preset ->
+                                    variants.stream()
+                                        .map(v -> encoder + "-1080p-" + preset + "-" + v)))
+                .toList());
   }
 
   @Test
@@ -182,11 +214,19 @@ class NvencRecorderCommandsTest {
             .targetSegmentDuration(6)
             .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
             .transcodeDecision(decision)
-            .encoderPreset(EncoderPreset.FASTER)
+            .encoderPreset(scalePresetOf(job.get("preset")))
             .height(Integer.parseInt(job.get("height")))
             .bitrate(Long.parseLong(job.get("bitrate")))
             .build();
     return TranscodeJob.builder().request(request).videoEncoder(encoder).build();
+  }
+
+  // The first scale name whose NVENC preset the recording takes.
+  private static EncoderPreset scalePresetOf(String nvencPreset) {
+    return Arrays.stream(EncoderPreset.values())
+        .filter(preset -> preset.nvencPreset().equals(nvencPreset))
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("The scale has no NVENC preset " + nvencPreset));
   }
 
   private static List<Long> segmentStartSlotsOf(PlannedRecording recording) {
