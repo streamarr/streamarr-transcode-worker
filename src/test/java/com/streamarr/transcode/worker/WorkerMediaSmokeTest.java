@@ -124,6 +124,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -273,6 +274,7 @@ class WorkerMediaSmokeTest {
   private static final Duration ONE_FRAME_AT_24_FPS = Duration.ofNanos(1_000_000_000L / 24 + 1);
   // 1,764 s of audio in 6 s segments after the same 64 s of video.
   private static final int LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT = 294;
+  private static final Duration HALF_OF_THE_LONG_AUDIO = Duration.ofSeconds(882);
   // The seekable sources' 6 s period at their 24 fps.
   private static final int FRAMES_IN_A_PERIOD = 144;
   // The longest frame among the audio codecs these tests encode: AC-3 and E-AC-3 code 1,536
@@ -6212,6 +6214,201 @@ class WorkerMediaSmokeTest {
                 .build());
   }
 
+  // A held encode reads its audio from a second input, whose copy of the video to FFmpeg's null
+  // muxer is one more output whose metadata FFmpeg would write among the framecrc.
+  @Test
+  @DisplayName(
+      "Should report each stream's end and no early end when an encode holds the last frame and"
+          + " the source's metadata carries text shaped like the framecrc of its streams")
+  void shouldReportEachStreamsEndWhenAHeldEncodesSourceMetadataCarriesFramecrcShapedText()
+      throws Exception {
+    var source = videoEndsBeforeAudioSourceWithFramecrcShapedMetadata();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getExecutionBuilder().setStartSequenceNumber(11);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().hasSourceEndedEarly()).isFalse();
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+  }
+
+  // Segment 12, from 72 s, lies wholly after the source's audio turns from mono to stereo at 70 s,
+  // where its left channel plays 440 Hz and its right 880 Hz.
+  @Test
+  @DisplayName(
+      "Should keep the stereo channels apart after the source's audio turns from mono to stereo"
+          + " when an encode from the start holds the last frame of video that ends before the"
+          + " audio")
+  void shouldKeepTheStereoChannelsApartAfterTheSourcesAudioTurnsFromMonoToStereoWhenAnEncodeHolds()
+      throws Exception {
+    var source = videoEndsBeforeAudioThatTurnsFromMonoToStereoSource();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds(VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT * 6L);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var samples =
+        ByteBuffer.wrap(decodedAudio(uploads.contentOf(List.of("init.mp4", segmentName(12)))))
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .asShortBuffer();
+    assertThat(
+            IntStream.range(0, samples.limit() / 2)
+                .map(frame -> Math.abs(samples.get(2 * frame) - samples.get(2 * frame + 1)))
+                .max()
+                .orElseThrow())
+        .as("the widest difference between segment 12's left and right samples")
+        .isGreaterThan(1_000);
+  }
+
+  // An encode that holds the last frame reads its audio from a second input and filters it in a
+  // graph of its own; its audio must not change for that. The encoder's input must reach that
+  // graph: FFmpeg downmixes integer samples with a gain that keeps them from clipping, rounds a
+  // resampler's output to integers, and gives a source whose layout changes the layout it started
+  // with.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("heldAudioCases")
+  @DisplayName(
+      "Should encode the same audio as an encode that holds no frame when an encode holds the last"
+          + " frame")
+  void shouldEncodeTheSameAudioAsAnEncodeThatHoldsNoFrameWhenAnEncodeHoldsTheLastFrame(
+      HeldAudioCase heldAudio) throws Throwable {
+    var source = heldAudio.source().get();
+    var held = heldAudio.job(source);
+    held.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+
+    var heldUploads = execute(engine(softwareCapabilities()), source.getParent(), held.build());
+    var uploads =
+        execute(engine(softwareCapabilities()), source.getParent(), heldAudio.job(source).build());
+
+    assertThat(decodedAudio(heldUploads.contentOf(heldUploads.names())))
+        .as("the held encode's decoded audio")
+        .isNotEmpty()
+        .isEqualTo(decodedAudio(uploads.contentOf(uploads.names())));
+  }
+
+  static Stream<HeldAudioCase> heldAudioCases() {
+    return Stream.of(
+        HeldAudioCase.builder()
+            .name("16-bit 5.1 FLAC at 96 kHz downmixed to stereo AC-3")
+            .source(WorkerMediaSmokeTest::integerSurroundFlacSource)
+            .segmentCount(2)
+            .codec("ac3")
+            .channels(2)
+            .build(),
+        HeldAudioCase.builder()
+            .name("16-bit stereo FLAC at 96 kHz near full scale, in named stereo AC-3")
+            .source(WorkerMediaSmokeTest::loudIntegerStereoFlacSource)
+            .segmentCount(2)
+            .codec("ac3")
+            .channels(2)
+            .layout(Optional.of(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO))
+            .build(),
+        HeldAudioCase.builder()
+            .name("AC-3 that turns from mono to stereo, as stereo ALAC")
+            .source(WorkerMediaSmokeTest::monoThenStereoSource)
+            .segmentCount(2)
+            .codec("alac")
+            .channels(2)
+            .build(),
+        HeldAudioCase.builder()
+            .name("AC-3 that turns from mono to stereo, as four channels of AC-3")
+            .source(WorkerMediaSmokeTest::monoThenStereoSource)
+            .segmentCount(2)
+            .codec("ac3")
+            .channels(4)
+            .build(),
+        HeldAudioCase.builder()
+            .name("loud 5.1 AC-3 downmixed to stereo ALAC")
+            .source(WorkerMediaSmokeTest::loudSurroundAc3Source)
+            .segmentCount(2)
+            .codec("alac")
+            .channels(2)
+            .build(),
+        HeldAudioCase.builder()
+            .name("16-bit 7.1(wide) FLAC as eight channels of ALAC")
+            .source(WorkerMediaSmokeTest::wideSevenPointOneFlacSource)
+            .segmentCount(2)
+            .codec("alac")
+            .channels(8)
+            .build());
+  }
+
+  // A source, and the audio that a job encodes from it over this many 6 s segments.
+  @Builder
+  private record HeldAudioCase(
+      String name,
+      ThrowingSupplier<Path> source,
+      int segmentCount,
+      String codec,
+      int channels,
+      Optional<AudioChannelLayout> layout) {
+
+    HeldAudioCase {
+      layout = layout == null ? Optional.empty() : layout;
+    }
+
+    VariantJob.Builder job(Path source) {
+      var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+      job.getExecutionBuilder().setMediaSegmentCount(segmentCount);
+      job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(segmentCount * 6L);
+      var audio =
+          job.getDecisionBuilder()
+              .getAudioBuilder()
+              .setCodec(codec)
+              .setChannels(channels)
+              .setBitrateBitsPerSecond(192_000);
+      layout.ifPresent(audio::setChannelLayout);
+      return job;
+    }
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  // FFmpeg encodes -ac 4 in AC-3 as quad(side), the first four-channel layout its encoder lists,
+  // where the source's side channels play 700 Hz on the left and 900 Hz on the right.
+  @Test
+  @DisplayName(
+      "Should keep the side channels apart when an encode holds the last frame and encodes four"
+          + " channels of quad(side) audio in AC-3")
+  void shouldKeepTheSideChannelsApartWhenAnEncodeHoldsAndEncodesFourChannelsOfQuadSideInAc3()
+      throws Exception {
+    var source = videoEndsBeforeQuadSideAudioSource();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds(VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT * 6L);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("ac3")
+        .setChannels(4)
+        .setBitrateBitsPerSecond(384_000);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var samples =
+        ByteBuffer.wrap(decodedAudio(uploads.contentOf(List.of("init.mp4", segmentName(12)))))
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .asShortBuffer();
+    assertThat(
+            IntStream.range(0, samples.limit() / 4)
+                .map(frame -> Math.abs(samples.get(4 * frame + 2) - samples.get(4 * frame + 3)))
+                .max()
+                .orElseThrow())
+        .as("the widest difference between segment 12's side left and side right samples")
+        .isGreaterThan(1_000);
+  }
+
   // The source's last frame starts at 5.983 s, inside segment 0, but FFmpeg's conversion to 24 fps
   // can place the output's last frame at 6 s, inside segment 1.
   @Test
@@ -6434,6 +6631,11 @@ class WorkerMediaSmokeTest {
                 VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT),
             Arguments.of(
                 Named.<ThrowingSupplier<Path>>of(
+                    "84 s of AC-3 that turns from stereo to 5.1 after the video's end",
+                    WorkerMediaSmokeTest::videoEndsBeforeAudioThatChangesLayoutSource),
+                VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT),
+            Arguments.of(
+                Named.<ThrowingSupplier<Path>>of(
                     "1,764 s of 5.1 AC-3", WorkerMediaSmokeTest::longAudioAfterVideoEndSource),
                 LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT))
         .flatMap(
@@ -6443,6 +6645,70 @@ class WorkerMediaSmokeTest {
                         VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT,
                         VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1)
                     .map(start -> Arguments.of(source.get()[0], source.get()[1], start)));
+  }
+
+  // The first segment after the video's end needs one period of held pictures and of audio, so it
+  // must not wait for the downmix of the 1,700 s of audio after it. What FFmpeg had written when
+  // that segment's upload started shows how far past it FFmpeg had encoded the audio.
+  @Test
+  @DisplayName(
+      "Should upload the first segment after the video's end before encoding the audio after it"
+          + " when an encode holds the last frame and downmixes half an hour of 5.1 audio")
+  void shouldUploadTheFirstSegmentAfterTheVideosEndBeforeEncodingTheAudioAfterItWhenAHoldRuns()
+      throws Exception {
+    var source = longAudioAfterVideoEndSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    var firstSegmentAfterTheVideo = VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1;
+    job.getExecutionBuilder().setStartSequenceNumber(firstSegmentAfterTheVideo);
+    var segment = segmentName(firstSegmentAfterTheVideo);
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var attempt = fromProto(job.getJobAttemptId());
+    var writtenWhenTheUploadStarted = new AtomicReference<byte[]>();
+
+    var completion =
+        executeToCompletion(
+            engine(softwareCapabilities(), launcher),
+            source.getParent(),
+            job.build(),
+            name -> {
+              if (name.equals(segment)) {
+                writtenWhenTheUploadStarted.compareAndSet(null, launcher.outputOf(attempt));
+              }
+            });
+
+    assertThat(completion.uploads().names()).contains(segment);
+    var written = Mp4Samples.read(wholeFragmentsOf(writtenWhenTheUploadStarted.get()));
+    assertThat(written.samplesOf(written.audioTrack()))
+        .as("the audio FFmpeg had written when %s's upload started", segment)
+        .isNotEmpty();
+    assertThat(written.latestSampleEnd())
+        .as(
+            "how far FFmpeg had written when %s's upload started; the audio ends at 1,764 s",
+            segment)
+        .isGreaterThan(Duration.ofSeconds(6L * firstSegmentAfterTheVideo))
+        .isLessThan(HALF_OF_THE_LONG_AUDIO);
+  }
+
+  // The output's boxes up to the end of its last whole mdat, so that a snapshot taken while FFmpeg
+  // writes reads as whole fragments.
+  private static byte[] wholeFragmentsOf(byte[] output) {
+    var buffer = ByteBuffer.wrap(output);
+    var end = 0;
+    var start = 0;
+    while (start + 8 <= output.length && start + buffer.getInt(start) <= output.length) {
+      if (new String(output, start + 4, 4, StandardCharsets.US_ASCII).equals("mdat")) {
+        end = start + buffer.getInt(start);
+      }
+
+      start += buffer.getInt(start);
+    }
+
+    return Arrays.copyOf(output, end);
   }
 
   @Test
@@ -8100,6 +8366,323 @@ class WorkerMediaSmokeTest {
               "48",
               "-c:a",
               "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source whose video ends before its audio, with AC-3 audio that turns from stereo to 5.1 at
+  // 70 s, inside segment 11: the audio decoder's frames change layout after the video's end.
+  private static synchronized Path videoEndsBeforeAudioThatChangesLayoutSource() throws Exception {
+    var source = seekableSources.resolve("video-ends-before-audio-that-changes-layout.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var stereo = seekableSources.resolve("stereo-before-the-layout-change.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=70,"
+                  + "pan=stereo|c0=c0|c1=c0",
+              "-c:a",
+              "ac3"),
+          stereo);
+      var surround = seekableSources.resolve("surround-after-the-layout-change.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=14,"
+                  + "pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
+              "-c:a",
+              "ac3"),
+          surround);
+      var audio = seekableSources.resolve("audio-that-changes-layout.ac3");
+      Files.write(audio, Files.readAllBytes(stereo));
+      Files.write(audio, Files.readAllBytes(surround), StandardOpenOption.APPEND);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-i",
+              audio.toString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "copy"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 5.1 AC-3 whose six channels play 300
+  // to 800 Hz at half of full scale, both for 12 s: a downmix that sums them can exceed full scale.
+  private static synchronized Path loudSurroundAc3Source() throws Exception {
+    return toneSource("loud-surround.mp4", "5.1", List.of("-c:a", "ac3", "-b:a", "448k"));
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 16-bit 7.1(wide) FLAC whose eight
+  // channels play 300 to 1,000 Hz at half of full scale, both for 12 s.
+  private static synchronized Path wideSevenPointOneFlacSource() throws Exception {
+    return toneSource(
+        "wide-seven-point-one.mkv", "7.1(wide)", List.of("-c:a", "flac", "-sample_fmt", "s16"));
+  }
+
+  // 12 s of H.264 and of a tone on each channel of the layout, from 300 Hz up in steps of 100 Hz.
+  private static Path toneSource(String name, String layout, List<String> audio) throws Exception {
+    var channels = layout.equals("5.1") ? 6 : 8;
+    var source = seekableSources.resolve(name);
+    if (!generatedSeekableSources.contains(source)) {
+      var tones =
+          IntStream.range(0, channels)
+              .mapToObj(channel -> "0.5*sin(2*PI*" + (300 + 100 * channel) + "*t)")
+              .collect(Collectors.joining("|"));
+      var arguments =
+          new ArrayList<>(
+              List.of(
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "testsrc=size=64x36:rate=24:duration=12",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "aevalsrc=" + tones + ":s=48000:d=12:c=" + layout,
+                  "-c:v",
+                  "libx264",
+                  "-g",
+                  "48",
+                  "-keyint_min",
+                  "48"));
+      arguments.addAll(audio);
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 12 s, and AC-3 that plays 440 Hz in
+  // mono for 6 s and then 440 Hz on the left and 880 Hz on the right for 6 s.
+  private static synchronized Path monoThenStereoSource() throws Exception {
+    var source = seekableSources.resolve("mono-then-stereo.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var mono = seekableSources.resolve("six-seconds-of-mono.ac3");
+      runFfmpeg(List.of("-f", "lavfi", "-i", "sine=f=440:r=48000:d=6", "-c:a", "ac3"), mono);
+      var stereo = seekableSources.resolve("six-seconds-of-stereo.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=440:r=48000:d=6",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=880:r=48000:d=6",
+              "-filter_complex",
+              "[0][1]join=inputs=2:channel_layout=stereo",
+              "-c:a",
+              "ac3"),
+          stereo);
+      var audio = seekableSources.resolve("mono-then-stereo.ac3");
+      Files.write(audio, Files.readAllBytes(mono));
+      Files.write(audio, Files.readAllBytes(stereo), StandardOpenOption.APPEND);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=12",
+              "-i",
+              audio.toString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "copy"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 16-bit stereo FLAC at 96 kHz of a
+  // 1 kHz tone at 99% of full scale, both for 12 s.
+  private static synchronized Path loudIntegerStereoFlacSource() throws Exception {
+    var source = seekableSources.resolve("loud-integer-stereo-flac.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=12",
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc=0.99*sin(2*PI*1000*t)|0.99*sin(2*PI*1000*t):s=96000:d=12:c=stereo",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s16"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 16-bit 5.1 FLAC at 96 kHz whose six
+  // channels play 300 to 800 Hz, both for 12 s.
+  private static synchronized Path integerSurroundFlacSource() throws Exception {
+    var source = seekableSources.resolve("integer-surround-flac.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          new ArrayList<>(List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=12"));
+      for (var frequency = 300; frequency <= 800; frequency += 100) {
+        arguments.addAll(List.of("-f", "lavfi", "-i", "sine=f=" + frequency + ":r=96000:d=12"));
+      }
+
+      arguments.addAll(
+          List.of(
+              "-filter_complex",
+              "[1][2][3][4][5][6]join=inputs=6:channel_layout=5.1[a]",
+              "-map",
+              "0:v",
+              "-map",
+              "[a]",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s16"));
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source whose video ends before its audio, with quad(side) AC-3 audio whose four channels
+  // play 300, 500, 700 and 900 Hz.
+  private static synchronized Path videoEndsBeforeQuadSideAudioSource() throws Exception {
+    var source = seekableSources.resolve("video-ends-before-quad-side-audio.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=300:r=48000:d=84",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=500:r=48000:d=84",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=700:r=48000:d=84",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=900:r=48000:d=84",
+              "-filter_complex",
+              "[1][2][3][4]join=inputs=4:channel_layout=quad(side)[a]",
+              "-map",
+              "0:v",
+              "-map",
+              "[a]",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "ac3",
+              "-b:a",
+              "384k"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source whose video ends before its audio, with AC-3 audio that plays 440 Hz in mono until
+  // 70 s and then 440 Hz on the left and 880 Hz on the right.
+  private static synchronized Path videoEndsBeforeAudioThatTurnsFromMonoToStereoSource()
+      throws Exception {
+    var source = seekableSources.resolve("video-ends-before-audio-that-turns-stereo.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var mono = seekableSources.resolve("mono-before-the-turn.ac3");
+      runFfmpeg(List.of("-f", "lavfi", "-i", "sine=f=440:r=48000:d=70", "-c:a", "ac3"), mono);
+      var stereo = seekableSources.resolve("stereo-after-the-turn.ac3");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=440:r=48000:d=14",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=f=880:r=48000:d=14",
+              "-filter_complex",
+              "[0][1]join=inputs=2:channel_layout=stereo",
+              "-c:a",
+              "ac3"),
+          stereo);
+      var audio = seekableSources.resolve("audio-that-turns-stereo.ac3");
+      Files.write(audio, Files.readAllBytes(mono));
+      Files.write(audio, Files.readAllBytes(stereo), StandardOpenOption.APPEND);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-i",
+              audio.toString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "copy"),
           source);
       generatedSeekableSources.add(source);
     }

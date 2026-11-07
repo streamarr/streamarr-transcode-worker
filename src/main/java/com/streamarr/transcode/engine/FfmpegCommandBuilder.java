@@ -23,6 +23,11 @@ public class FfmpegCommandBuilder {
   // packets until every stream has one or the held span exceeds this, which bounds how far the
   // output's audio trails its video when the input's does not.
   private static final String MAX_INTERLEAVE_DELTA_MICROSECONDS = "10000000";
+  // The second input of a held encode that encodes its audio, and its filter graph's outputs.
+  private static final int HELD_AUDIO_INPUT = 1;
+  private static final String HELD_VIDEO_LABEL = "[held_video]";
+  private static final String HELD_AUDIO_LABEL = "[held_audio]";
+  private static final String FILTERED_HELD_AUDIO_LABEL = "[filtered_held_audio]";
   // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final String PROFILE_OPTION = "-profile:v";
@@ -173,7 +178,7 @@ public class FfmpegCommandBuilder {
   private static final String LIBOPUS = "libopus";
 
   private static final Map<Integer, String> AC3_CHANNEL_LAYOUTS =
-      Map.of(1, "mono", 2, STEREO, 6, "5.1(side)");
+      Map.of(1, "mono", 2, STEREO, 3, "3.0(back)", 4, "quad(side)", 5, "5.0(side)", 6, "5.1(side)");
 
   private static final Map<String, AudioEncoderInput> AUDIO_ENCODER_INPUTS =
       Map.of(
@@ -191,7 +196,28 @@ public class FfmpegCommandBuilder {
           LIBOPUS,
           AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
           "flac",
-          new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS));
+          new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS),
+          "alac",
+          new AudioEncoderInput(
+              "s32p|s16p",
+              Optional.empty(),
+              Map.of(
+                  1,
+                  "mono",
+                  2,
+                  STEREO,
+                  3,
+                  "3.0",
+                  4,
+                  "4.0",
+                  5,
+                  "5.0",
+                  6,
+                  "5.1",
+                  7,
+                  "6.1(back)",
+                  8,
+                  "7.1(wide)")));
 
   // Each encoder's frame and the lead of its first input sample over its first frame without
   // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them: FFmpeg's AAC
@@ -307,6 +333,10 @@ public class FfmpegCommandBuilder {
 
     addFragmentedMp4Output(cmd);
     addSourceStreamsOutput(cmd, decision, input);
+    if (readsAudioFromItsOwnInput(job.request(), input)) {
+      addAudioInputsVideoInUse(cmd, decision);
+    }
+
     return List.copyOf(cmd);
   }
 
@@ -420,8 +450,7 @@ public class FfmpegCommandBuilder {
     var decision = request.transcodeDecision();
     cmd.addAll(List.of(ffmpegPath, "-y"));
     if (input == EncoderInput.SOURCE) {
-      addSourceInput(cmd, request);
-      addStreamSelection(cmd, decision);
+      addSourceInputsAndStreamSelection(cmd, request);
       return;
     }
 
@@ -468,6 +497,125 @@ public class FfmpegCommandBuilder {
     encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
         .ifPresent(options -> cmd.addAll(options.inputOptions()));
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
+  }
+
+  // tpad repeats the last picture once its input ends, and a demuxer ends every stream of its input
+  // only at the end of the whole file. Read from the input that also feeds the audio's decoder,
+  // filters and encoder, the video ended only once all of the audio after it had gone through them,
+  // so the first segment after the video's end waited for the whole audio after it. The held
+  // encode reads the encoded audio from a second input of the source instead, seeked as the first
+  // and placed on its timeline by -isync: the first input reaches the file's end at the demuxer's
+  // pace. The video's filters and the filtered audio meet in one filter graph, which filters each
+  // output in turn from the one with the earliest time, so the held pictures do not run ahead of
+  // the audio. That graph maps the encode's outputs (addOneFilterGraphOfBothInputs), and the
+  // audio's input keeps its video in use (addAudioInputsVideoInUse).
+  private void addSourceInputsAndStreamSelection(List<String> cmd, TranscodeRequest request) {
+    addSourceInput(cmd, request);
+    if (readsAudioFromItsOwnInput(request, EncoderInput.SOURCE)) {
+      cmd.addAll(List.of("-isync", String.valueOf(EncoderInput.SOURCE.sourceInputIndex())));
+      addSourceInput(cmd, request);
+      return;
+    }
+
+    addStreamSelection(cmd, request.transcodeDecision());
+  }
+
+  // A named stream that the worker did not read as audio stays with the one input's optional
+  // map, so that the producer refuses the output without a sound track as the job's error.
+  private static boolean readsAudioFromItsOwnInput(TranscodeRequest request, EncoderInput input) {
+    var audio = request.transcodeDecision().audioDecision();
+    return input == EncoderInput.SOURCE
+        && holdsLastFrame(request)
+        && audio.mode() == AudioMode.TRANSCODE
+        && (!namesAudioStream(audio) || request.sourceAudio().isPresent());
+  }
+
+  // The encode's video filters and filtered audio, as one filter graph of the two inputs, and the
+  // maps of its two outputs. The video's filters and the audio's, which may be a graph of their own
+  // whose one unlabelled input and output these labels name, leave the output's options for the
+  // graphs. FFmpeg rebuilds a whole filter graph when the frames of one of its inputs change
+  // format, and a rebuilt tpad has no picture left to hold once the video has ended. The audio's
+  // filters therefore run in a graph of their own, whose output keeps its first format through a
+  // rebuild, so the graph that holds the picture is never rebuilt for the audio. That output takes
+  // the encoder's input, which the encoder could no longer negotiate across the graphs: the format
+  // of the first frames would decide the channels, and an integer downmix would lower the level.
+  private static void addOneFilterGraphOfBothInputs(List<String> cmd, TranscodeDecision decision) {
+    var video = takeOptionValue(cmd, "-vf").orElseThrow();
+    var audio =
+        takeOptionValue(cmd, "-af").orElse("anull")
+            + encoderInputOfTheAudio(cmd, decision.audioDecision());
+    cmd.addAll(
+        List.of(
+            "-filter_complex",
+            "["
+                + HELD_AUDIO_INPUT
+                + ":"
+                + decision.audioDecision().sourceStreamSpecifier()
+                + "]"
+                + audio
+                + FILTERED_HELD_AUDIO_LABEL,
+            "-filter_complex",
+            "[0:"
+                + decision.videoDecision().streamIndex()
+                + "]"
+                + video
+                + HELD_VIDEO_LABEL
+                + ";"
+                + FILTERED_HELD_AUDIO_LABEL
+                + "anull"
+                + HELD_AUDIO_LABEL,
+            "-map",
+            HELD_VIDEO_LABEL,
+            "-map",
+            HELD_AUDIO_LABEL));
+  }
+
+  // The encoder's input as FFmpeg negotiates it: the sample formats and rates that the encoder
+  // lists, and a named layout's -ch_layout or the layout FFmpeg gives -ac's count, which is the
+  // count's default layout for an encoder that lists none.
+  private static String encoderInputOfTheAudio(List<String> cmd, AudioDecision audio) {
+    var input =
+        Optional.ofNullable(AUDIO_ENCODER_INPUTS.get(optionValue(cmd, "-c:a").orElseThrow()));
+    var layout =
+        optionValue(cmd, "-ch_layout")
+            .or(() -> input.flatMap(encoder -> encoder.layoutOf(audio.channels())))
+            .orElse(audio.channels() + "c");
+    return ",aformat="
+        + input.map(encoder -> encoder.formatsAndRates() + ":").orElse("")
+        + "channel_layouts="
+        + layout;
+  }
+
+  private static Optional<String> optionValue(List<String> cmd, String option) {
+    var index = cmd.indexOf(option);
+    if (index < 0) {
+      return Optional.empty();
+    }
+
+    return Optional.of(cmd.get(index + 1));
+  }
+
+  // A Matroska demuxer that discards the video after a seek drops every audio block until one
+  // passes the seek's cue, laced frames that reach past the first segment's start among them. The
+  // held encode's audio input keeps its video in use, as the one input did, through a copy to
+  // FFmpeg's null muxer, which writes nothing and, like every output, no metadata of the source.
+  private static void addAudioInputsVideoInUse(List<String> cmd, TranscodeDecision decision) {
+    cmd.addAll(
+        List.of(
+            "-map", HELD_AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(), "-c", "copy"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(List.of("-f", "null", "-"));
+  }
+
+  private static Optional<String> takeOptionValue(List<String> cmd, String option) {
+    var index = cmd.indexOf(option);
+    if (index < 0) {
+      return Optional.empty();
+    }
+
+    var value = cmd.remove(index + 1);
+    cmd.remove(index);
+    return Optional.of(value);
   }
 
   private static void addSeekArgs(List<String> cmd, TranscodeRequest request) {
@@ -699,6 +847,9 @@ public class FfmpegCommandBuilder {
     cmd.addAll(hdrColourArgs(job));
     addScaleAndBitrateArgs(cmd, job, input);
     addAudioArgs(cmd, encodedAudio(decision.audioDecision(), input), job.request());
+    if (readsAudioFromItsOwnInput(job.request(), input)) {
+      addOneFilterGraphOfBothInputs(cmd, decision);
+    }
   }
 
   // FFmpeg's opus encoder is experimental, so the encode of the copy names libopus.
@@ -1010,12 +1161,19 @@ public class FfmpegCommandBuilder {
     }
 
     String conversionFor(int channels) {
-      return "aformat=sample_fmts="
+      return "aformat="
+          + formatsAndRates()
+          + layoutOf(channels).map(layout -> ":channel_layouts=" + layout).orElse("");
+    }
+
+    String formatsAndRates() {
+      return "sample_fmts="
           + sampleFormats
-          + sampleRates.map(rates -> ":sample_rates=" + rates).orElse("")
-          + Optional.ofNullable(channelLayouts.get(channels))
-              .map(layout -> ":channel_layouts=" + layout)
-              .orElse("");
+          + sampleRates.map(rates -> ":sample_rates=" + rates).orElse("");
+    }
+
+    Optional<String> layoutOf(int channels) {
+      return Optional.ofNullable(channelLayouts.get(channels));
     }
   }
 

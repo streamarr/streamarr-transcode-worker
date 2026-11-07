@@ -14,6 +14,8 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -734,6 +736,54 @@ class FfmpegCommandBuilderTest {
   private static String videoFilter(List<String> cmd) {
     assertThat(cmd).as("the command's -vf options").containsOnlyOnce("-vf");
     return cmd.get(cmd.indexOf("-vf") + 1);
+  }
+
+  // A held encode that encodes its audio filters the source's video from its first input, and the
+  // audio from its second in a filter graph of its own whose output the video's graph takes in.
+  private static final Pattern HELD_AUDIO_CHANNELS =
+      Pattern.compile(",aformat=[^,\\[]+\\[filtered_held_audio]$");
+  // The sample rates FFmpeg's AAC encoder lists.
+  private static final String AAC_SAMPLE_RATES =
+      "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350";
+  private static final String HELD_VIDEO_GRAPH_OUTPUTS =
+      "[held_video];[filtered_held_audio]anull[held_audio]";
+
+  private static String heldVideoFilter(List<String> cmd) {
+    var video = heldVideoGraph(cmd);
+    assertThat(video)
+        .as("the held video's input and outputs")
+        .startsWith("[0:0]")
+        .endsWith(HELD_VIDEO_GRAPH_OUTPUTS);
+    return video.substring("[0:0]".length(), video.length() - HELD_VIDEO_GRAPH_OUTPUTS.length());
+  }
+
+  // The audio's filters, without the format that keeps the output's channels across the graphs.
+  private static String heldAudioFilter(List<String> cmd) {
+    var audio = heldAudioGraph(cmd);
+    assertThat(audio)
+        .as("the held audio's input, channels and output")
+        .startsWith("[1:a:0]")
+        .containsPattern(HELD_AUDIO_CHANNELS);
+    return audio.substring("[1:a:0]".length()).replaceFirst(HELD_AUDIO_CHANNELS.pattern(), "");
+  }
+
+  private static String heldAudioGraph(List<String> cmd) {
+    return heldFilterGraphs(cmd).getFirst();
+  }
+
+  private static String heldVideoGraph(List<String> cmd) {
+    return heldFilterGraphs(cmd).getLast();
+  }
+
+  private static List<String> heldFilterGraphs(List<String> cmd) {
+    assertThat(cmd).as("the held encode's filter options").doesNotContain("-vf", "-af");
+    var graphs =
+        IntStream.range(0, cmd.size() - 1)
+            .filter(index -> cmd.get(index).equals("-filter_complex"))
+            .mapToObj(index -> cmd.get(index + 1))
+            .toList();
+    assertThat(graphs).as("the held encode's filter graphs").hasSize(2);
+    return graphs;
   }
 
   @Test
@@ -1720,7 +1770,7 @@ class FfmpegCommandBuilderTest {
             .build(),
         AudioEncoderCase.builder()
             .codec("alac")
-            .input("")
+            .input("aformat=sample_fmts=s32p|s16p:channel_layouts=stereo,")
             .samplesPerFrame("4096")
             .lead("0")
             .build(),
@@ -1971,7 +2021,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "59"));
+    assertThat(heldAudioFilter(cmd)).isEqualTo(aacStereoFromTheFirstSegment("60", "59"));
   }
 
   // The encode of a profile 5 copy reads the source's audio from its second input, seeked to the
@@ -3396,7 +3446,7 @@ class FfmpegCommandBuilderTest {
     var cmd = command(heldAndPadded(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd).doesNotContain("-ss", "-noaccurate_seek");
-    assertThat(videoFilter(cmd))
+    assertThat(heldVideoFilter(cmd))
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
@@ -3413,7 +3463,7 @@ class FfmpegCommandBuilderTest {
             heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
 
     assertThat(cmd).containsSequence("-ss", "54", "-noaccurate_seek", "-i");
-    assertThat(videoFilter(cmd))
+    assertThat(heldVideoFilter(cmd))
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
@@ -3440,7 +3490,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(videoFilter(cmd))
+    assertThat(heldVideoFilter(cmd))
         .startsWith(
             new Deinterlace(Deinterlace.FirstField.TOP, Deinterlace.Output.ONE_FRAME_PER_FIELD)
                     .filter()
@@ -3456,13 +3506,11 @@ class FfmpegCommandBuilderTest {
   void shouldAppendSilenceFromTheAttemptsStartPastTheAdvertisedEndWhenAnEncodePadsItsAudio() {
     var cmd = command(heldAndPadded(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
-    assertThat(cmd)
-        .containsSequence(
-            "-af",
+    assertThat(heldAudioFilter(cmd))
+        .isEqualTo(
             AAC_STEREO_INPUT
-                + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
-            "-c:a",
-            "aac");
+                + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67");
+    assertThat(cmd).containsSequence("-c:a", "aac");
   }
 
   @Test
@@ -3474,18 +3522,16 @@ class FfmpegCommandBuilderTest {
         command(
             heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
 
-    assertThat(cmd)
-        .containsSequence(
-            "-af",
+    assertThat(heldAudioFilter(cmd))
+        .isEqualTo(
             AAC_STEREO_INPUT
                 + "asetpts='PTS+"
                 + aacShift("6")
                 + "',apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
                 + ",asetpts='PTS-"
                 + aacShift("6")
-                + "',atrim=end=67",
-            "-c:a",
-            "aac");
+                + "',atrim=end=67");
+    assertThat(cmd).containsSequence("-c:a", "aac");
   }
 
   @ParameterizedTest(name = "{0}/{1} fps, {2} ms")
@@ -3508,7 +3554,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(videoFilter(cmd))
+    assertThat(heldVideoFilter(cmd))
         .endsWith(
             ",fps="
                 + numerator
@@ -3534,7 +3580,9 @@ class FfmpegCommandBuilderTest {
         "opus; 2; fltp; :sample_rates=48000; :channel_layouts=stereo",
         "flac; 2; s16|s32; ''; :channel_layouts=stereo",
         "flac; 6; s16|s32; ''; :channel_layouts=5.1",
-        "flac; 8; s16|s32; ''; :channel_layouts=7.1"
+        "flac; 8; s16|s32; ''; :channel_layouts=7.1",
+        "alac; 2; s32p|s16p; ''; :channel_layouts=stereo",
+        "alac; 8; s32p|s16p; ''; :channel_layouts=7.1(wide)"
       })
   @DisplayName(
       "Should convert to the sample format, rate and channel layout that the encoder takes before"
@@ -3552,7 +3600,7 @@ class FfmpegCommandBuilderTest {
       "Should append the silence to the decoded samples unconverted when an encode pads audio for"
           + " an encoder whose input FFmpeg chooses")
   void shouldAppendTheSilenceToTheDecodedSamplesUnconvertedWhenFfmpegChoosesTheEncodersInput() {
-    var cmd = command(paddedAudio("alac", 2), "copy");
+    var cmd = command(paddedAudio("libmp3lame", 2), "copy");
 
     assertThat(cmd.get(cmd.indexOf("-af") + 1)).startsWith("apad,");
   }
@@ -3599,7 +3647,190 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "6"), "-c:a", "aac");
+    assertThat(heldAudioFilter(cmd)).isEqualTo(aacStereoFromTheFirstSegment("60", "6"));
+    assertThat(cmd).containsSequence("-c:a", "aac");
+  }
+
+  // tpad repeats the last picture once its input ends, and a demuxer ends every stream of its
+  // input at the end of the whole file, so the video reads from an input that no audio encode
+  // holds back.
+  @Test
+  @DisplayName(
+      "Should read the encoded audio from a second input of the source, seeked as the first and"
+          + " placed on its timeline, when an encode holds the last frame")
+  void shouldReadTheEncodedAudioFromASecondInputSeekedAsTheFirstWhenAnEncodeHoldsTheLastFrame() {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(2);
+    assertThat(cmd)
+        .containsSequence(
+            "-ss",
+            "54",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv",
+            "-isync",
+            "0",
+            "-ss",
+            "54",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv");
+  }
+
+  @Test
+  @DisplayName(
+      "Should map the video and the audio from one filter graph of both inputs, which takes the"
+          + " audio from a graph of the audio's filters, and copy the first input's streams to the"
+          + " framecrc when an encode holds the last frame")
+  void
+      shouldMapBothOutputsOfOneFilterGraphFedByAGraphOfTheAudiosFiltersAndCopyTheFirstInputsStreamsWhenAnEncodeHoldsIt() {
+    var cmd = command(heldAndPadded(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
+
+    assertThat(heldAudioGraph(cmd)).startsWith("[1:a:0]").endsWith("[filtered_held_audio]");
+    assertThat(heldVideoGraph(cmd)).startsWith("[0:0]").endsWith(HELD_VIDEO_GRAPH_OUTPUTS);
+    assertThat(cmd)
+        .containsSequence("-map", "[held_video]", "-map", "[held_audio]")
+        .containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "0:a:0", "-c", "copy")
+        .doesNotContain("1:a:0", "-0:s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the named audio stream from the second input when an encode holds the last"
+          + " frame and the worker has read that stream's audio")
+  void shouldReadTheNamedAudioStreamFromTheSecondInputWhenTheWorkerHasReadItsAudio() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .audioDecision(namedPaddedAac())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .sourceAudio(Optional.of(SourceAudio.builder().codec("aac").channels(2).build()))
+                .build(),
+            "libx264");
+
+    assertThat(heldAudioGraph(cmd)).startsWith("[1:2]");
+  }
+
+  // An attempt from the start that neither pads nor names its layout filters no audio; the graphs
+  // still carry it, so that the audio paces the held pictures. The first graph's output keeps the
+  // format of its first frames, so it takes the encoder's input: a source that turns from mono to
+  // stereo must not stay mono.
+  @Test
+  @DisplayName(
+      "Should keep the output's channel count as the audio enters the held video's graph when an"
+          + " encode from the start holds the last frame and neither pads nor names the audio's"
+          + " layout")
+  void shouldKeepTheOutputsChannelCountAsTheAudioEntersTheHeldVideosGraphWhenItFiltersNoAudio() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
+            "libx264");
+
+    assertThat(heldAudioGraph(cmd))
+        .isEqualTo(
+            "[1:a:0]anull,aformat=sample_fmts=fltp:sample_rates="
+                + AAC_SAMPLE_RATES
+                + ":channel_layouts=stereo[filtered_held_audio]");
+  }
+
+  // The audio's graph ends in the encoder's input as FFmpeg negotiates it: the sample formats and
+  // rates the encoder lists, and the layout FFmpeg gives -ac's count, the encoder's first listed
+  // layout of that count: quad(side) for AC-3, 7.1(wide) for ALAC. An encoder outside the table
+  // keeps FFmpeg's choice of its input and takes the count's default layout.
+  @ParameterizedTest(name = "{1} channels of {0}")
+  @CsvSource(
+      delimiter = ';',
+      value = {
+        "aac; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=AAC_RATES:channel_layouts=5.1"
+            + "[filtered_held_audio]",
+        "ac3; 4; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
+            + ":channel_layouts=quad(side)[filtered_held_audio]",
+        "eac3; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
+            + ":channel_layouts=5.1(side)[filtered_held_audio]",
+        "alac; 8; [1:a:0]anull,aformat=sample_fmts=s32p|s16p:channel_layouts=7.1(wide)"
+            + "[filtered_held_audio]",
+        "libmp3lame; 2; [1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]"
+      })
+  @DisplayName(
+      "Should end the audio's graph in the encoder's input when an encode holds the last frame and"
+          + " names no layout")
+  void shouldEndTheAudiosGraphInTheEncodersInputWhenAnEncodeHoldsAndNamesNoLayout(
+      String codec, int channels, String graph) {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .audioDecision(
+                audio(TranscodeMode.FULL_TRANSCODE).codec(codec).channels(channels).build())
+            .build();
+    var cmd =
+        command(
+            request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
+            "libx264");
+
+    assertThat(heldAudioGraph(cmd)).isEqualTo(graph.replace("AAC_RATES", AAC_SAMPLE_RATES));
+  }
+
+  // A Matroska demuxer that discards the video after a seek drops every audio block until one
+  // passes the seek's cue, laced frames that reach past the first segment's start among them, so
+  // the audio's input keeps its video in use, as the one input did.
+  @Test
+  @DisplayName(
+      "Should keep the audio input's video in use through a copy to FFmpeg's null muxer when an"
+          + " encode holds the last frame and encodes its audio")
+  void shouldKeepTheAudioInputsVideoInUseThroughANullCopyWhenAnEncodeHoldsTheLastFrame() {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:2") + 1, cmd.size()))
+        .containsExactly(
+            "-map",
+            "1:0",
+            "-c",
+            "copy",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "null",
+            "-");
+  }
+
+  // The worker reads a named stream's facts only for a job that names its output layout. Without
+  // them, the stream may not be audio, so the optional map lets the producer refuse the output.
+  @Test
+  @DisplayName(
+      "Should keep one input and the optional map of the named audio stream when an encode holds"
+          + " the last frame and the worker has not read that stream")
+  void shouldKeepOneInputAndTheOptionalMapWhenTheWorkerHasNotReadTheNamedStream() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .audioDecision(namedPaddedAac())
+            .build();
+    var cmd =
+        command(
+            request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
+            "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(cmd).containsSequence("-map", "0:2?").doesNotContain("-filter_complex", "-isync");
   }
 
   @Test
@@ -3730,6 +3961,17 @@ class FfmpegCommandBuilderTest {
             .build();
     return request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build())
         .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+        .build();
+  }
+
+  private static AudioDecision namedPaddedAac() {
+    return AudioDecision.builder()
+        .mode(AudioMode.TRANSCODE)
+        .streamIndex(OptionalInt.of(2))
+        .codec("aac")
+        .channels(2)
+        .bitrate(128_000L)
+        .padsWithSilenceToAdvertisedEnd(true)
         .build();
   }
 

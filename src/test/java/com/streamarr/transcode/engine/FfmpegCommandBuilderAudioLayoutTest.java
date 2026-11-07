@@ -21,6 +21,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("FFmpeg Command Builder Audio Layout Tests")
 class FfmpegCommandBuilderAudioLayoutTest {
 
+  private static final Pattern HELD_AUDIO_CHANNELS =
+      Pattern.compile(",aformat=[^,\\[]+\\[filtered_held_audio]$");
+
   private static final String TUNED_RESAMPLER =
       "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14";
 
@@ -754,7 +757,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       }
 
       var shift = "round((" + lead + "+" + wholeFrames + "*(" + samplesPerFrame + "))/SR/TB)";
-      assertThat(audioFilter(cmd))
+      assertThat(heldAudioFilter(cmd))
           .isEqualTo(
               audioFilter(command(audio, source("dts", "5.1(side)")))
                   + ",asetpts='PTS+"
@@ -762,6 +765,32 @@ class FfmpegCommandBuilderAudioLayoutTest {
                   + "',atrim=start=60,asetpts='PTS-"
                   + shift
                   + "'");
+    }
+
+    @ParameterizedTest(name = "{0} in {1}")
+    @CsvSource(
+        delimiter = ';',
+        value = {
+          "aac; stereo; sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000"
+              + "|22050|16000|12000|11025|8000|7350",
+          "eac3; 5.1; sample_fmts=fltp:sample_rates=48000|44100|32000"
+        })
+    @DisplayName(
+        "Should give the audio the encoder's formats and rates in the named layout as it enters the"
+            + " held video's graph when an encode holds the last frame and names its layout")
+    void shouldGiveTheAudioTheEncodersInputInTheNamedLayoutWhenAnEncodeHolds(
+        String codec, String layout, String formatsAndRates) {
+      var held = VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build();
+
+      var cmd = encodeCommand(encode(codec, layout), held);
+
+      assertThat(heldAudioGraph(cmd))
+          .endsWith(
+              ",aformat="
+                  + formatsAndRates
+                  + ":channel_layouts="
+                  + layout
+                  + "[filtered_held_audio]");
     }
 
     private List<String> encodeCommand(AudioDecision audio, VideoDecision video) {
@@ -914,5 +943,18 @@ class FfmpegCommandBuilderAudioLayoutTest {
   private static String audioFilter(List<String> cmd) {
     assertThat(cmd).containsOnlyOnce("-af");
     return cmd.get(cmd.indexOf("-af") + 1);
+  }
+
+  // A held encode filters its audio from its second input, in a filter graph of its own that comes
+  // before its video's and ends in the format that keeps the output's channels.
+  private static String heldAudioFilter(List<String> cmd) {
+    var graph = heldAudioGraph(cmd);
+    assertThat(graph).startsWith("[1:a:0]").containsPattern(HELD_AUDIO_CHANNELS);
+    return graph.substring("[1:a:0]".length()).replaceFirst(HELD_AUDIO_CHANNELS.pattern(), "");
+  }
+
+  private static String heldAudioGraph(List<String> cmd) {
+    assertThat(cmd).doesNotContain("-af");
+    return cmd.get(cmd.indexOf("-filter_complex") + 1);
   }
 }
