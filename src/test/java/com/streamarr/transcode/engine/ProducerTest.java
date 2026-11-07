@@ -185,6 +185,7 @@ class ProducerTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .pauses(new ProducerPauses())
         .sink(new RecordingSegmentSink());
   }
 
@@ -1134,6 +1135,38 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should count neither a pause nor a stopped producer when the worker pauses FFmpeg again"
+          + " during its rest after a resume")
+  void shouldCountNeitherAPauseNorAStoppedProducerWhenTheWorkerPausesFfmpegAgainDuringItsRest() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var clock = new SteppedClock();
+    var pauses = new ProducerPauses();
+    var producer = producerFor(process, recording).clock(clock).pauses(pauses).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.pauseFfmpeg()).isTrue();
+    clock.advance(Duration.ofSeconds(2));
+    producer.resumeFfmpeg();
+    clock.advance(Duration.ofSeconds(1));
+
+    var pausedDuringTheRest = producer.pauseFfmpeg();
+
+    assertThat(pausedDuringTheRest).isFalse();
+    assertThat(pauses.seekPauses()).isOne();
+    assertThat(pauses.seekResumes()).isOne();
+    assertThat(pauses.stoppedProducers()).isZero();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
       "Should leave FFmpeg running when the worker pauses it again before it delivers another media"
           + " segment, and pause it once it has")
   void shouldLeaveFfmpegRunningWhenTheWorkerPausesItAgainBeforeItDeliversAnotherMediaSegment() {
@@ -1262,6 +1295,34 @@ class ProducerTest {
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
         .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should stop counting a held producer as stopped when its FFmpeg exits while the sink holds a"
+          + " segment")
+  void shouldStopCountingAHeldProducerAsStoppedWhenItsFfmpegExitsWhileTheSinkHoldsASegment() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var pauses = new ProducerPauses();
+    sink.holding(1);
+    var producer = producerFor(process, recording).pauses(pauses).start();
+    awaiting().until(sink::isHolding);
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+    assertThat(pauses.stoppedProducers()).isOne();
+
+    process.exit();
+
+    awaiting().until(() -> pauses.stoppedProducers() == 0);
+    producer.releaseHeldFfmpeg();
+    assertThat(pauses.stoppedProducers()).isZero();
+    sink.release();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
   }
 
   @Test
@@ -4452,6 +4513,7 @@ class ProducerTest {
             VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .paddedAudioEnd(Optional.empty())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .pauses(new ProducerPauses())
         .sink(sink)
         .clock(MonotonicClock.system());
   }

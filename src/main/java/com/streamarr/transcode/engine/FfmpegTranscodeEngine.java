@@ -22,6 +22,7 @@ public class FfmpegTranscodeEngine {
   private final TranscodeCapabilityService capabilityService;
   private final ProcessLauncher launcher;
   private final Duration encoderStallTimeout;
+  private final ProducerPauses producerPauses = new ProducerPauses();
 
   /**
    * @param encoderStallTimeout how long FFmpeg may write nothing to its standard output while its
@@ -37,6 +38,11 @@ public class FfmpegTranscodeEngine {
     this.capabilityService = capabilityService;
     this.launcher = launcher;
     this.encoderStallTimeout = encoderStallTimeout;
+  }
+
+  /** The pauses and holds of every producer that this engine started. */
+  public ProducerPauses producerPauses() {
+    return producerPauses;
   }
 
   /**
@@ -83,6 +89,7 @@ public class FfmpegTranscodeEngine {
             .requiresSoundTrack(namesItsAudioStream(request))
             .paddedAudioEnd(paddedAudioEndOf(request))
             .memoryBudget(memoryBudget)
+            .pauses(producerPauses)
             .sink(sink)
             .clock(MonotonicClock.system())
             .start();
