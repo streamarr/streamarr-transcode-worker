@@ -1739,7 +1739,7 @@ class FfmpegCommandBuilderTest {
             .build(),
         AudioEncoderCase.builder()
             .codec("alac")
-            .input("")
+            .input("aformat=sample_fmts=s32p|s16p:channel_layouts=stereo,")
             .samplesPerFrame("4096")
             .lead("0")
             .build(),
@@ -3549,7 +3549,9 @@ class FfmpegCommandBuilderTest {
         "opus; 2; fltp; :sample_rates=48000; :channel_layouts=stereo",
         "flac; 2; s16|s32; ''; :channel_layouts=stereo",
         "flac; 6; s16|s32; ''; :channel_layouts=5.1",
-        "flac; 8; s16|s32; ''; :channel_layouts=7.1"
+        "flac; 8; s16|s32; ''; :channel_layouts=7.1",
+        "alac; 2; s32p|s16p; ''; :channel_layouts=stereo",
+        "alac; 8; s32p|s16p; ''; :channel_layouts=7.1(wide)"
       })
   @DisplayName(
       "Should convert to the sample format, rate and channel layout that the encoder takes before"
@@ -3567,7 +3569,7 @@ class FfmpegCommandBuilderTest {
       "Should append the silence to the decoded samples unconverted when an encode pads audio for"
           + " an encoder whose input FFmpeg chooses")
   void shouldAppendTheSilenceToTheDecodedSamplesUnconvertedWhenFfmpegChoosesTheEncodersInput() {
-    var cmd = command(paddedAudio("alac", 2), "copy");
+    var cmd = command(paddedAudio("libmp3lame", 2), "copy");
 
     assertThat(cmd.get(cmd.indexOf("-af") + 1)).startsWith("apad,");
   }
@@ -3715,8 +3717,8 @@ class FfmpegCommandBuilderTest {
 
   // The audio's graph ends in the encoder's input as FFmpeg negotiates it: the sample formats and
   // rates the encoder lists, and the layout FFmpeg gives -ac's count, the encoder's first listed
-  // layout of that count: quad(side) for AC-3. An encoder outside the table, as ALAC, keeps
-  // FFmpeg's choice of its input and takes the count's default layout.
+  // layout of that count: quad(side) for AC-3, 7.1(wide) for ALAC. An encoder outside the table
+  // keeps FFmpeg's choice of its input and takes the count's default layout.
   @ParameterizedTest(name = "{1} channels of {0}")
   @CsvSource(
       delimiter = ';',
@@ -3727,7 +3729,9 @@ class FfmpegCommandBuilderTest {
             + ":channel_layouts=quad(side)[filtered_held_audio]",
         "eac3; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
             + ":channel_layouts=5.1(side)[filtered_held_audio]",
-        "alac; 2; [1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]"
+        "alac; 8; [1:a:0]anull,aformat=sample_fmts=s32p|s16p:channel_layouts=7.1(wide)"
+            + "[filtered_held_audio]",
+        "libmp3lame; 2; [1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]"
       })
   @DisplayName(
       "Should end the audio's graph in the encoder's input when an encode holds the last frame and"

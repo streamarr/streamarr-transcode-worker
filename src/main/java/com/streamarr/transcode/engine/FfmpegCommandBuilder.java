@@ -194,7 +194,28 @@ public class FfmpegCommandBuilder {
           LIBOPUS,
           AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
           "flac",
-          new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS));
+          new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS),
+          "alac",
+          new AudioEncoderInput(
+              "s32p|s16p",
+              Optional.empty(),
+              Map.of(
+                  1,
+                  "mono",
+                  2,
+                  STEREO,
+                  3,
+                  "3.0",
+                  4,
+                  "4.0",
+                  5,
+                  "5.0",
+                  6,
+                  "5.1",
+                  7,
+                  "6.1(back)",
+                  8,
+                  "7.1(wide)")));
 
   // Each encoder's frame and the lead of its first input sample over its first frame without
   // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them: FFmpeg's AAC

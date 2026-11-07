@@ -6323,6 +6323,20 @@ class WorkerMediaSmokeTest {
             .segmentCount(2)
             .codec("ac3")
             .channels(4)
+            .build(),
+        HeldAudioCase.builder()
+            .name("loud 5.1 AC-3 downmixed to stereo ALAC")
+            .source(WorkerMediaSmokeTest::loudSurroundAc3Source)
+            .segmentCount(2)
+            .codec("alac")
+            .channels(2)
+            .build(),
+        HeldAudioCase.builder()
+            .name("16-bit 7.1(wide) FLAC as eight channels of ALAC")
+            .source(WorkerMediaSmokeTest::wideSevenPointOneFlacSource)
+            .segmentCount(2)
+            .codec("alac")
+            .channels(8)
             .build());
   }
 
@@ -8406,6 +8420,53 @@ class WorkerMediaSmokeTest {
               "-c:a",
               "copy"),
           source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 5.1 AC-3 whose six channels play 300
+  // to 800 Hz at half of full scale, both for 12 s: a downmix that sums them can exceed full scale.
+  private static synchronized Path loudSurroundAc3Source() throws Exception {
+    return toneSource("loud-surround.mp4", "5.1", List.of("-c:a", "ac3", "-b:a", "448k"));
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and 16-bit 7.1(wide) FLAC whose eight
+  // channels play 300 to 1,000 Hz at half of full scale, both for 12 s.
+  private static synchronized Path wideSevenPointOneFlacSource() throws Exception {
+    return toneSource(
+        "wide-seven-point-one.mkv", "7.1(wide)", List.of("-c:a", "flac", "-sample_fmt", "s16"));
+  }
+
+  // 12 s of H.264 and of a tone on each channel of the layout, from 300 Hz up in steps of 100 Hz.
+  private static Path toneSource(String name, String layout, List<String> audio) throws Exception {
+    var channels = layout.equals("5.1") ? 6 : 8;
+    var source = seekableSources.resolve(name);
+    if (!generatedSeekableSources.contains(source)) {
+      var tones =
+          IntStream.range(0, channels)
+              .mapToObj(channel -> "0.5*sin(2*PI*" + (300 + 100 * channel) + "*t)")
+              .collect(Collectors.joining("|"));
+      var arguments =
+          new ArrayList<>(
+              List.of(
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "testsrc=size=64x36:rate=24:duration=12",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "aevalsrc=" + tones + ":s=48000:d=12:c=" + layout,
+                  "-c:v",
+                  "libx264",
+                  "-g",
+                  "48",
+                  "-keyint_min",
+                  "48"));
+      arguments.addAll(audio);
+      runFfmpeg(arguments, source);
       generatedSeekableSources.add(source);
     }
 
