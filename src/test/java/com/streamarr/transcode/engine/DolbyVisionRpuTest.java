@@ -234,9 +234,14 @@ class DolbyVisionRpuTest {
   @MethodSource("unconvertibleRpus")
   @DisplayName("Should refuse an RPU that it cannot parse, convert and write")
   void shouldRefuseAnRpuThatItCannotParseConvertAndWrite(String name, byte[] escaped) {
-    assertThatThrownBy(
-            () -> DolbyVisionRpu.parse(ByteBuffer.wrap(escaped)).convertedToProfile81().write())
+    var wrapped = ByteBuffer.wrap(escaped);
+
+    assertThatThrownBy(() -> parsedConvertedAndWritten(wrapped))
         .isInstanceOf(DolbyVisionRpuException.class);
+  }
+
+  private static byte[] parsedConvertedAndWritten(ByteBuffer escaped) {
+    return DolbyVisionRpu.parse(escaped).convertedToProfile81().write();
   }
 
   static Stream<Arguments> unconvertibleRpus() {

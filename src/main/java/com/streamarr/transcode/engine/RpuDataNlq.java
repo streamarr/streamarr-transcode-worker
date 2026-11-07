@@ -16,7 +16,7 @@ record RpuDataNlq(@NonNull List<Integer> predPivotValues, @NonNull List<Componen
 
   private static final int LINEAR_DEADZONE = 0;
   private static final int PIVOTS = 2;
-  private static final int COMPONENTS = 3;
+  private static final int COMPONENT_COUNT = 3;
 
   RpuDataNlq {
     predPivotValues = List.copyOf(predPivotValues);
@@ -99,7 +99,7 @@ record RpuDataNlq(@NonNull List<Integer> predPivotValues, @NonNull List<Componen
   static RpuDataNlq parseComponents(
       RpuBitReader reader, RpuDataHeader header, List<Integer> predPivotValues) {
     var components = new ArrayList<Component>();
-    for (var component = 0; component < COMPONENTS; component++) {
+    for (var component = 0; component < COMPONENT_COUNT; component++) {
       components.add(Component.parse(reader, header));
     }
 
