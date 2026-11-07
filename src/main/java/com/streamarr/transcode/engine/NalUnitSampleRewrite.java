@@ -244,17 +244,18 @@ final class NalUnitSampleRewrite implements SampleRewrite {
             Reason.OUTPUT_MISMATCH, "an SEI message nests HDR10+, which the copy cannot strip");
       }
 
-      var kept = messages.stream().filter(message -> !isHdr10Plus(payload, message)).toList();
-      if (kept.size() == messages.size()) {
+      var otherMessages =
+          messages.stream().filter(message -> !isHdr10Plus(payload, message)).toList();
+      if (otherMessages.size() == messages.size()) {
         return Optional.of(unit);
       }
 
-      if (kept.isEmpty()) {
+      if (otherMessages.isEmpty()) {
         return Optional.empty();
       }
 
       var rbsp = new ByteArrayOutputStream();
-      kept.forEach(
+      otherMessages.forEach(
           message -> rbsp.write(payload, message.start(), message.end() - message.start()));
       rbsp.write(RBSP_STOP_BYTE);
       return Optional.of(withHeaderOf(unit, HevcEmulationPrevention.escaped(rbsp.toByteArray())));
@@ -294,6 +295,31 @@ final class NalUnitSampleRewrite implements SampleRewrite {
 
       return length;
     }
+
+    private byte[] convertedToProfile81(ByteBuffer escapedPayload, boolean randomAccessPoint) {
+      if (randomAccessPoint) {
+        definedMappings.startAtRandomAccessPoint();
+      }
+
+      try {
+        var rpu = DolbyVisionRpu.parse(escapedPayload);
+        definedMappings.resolve(rpu);
+        return rpu.convertedToProfile81().write();
+      } catch (DolbyVisionRpuException exception) {
+        throw conversionFailed(exception.getMessage());
+      }
+    }
+
+    // The unit's NAL unit header, then the escaped payload.
+    private ByteBuffer withHeaderOf(ByteBuffer unit, byte[] escapedPayload) {
+      var rewritten = new ByteArrayOutputStream();
+      for (var index = 0; index < syntax.headerBytes(); index++) {
+        rewritten.write(unit.get(index));
+      }
+
+      rewritten.writeBytes(escapedPayload);
+      return ByteBuffer.wrap(rewritten.toByteArray());
+    }
   }
 
   // The pinned decoder reads an RPU only from a NAL unit of type 62 with forbidden_zero_bit 0,
@@ -301,31 +327,6 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   // sits under another header would play without Dolby Vision, so the conversion refuses it.
   private static boolean hasBaseLayerRpuHeader(ByteBuffer rpu) {
     return rpu.get(0) == BASE_LAYER_RPU_HEADER[0] && rpu.get(1) == BASE_LAYER_RPU_HEADER[1];
-  }
-
-  private byte[] convertedToProfile81(ByteBuffer escapedPayload, boolean randomAccessPoint) {
-    if (randomAccessPoint) {
-      definedMappings.startAtRandomAccessPoint();
-    }
-
-    try {
-      var rpu = DolbyVisionRpu.parse(escapedPayload);
-      definedMappings.resolve(rpu);
-      return rpu.convertedToProfile81().write();
-    } catch (DolbyVisionRpuException exception) {
-      throw conversionFailed(exception.getMessage());
-    }
-  }
-
-  // The unit's NAL unit header, then the escaped payload.
-  private ByteBuffer withHeaderOf(ByteBuffer unit, byte[] escapedPayload) {
-    var rewritten = new ByteArrayOutputStream();
-    for (var index = 0; index < syntax.headerBytes(); index++) {
-      rewritten.write(unit.get(index));
-    }
-
-    rewritten.writeBytes(escapedPayload);
-    return ByteBuffer.wrap(rewritten.toByteArray());
   }
 
   // The SEI messages of an SEI RBSP (ITU-T H.265 7.3.5), each from its payload type to the end of
