@@ -41,6 +41,9 @@ final class SegmentAssembler {
   private final Optional<OutputFrameRate> encodedFrameRate;
   private final VideoDecision videoDecision;
   private final boolean requiresSoundTrack;
+  private final boolean copiesAudio;
+  private final MediaTime minimumCopyDuration;
+  private Optional<CopiedAudioTail> copiedAudioTail = Optional.empty();
   // Set by the initialization segment, which the reader returns before any fragment.
   private Optional<VideoSampleRewrite> sampleRewrite = Optional.empty();
   // An AV1 encode's initialization segment, held until the first fragment that carries video.
@@ -69,6 +72,7 @@ final class SegmentAssembler {
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
       boolean requiresSoundTrack,
+      boolean copiesAudio,
       @NonNull Optional<Duration> paddedAudioEnd) {
     this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
     this.audio = new AudioSampleQueue(intervals, startSequenceNumber, paddedAudioEnd);
@@ -77,6 +81,8 @@ final class SegmentAssembler {
     this.encodedFrameRate = encodedFrameRate;
     this.videoDecision = videoDecision;
     this.requiresSoundTrack = requiresSoundTrack;
+    this.copiesAudio = copiesAudio;
+    this.minimumCopyDuration = intervals.shortestInterval();
   }
 
   /**
@@ -291,6 +297,8 @@ final class SegmentAssembler {
     var segment = awaitingAudio.removeFirst();
     var audioSamples = new ArrayList<>(audio.close(segment.sequenceNumber()));
     audioSamples.addAll(furtherAudio);
+    requireCopiedAudio(segment, audioSamples);
+
     var rebuilt =
         RebuiltSegment.builder()
             .sequenceNumber(segment.sequenceNumber())
@@ -310,6 +318,73 @@ final class SegmentAssembler {
     }
 
     return rebuilt;
+  }
+
+  private void requireCopiedAudio(AwaitingSegment segment, List<CarriedSample> samples) {
+    if (!copiesAudio || !requiresSoundTrack) {
+      return;
+    }
+
+    if (!samples.isEmpty()) {
+      var last = samples.getLast();
+      var timeBase = new TimeBase(1, last.fragment().tracks().audio().orElseThrow().timescale());
+      var end = Math.addExact(last.sample().presentationTime(), last.sample().duration());
+      copiedAudioTail =
+          Optional.of(
+              new CopiedAudioTail(
+                  new MediaTime(end, timeBase),
+                  new MediaTime(Math.addExact(end, last.sample().duration()), timeBase)));
+    }
+
+    if (videoDecision instanceof VideoDecision.Copy && !samples.isEmpty()) {
+      return;
+    }
+
+    var videoSamples = segment.videoSamples();
+    var timescale = videoSamples.getFirst().fragment().tracks().video().orElseThrow().timescale();
+    var end =
+        videoSamples.stream()
+            .mapToLong(
+                carried ->
+                    Math.addExact(carried.sample().presentationTime(), carried.sample().duration()))
+            .max()
+            .orElseThrow();
+    var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
+    if (copiedAudioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
+      return;
+    }
+
+    var frameDuration =
+        videoSamples.stream().mapToLong(carried -> carried.sample().duration()).max().orElseThrow();
+    var beforeLastFrame = new MediaTime(end - frameDuration, new TimeBase(1, timescale));
+    if (videoDecision instanceof VideoDecision.Encode
+        && copiedAudioTail
+            .filter(tail -> tail.coversToWithinOneFrame(videoEnd, beforeLastFrame))
+            .isPresent()) {
+      return;
+    }
+
+    // A short copy may end with one final picture after its last audio packet. That still takes
+    // the normal short-copy path; a complete interval without audio needs an audio encode.
+    var start =
+        videoSamples.stream()
+            .mapToLong(carried -> carried.sample().presentationTime())
+            .min()
+            .orElseThrow();
+    if (videoDecision instanceof VideoDecision.Copy
+        && new MediaTime(end - start, new TimeBase(1, timescale)).compareTo(minimumCopyDuration)
+            < 0) {
+      return;
+    }
+
+    throw new FragmentedMp4Exception(
+        Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
+  }
+
+  private record CopiedAudioTail(MediaTime end, MediaTime endPlusFrame) {
+    private boolean coversToWithinOneFrame(MediaTime videoEnd, MediaTime beforeLastVideoFrame) {
+      return end.compareTo(beforeLastVideoFrame) >= 0 || endPlusFrame.compareTo(videoEnd) >= 0;
+    }
   }
 
   private Set<Fragment> heldFragments() {

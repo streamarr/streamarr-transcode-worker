@@ -1926,7 +1926,8 @@ class TranscodeWorkerJobAttemptTest {
         .getExecutionBuilder()
         .setTargetSegmentDurationSeconds(recording.period())
         .setMediaSegmentCount(3)
-        .addAllSegmentStartSlots(List.of(0, 1, 3));
+        .addAllSegmentStartTicks(List.of(0L, 6L, 18L))
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(1));
     var job = jobBuilder.build();
 
     try (var worker = worker(launcher)) {
@@ -1955,7 +1956,8 @@ class TranscodeWorkerJobAttemptTest {
     job.getExecutionBuilder()
         .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
         .setMediaSegmentCount(3)
-        .addAllSegmentStartSlots(List.of(0, 1, 3))
+        .addAllSegmentStartTicks(List.of(0L, 6L, 18L))
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(1))
         .getAdvertisedEndBuilder()
         .setSeconds(21);
 
@@ -1991,7 +1993,11 @@ class TranscodeWorkerJobAttemptTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(3)
         .setMediaSegmentCount(4)
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        .addAllSegmentStartTicks(
+            TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS.stream()
+                .map(Integer::toUnsignedLong)
+                .toList())
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(3).setDenominator(1))
         .setStartSequenceNumber(3)
         .setSeekPositionSeconds(30);
 
@@ -2018,7 +2024,8 @@ class TranscodeWorkerJobAttemptTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(3)
         .setMediaSegmentCount(4)
-        .addAllSegmentStartSlots(startSlots);
+        .addAllSegmentStartTicks(startSlots.stream().map(Integer::toUnsignedLong).toList())
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(3).setDenominator(1));
 
     assertRefusedAsAnInvalidSpecification(job.build());
   }
@@ -2035,7 +2042,11 @@ class TranscodeWorkerJobAttemptTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(3)
         .setMediaSegmentCount(4)
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        .addAllSegmentStartTicks(
+            TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS.stream()
+                .map(Integer::toUnsignedLong)
+                .toList())
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(3).setDenominator(1))
         .getAdvertisedEndBuilder()
         .setSeconds(advertisedEndSeconds)
         .setNanos(0);
@@ -2054,7 +2065,7 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should split the copy's audio at each segment's exact start and ignore the slot list when"
+      "Should split the copy's audio at each segment's exact start when"
           + " the job carries exact segment starts")
   void shouldSplitTheCopysAudioAtEachSegmentsExactStartWhenTheJobCarriesExactSegmentStarts()
       throws Exception {
@@ -2066,7 +2077,6 @@ class TranscodeWorkerJobAttemptTest {
         .getExecutionBuilder()
         .setTargetSegmentDurationSeconds(recording.period())
         .setMediaSegmentCount(3)
-        .addAllSegmentStartSlots(List.of(0, 1, 3))
         .addAllSegmentStartTicks(TEN_SECOND_KEYFRAME_TICKS)
         .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(24_000));
     var job = jobBuilder.build();
@@ -2136,13 +2146,12 @@ class TranscodeWorkerJobAttemptTest {
     "TRANSCODE_MODE_VIDEO_TRANSCODE, -g:v:0, 73"
   })
   @DisplayName(
-      "Should launch the same FFmpeg command as for the slot list when the job carries a plain"
+      "Should launch the same FFmpeg command as for the plain grid when the job carries a plain"
           + " grid's starts in whole seconds")
-  void shouldLaunchTheSameCommandAsForTheSlotListWhenTheJobCarriesAPlainGridsStartsInSeconds(
+  void shouldLaunchTheSameCommandAsForThePlainGridWhenTheJobCarriesAPlainGridsStartsInSeconds(
       TranscodeMode mode, String option, String value) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var onSlots = laterSegmentJobOnAThreeSecondGrid(mode);
-    onSlots.getExecutionBuilder().addAllSegmentStartSlots(List.of(0, 1, 2, 3));
     var onSeconds = laterSegmentJobOnAThreeSecondGrid(mode);
     onSeconds
         .getExecutionBuilder()

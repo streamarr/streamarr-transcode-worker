@@ -1041,6 +1041,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private static JobAttemptFailure jobAttemptFailureOf(ProducerFailure reason) {
     return switch (reason) {
       case OUTPUT_MISMATCH -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH;
+      case COPIED_AUDIO_RAN_SHORT -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPIED_AUDIO_RAN_SHORT;
       case DOLBY_VISION_CONVERSION_FAILED ->
           JobAttemptFailure.JOB_ATTEMPT_FAILURE_DOLBY_VISION_CONVERSION_FAILED;
       case NOT_AN_AUDIO_STREAM -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION;

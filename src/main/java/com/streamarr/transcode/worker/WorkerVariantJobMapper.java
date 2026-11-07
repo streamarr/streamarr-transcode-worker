@@ -79,28 +79,12 @@ final class WorkerVariantJobMapper {
         // so seek_position_seconds, which the server sets to that segment's boundary, is not read.
         .startSequenceNumber(execution.getStartSequenceNumber())
         .mediaSegmentCount(execution.getMediaSegmentCount())
-        .segmentStartSlots(segmentStartSlots(execution))
+        .segmentStartSlots(List.of())
         .exactSegmentStarts(exactSegmentStarts(execution))
         .seekPosition(seekPosition(execution))
         .sourceAudio(sourceAudio)
         .advertisedEnd(advertisedEnd(job))
         .build();
-  }
-
-  // A job that carries exact segment starts groups on them alone, and its slot list goes unread.
-  private static List<Long> segmentStartSlots(TranscodeExecution execution) {
-    if (carriesExactSegmentStarts(execution)) {
-      return List.of();
-    }
-
-    return segmentStartSlotsInSlots(execution);
-  }
-
-  // The contract's slots are uint32, which Java reads as int, so they compare as unsigned values.
-  private static List<Long> segmentStartSlotsInSlots(TranscodeExecution execution) {
-    var slots = execution.getSegmentStartSlotsList().stream().map(Integer::toUnsignedLong).toList();
-    requireSegmentList(slots, execution.getMediaSegmentCount(), "slot");
-    return slots;
   }
 
   private static boolean carriesExactSegmentStarts(TranscodeExecution execution) {
@@ -243,20 +227,10 @@ final class WorkerVariantJobMapper {
               Integer.toUnsignedLong(timeBase.getDenominator())));
     }
 
-    var slots = execution.getSegmentStartSlotsList();
-    if (slots.isEmpty()) {
-      return Optional.empty();
-    }
-
-    return Optional.of(
-        new ListedStart(
-            Integer.toUnsignedLong(slots.getLast()),
-            execution.getTargetSegmentDurationSeconds(),
-            1));
+    return Optional.empty();
   }
 
-  // A listed start of ticks that each last numerator / denominator seconds; a slot is one tick of
-  // a time base whose ticks each last one period.
+  // A listed start of ticks that each last numerator / denominator seconds.
   private record ListedStart(long ticks, long numerator, long denominator) {
 
     // Compares by cross-multiplication in nanoseconds, so that neither time is rounded.

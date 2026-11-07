@@ -6026,7 +6026,10 @@ class WorkerMediaSmokeTest {
       throws Exception {
     var source = videoEndsLongBeforeAudioSource();
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
-    job.getExecutionBuilder().setMediaSegmentCount(2).addAllSegmentStartSlots(List.of(0, 1));
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, 6L))
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(1));
 
     try (var pipe =
         new PacedSourcePipe(root.resolve("source-pipe"), THRICE_THE_SOURCES_BYTE_RATE)) {
@@ -6974,7 +6977,9 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .addAllSegmentStartTicks(
+            TEN_SECOND_KEYFRAME_SEGMENT_STARTS.stream().map(Integer::toUnsignedLong).toList())
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(SLOT_SECONDS).setDenominator(1))
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(
             TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
@@ -7018,7 +7023,9 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .addAllSegmentStartTicks(
+            TEN_SECOND_KEYFRAME_SEGMENT_STARTS.stream().map(Integer::toUnsignedLong).toList())
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(SLOT_SECONDS).setDenominator(1))
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(
             TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
@@ -7600,7 +7607,10 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS);
+        .addAllSegmentStartTicks(
+            TEN_SECOND_KEYFRAME_SEGMENT_STARTS.stream().map(Integer::toUnsignedLong).toList())
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder().setNumerator(SLOT_SECONDS).setDenominator(1));
     return job;
   }
 
