@@ -214,24 +214,86 @@ final class NalUnitSampleRewrite implements SampleRewrite {
       putLength(joined, converted.remaining());
       return joined.put(converted).put(trailing).flip();
     }
-  }
 
-  private ByteBuffer convertedRpuOf(List<ByteBuffer> rpus, boolean randomAccessPoint) {
-    if (rpus.isEmpty()) {
-      throw conversionFailed("a video sample holds no RPU where the conversion needs one");
+    private ByteBuffer convertedRpuOf(List<ByteBuffer> rpus, boolean randomAccessPoint) {
+      if (rpus.isEmpty()) {
+        throw conversionFailed("a video sample holds no RPU where the conversion needs one");
+      }
+
+      var rpu = rpus.getFirst();
+      if (!hasBaseLayerRpuHeader(rpu)) {
+        throw conversionFailed(
+            "an RPU NAL unit header of "
+                + HexFormat.of().formatHex(new byte[] {rpu.get(0), rpu.get(1)})
+                + " where the decoder reads an RPU only from layer 0 at temporal id 0");
+      }
+
+      var headerBytes = syntax.headerBytes();
+      var payload = rpu.slice(headerBytes, rpu.remaining() - headerBytes);
+      return withHeaderOf(rpu, convertedToProfile81(payload, randomAccessPoint));
     }
 
-    var rpu = rpus.getFirst();
-    if (!hasBaseLayerRpuHeader(rpu)) {
-      throw conversionFailed(
-          "an RPU NAL unit header of "
-              + HexFormat.of().formatHex(new byte[] {rpu.get(0), rpu.get(1)})
-              + " where the decoder reads an RPU only from layer 0 at temporal id 0");
+    private Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
+      var headerBytes = syntax.headerBytes();
+      var payload =
+          HevcEmulationPrevention.unescaped(
+              unit.slice(headerBytes, unit.remaining() - headerBytes));
+      var messages = messagesOf(payload);
+      if (messages.stream().anyMatch(message -> nestsHdr10Plus(payload, message))) {
+        throw new FragmentedMp4Exception(
+            Reason.OUTPUT_MISMATCH, "an SEI message nests HDR10+, which the copy cannot strip");
+      }
+
+      var kept = messages.stream().filter(message -> !isHdr10Plus(payload, message)).toList();
+      if (kept.size() == messages.size()) {
+        return Optional.of(unit);
+      }
+
+      if (kept.isEmpty()) {
+        return Optional.empty();
+      }
+
+      var rbsp = new ByteArrayOutputStream();
+      kept.forEach(
+          message -> rbsp.write(payload, message.start(), message.end() - message.start()));
+      rbsp.write(RBSP_STOP_BYTE);
+      return Optional.of(withHeaderOf(unit, HevcEmulationPrevention.escaped(rbsp.toByteArray())));
     }
 
-    var headerBytes = syntax.headerBytes();
-    var payload = rpu.slice(headerBytes, rpu.remaining() - headerBytes);
-    return withHeaderOf(rpu, convertedToProfile81(payload, randomAccessPoint));
+    // A wrapping NAL unit, such as HEVC's type 63, holds whole NAL units, which can be SEI NAL
+    // units;
+    // the registration bytes hold no two zero bytes in a row, so no emulation prevention byte
+    // splits
+    // them.
+    private boolean wrapsHdr10Plus(ByteBuffer unit) {
+      var bytes = new byte[unit.remaining()];
+      unit.duplicate().get(bytes);
+      return holdsHdr10PlusAnywhere(bytes, syntax.headerBytes(), bytes.length);
+    }
+
+    private void putLength(ByteBuffer target, int length) {
+      if (lengthSize < Integer.BYTES && length >>> (8 * lengthSize) != 0) {
+        throw FragmentedMp4Exception.malformed(
+            "a rewritten NAL unit of "
+                + length
+                + " bytes overflows its "
+                + lengthSize
+                + "-byte length");
+      }
+
+      for (var index = lengthSize - 1; index >= 0; index--) {
+        target.put((byte) (length >>> (8 * index)));
+      }
+    }
+
+    private long lengthAt(ByteBuffer sample, int position) {
+      var length = 0L;
+      for (var index = 0; index < lengthSize; index++) {
+        length = length << 8 | Byte.toUnsignedInt(sample.get(position + index));
+      }
+
+      return length;
+    }
   }
 
   // The pinned decoder reads an RPU only from a NAL unit of type 62 with forbidden_zero_bit 0,
@@ -253,31 +315,6 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     } catch (DolbyVisionRpuException exception) {
       throw conversionFailed(exception.getMessage());
     }
-  }
-
-  private Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
-    var headerBytes = syntax.headerBytes();
-    var payload =
-        HevcEmulationPrevention.unescaped(unit.slice(headerBytes, unit.remaining() - headerBytes));
-    var messages = messagesOf(payload);
-    if (messages.stream().anyMatch(message -> nestsHdr10Plus(payload, message))) {
-      throw new FragmentedMp4Exception(
-          Reason.OUTPUT_MISMATCH, "an SEI message nests HDR10+, which the copy cannot strip");
-    }
-
-    var kept = messages.stream().filter(message -> !isHdr10Plus(payload, message)).toList();
-    if (kept.size() == messages.size()) {
-      return Optional.of(unit);
-    }
-
-    if (kept.isEmpty()) {
-      return Optional.empty();
-    }
-
-    var rbsp = new ByteArrayOutputStream();
-    kept.forEach(message -> rbsp.write(payload, message.start(), message.end() - message.start()));
-    rbsp.write(RBSP_STOP_BYTE);
-    return Optional.of(withHeaderOf(unit, HevcEmulationPrevention.escaped(rbsp.toByteArray())));
   }
 
   // The unit's NAL unit header, then the escaped payload.
@@ -354,15 +391,6 @@ final class NalUnitSampleRewrite implements SampleRewrite {
         && holdsHdr10PlusAnywhere(rbsp, message.payloadStart(), message.end());
   }
 
-  // A wrapping NAL unit, such as HEVC's type 63, holds whole NAL units, which can be SEI NAL units;
-  // the registration bytes hold no two zero bytes in a row, so no emulation prevention byte splits
-  // them.
-  private boolean wrapsHdr10Plus(ByteBuffer unit) {
-    var bytes = new byte[unit.remaining()];
-    unit.duplicate().get(bytes);
-    return holdsHdr10PlusAnywhere(bytes, syntax.headerBytes(), bytes.length);
-  }
-
   private static boolean holdsHdr10PlusAnywhere(byte[] bytes, int start, int end) {
     for (var at = start; at < end; at++) {
       if (holdsAt(bytes, at, end, HDR10_PLUS_PREFIX)) {
@@ -379,30 +407,6 @@ final class NalUnitSampleRewrite implements SampleRewrite {
     }
 
     return Arrays.equals(rbsp, start, start + expected.length, expected, 0, expected.length);
-  }
-
-  private void putLength(ByteBuffer target, int length) {
-    if (lengthSize < Integer.BYTES && length >>> (8 * lengthSize) != 0) {
-      throw FragmentedMp4Exception.malformed(
-          "a rewritten NAL unit of "
-              + length
-              + " bytes overflows its "
-              + lengthSize
-              + "-byte length");
-    }
-
-    for (var index = lengthSize - 1; index >= 0; index--) {
-      target.put((byte) (length >>> (8 * index)));
-    }
-  }
-
-  private long lengthAt(ByteBuffer sample, int position) {
-    var length = 0L;
-    for (var index = 0; index < lengthSize; index++) {
-      length = length << 8 | Byte.toUnsignedInt(sample.get(position + index));
-    }
-
-    return length;
   }
 
   private static FragmentedMp4Exception conversionFailed(String detail) {
