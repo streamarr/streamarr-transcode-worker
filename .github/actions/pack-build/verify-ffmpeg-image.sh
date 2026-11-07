@@ -17,8 +17,7 @@ lock_file="${repository_root}/buildpacks/ffmpeg/ffmpeg.lock"
 . "${repository_root}/buildpacks/ffmpeg/lib/runtime.sh"
 
 ffmpeg_lock_validate "${lock_file}"
-expected_ffmpeg_version="$(ffmpeg_lock_value "${lock_file}" version)"
-expected_ffmpeg_version="${expected_ffmpeg_version%-*}-Jellyfin"
+expected_ffmpeg_version="$(ffmpeg_lock_banner_version "$(ffmpeg_lock_value "${lock_file}" version)")"
 
 if ! docker image inspect "${image}" >/dev/null 2>&1; then
   docker pull "${image}" >/dev/null

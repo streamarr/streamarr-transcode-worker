@@ -1,16 +1,19 @@
 # FFmpeg runtime lock
 
 `release` is the only Renovate-owned input. `ffmpeg.lock` is generated from that exact
-[Jellyfin FFmpeg release](https://github.com/jellyfin/jellyfin-ffmpeg/releases) and pins the
+[Streamarr FFmpeg release](https://github.com/streamarr/streamarr-ffmpeg/releases) and pins the
 full package version, fork source commit, Linux amd64/arm64 portable GPL assets, and SHA-256
 digests. Builds consume only this lock: no floating `latest`, distro FFmpeg, or daily autobuilds.
-See [ADR 0029](https://github.com/streamarr/streamarr-adr/blob/main/adr/0029-pin-jellyfin-ffmpeg-releases.adoc).
+Streamarr builds those releases from its fork of the pinned FFmpeg build, which carries the
+upstream patch series plus Streamarr's own `streamarr-` patches.
+See [ADR 0029](https://github.com/streamarr/streamarr-adr/blob/main/adr/0029-pin-jellyfin-ffmpeg-releases.adoc)
+and [ADR 0057](https://github.com/streamarr/streamarr-adr/blob/main/adr/0057-the-worker-runs-ffmpeg-built-from-streamarrs-fork-of-the-pinned-build.adoc).
 
 Regenerate or validate the lock with:
 
 ```bash
 buildpacks/ffmpeg/bin/update-lock
-buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
+buildpacks/ffmpeg/bin/update-lock --release v8.1.3-2-streamarr.1
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
 buildpacks/ffmpeg/bin/review-release
@@ -21,7 +24,7 @@ node buildpacks/ffmpeg/bin/vendor-notices.mjs --dry-run
 
 The resolver requires Bash, `curl`, and `jq`. Offline input validation also requires
 the Node.js toolchain declared in `buildpacks/ffmpeg/.nvmrc`. It accepts only published, non-prerelease tags
-in `vMAJOR.MINOR.PATCH-BUILD` form, requires exactly one portable GPL asset and a GitHub
+in `vMAJOR.MINOR.PATCH-BUILD-streamarr.REVISION` form, requires exactly one portable GPL asset and a GitHub
 SHA-256 digest per architecture, resolves the tag's full fork commit, and writes the lock
 atomically. `--check` validates the lock, independent review manifest, source-access
 instructions and all inventoried notice bytes offline, without requiring or writing generated
@@ -29,15 +32,18 @@ artifacts; `--verify-upstream` regenerates canonical
 metadata from GitHub and compares it byte-for-byte without modifying the lock.
 
 The buildpack verifies the downloaded archive against the locked checksum before extracting
-its root-level `ffmpeg` and `ffprobe` binaries. Jellyfin's banner omits the packaging revision:
-package `8.1.2-4` reports `8.1.2-Jellyfin`; the checksum pins the exact build. The runtime must
+its root-level `ffmpeg` and `ffprobe` binaries; the archive's license texts, `SOURCE.txt` and
+`BUILD-SOURCES.txt` stay behind, because the image ships the reviewed materials below. The fork
+keeps the upstream build's banner, which omits the packaging and Streamarr revisions: release
+`8.1.3-2-streamarr.1` reports `8.1.3-` and the upstream build's name; the checksum pins the
+exact build. The runtime must
 enable GPL, omit the `--enable-nonfree` build flag, and give the mp4 muxer the `-frag_duration`
 option and the `cmaf`, `delay_moov`, `skip_trailer`, `frag_keyframe` and `frag_discont` flags that
 the worker's fragmented MP4 output uses.
 Its `-buildconf` output, from the banner onward, must also equal the reviewed
 `notices/buildconf-<architecture>.txt` capture byte for byte: the notice inventory starts from
 that capture, so a binary with another toolchain, flag set or library version is unreviewed.
-This flag check does not cover FDK-AAC: Jellyfin's GPL build includes stripped FDK-AAC
+This flag check does not cover FDK-AAC: the pinned GPL build includes stripped FDK-AAC
 without setting `--enable-nonfree`. Streamarr selects FFmpeg's native `aac` encoder,
 not `libfdk_aac`; the latter is nevertheless present in the distributed binary.
 The layer includes GPLv3 text, bundled-library notices (including FDK's notice),
@@ -67,8 +73,9 @@ the image, not just links to them.
 `bin/review-release` carries a review forward only when it can show that the inventory is
 unchanged. It compares the reviewed and locked upstream revisions and requires the locked
 revision to descend from the reviewed one, the change list to be complete, and every changed
-path to lie outside the inventory: Jellyfin's changelog and patch series, the package
-version, and files used only by macOS or Windows builds. It also requires the inputs it is
+path to lie outside the inventory: the changelog and patch series, the package
+version, and files used only by Windows builds. The macOS base images build inventoried
+components of the macOS archive, so a change there needs a person. It also requires the inputs it is
 about to bind to be the ones the manifest bound: a carry-forward may move only the release tag
 and source revision inside them, so undoing that substitution must reproduce the bound content.
 An input edited since the binding exits with status 3, so nothing a working tree carries can
@@ -86,7 +93,14 @@ pull request (see [Renovate synchronization](#renovate-synchronization)), or wit
 `bin/review-release --approved` for a change Renovate did not propose. Never edit
 `notices/manifest` by hand.
 
-Jellyfin's quilt patches under `debian/patches/` are judged by what they do, not by their
+Every fork release builds new archives, and a recipe that clones without a revision can
+resolve to another source each time, so the build-source records in `SOURCE.txt` never carry
+forward. Before binding, replace that section's records with each locked archive's
+`BUILD-SOURCES.txt` (`tar -xJOf <archive> BUILD-SOURCES.txt`) under its `SHA-256` line.
+`review-release` asks for a person, and `--approved` refuses, while `SOURCE.txt` lacks either
+locked archive's digest.
+
+The quilt patches under `debian/patches/`, upstream's and Streamarr's alike, are judged by what they do, not by their
 path: upstream's Linux build applies them to the FFmpeg tree before compiling, so a patch can
 edit `configure`, a licence file, or add third-party source. For every added, modified,
 renamed or removed `*.patch`, the script downloads the whole patch at the locked revision,
@@ -292,10 +306,11 @@ before publishing; do not publish a binary whose required source is unavailable.
 
 ## Renovate synchronization
 
-Renovate tracks `jellyfin/jellyfin-ffmpeg` with the `github-releases` datasource and
-[regex versioning](https://docs.renovatebot.com/modules/versioning/regex/). The fourth numeric
-component uses the `build` capture group: `-10` sorts after `-9`, and packaging-only fixes
-are stable patch updates, not SemVer prereleases. Updates have their own PR and are not
+Renovate tracks `streamarr/streamarr-ffmpeg` with the `github-releases` datasource and
+[regex versioning](https://docs.renovatebot.com/modules/versioning/regex/). The upstream
+packaging revision uses the `build` capture group and the Streamarr revision the `revision`
+group: `-10` sorts after `-9`, and packaging-only fixes are stable patch updates, not SemVer
+prereleases. The fork builds every release itself, so each update needs a notice review. Updates have their own PR and are not
 automerged. Major-version updates additionally require Dependency Dashboard approval.
 Renovate still proposes eligible minor and packaging updates automatically; their
 notice review must complete before CI and image packaging can pass.
@@ -385,15 +400,13 @@ images are built and verified in-container for runtime identity, H.264/AAC fragm
 MP4 written to standard output, and AV1 encoding. The required `build` status aggregates
 all applicable checks.
 
-Numbered Jellyfin releases avoid BtbN's rolling daily-build expiry. They are still upstream
-assets, not a guarantee of immutable or permanent storage: a missing asset fails the build,
-and a replaced asset fails checksum verification. CI caches are accelerators, not dependency
-storage. Jellyfin also publishes the versioned binaries at its
-[FFmpeg mirror](https://repo.jellyfin.org/files/ffmpeg/linux/), using paths such as
-`8.x/8.1.2-4/amd64/<asset>`. This is an available second upstream source, not yet an
-automatic buildpack fallback. Neither channel provides portable-tarball signatures
-or a permanent-retention promise. A Streamarr-owned archive would be needed for
-rebuilds independent of both upstream channels; that is not part of this migration.
+Numbered fork releases avoid a rolling daily-build expiry. They are GitHub release assets,
+not a guarantee of immutable or permanent storage: a missing asset fails the build, and a
+replaced asset fails checksum verification. The fork's release workflow never replaces the
+assets of a published release, and ADR 0057 keeps each release's source available for as long
+as its archives are offered or an image contains them. CI caches are accelerators, not
+dependency storage. Neither the release assets nor a second channel provide portable-tarball
+signatures; a Streamarr-owned archive of the bundled libraries' sources stays deferred.
 
 ## NVENC checks after an upgrade
 

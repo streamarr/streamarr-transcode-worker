@@ -6,6 +6,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.junit.jupiter.api.BeforeAll;
@@ -111,13 +114,13 @@ class FfmpegPackagingScriptsTest {
     assertThat(Files.readString(updater.lock()))
         .isEqualTo(
             """
-            release=v8.1.2-4
-            version=8.1.2-4
+            release=v8.1.2-4-streamarr.1
+            version=8.1.2-4-streamarr.1
             source_revision=9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b
             asset_variant=gpl
-            amd64_asset=jellyfin-ffmpeg_8.1.2-4_portable_linux64-gpl.tar.xz
+            amd64_asset=streamarr-ffmpeg_8.1.2-4-streamarr.1_portable_linux64-gpl.tar.xz
             amd64_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-            arm64_asset=jellyfin-ffmpeg_8.1.2-4_portable_linuxarm64-gpl.tar.xz
+            arm64_asset=streamarr-ffmpeg_8.1.2-4-streamarr.1_portable_linuxarm64-gpl.tar.xz
             arm64_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
             """);
   }
@@ -128,10 +131,10 @@ class FfmpegPackagingScriptsTest {
     var updater = lockUpdater();
     Files.writeString(updater.lock().resolveSibling("release"), "not-a-release\n");
 
-    var result = updater.command().argument("--release").argument("v8.1.2-4").execute();
+    var result = updater.command().argument("--release").argument("v8.1.2-4-streamarr.1").execute();
 
     assertThat(result.exitCode()).isZero();
-    assertThat(Files.readString(updater.lock())).startsWith("release=v8.1.2-4\n");
+    assertThat(Files.readString(updater.lock())).startsWith("release=v8.1.2-4-streamarr.1\n");
   }
 
   @Test
@@ -140,20 +143,20 @@ class FfmpegPackagingScriptsTest {
     var updater = lockUpdater();
     Files.writeString(updater.lock().resolveSibling("release"), "not-a-release\n");
     var trustedRelease = temporaryDirectory.resolve("trusted-release");
-    Files.writeString(trustedRelease, "v8.1.2-4\n");
+    Files.writeString(trustedRelease, "v8.1.2-4-streamarr.1\n");
 
     var result =
         updater.command().argument("--release-file").argument(trustedRelease.toString()).execute();
 
     assertThat(result.exitCode()).isZero();
-    assertThat(Files.readString(updater.lock())).startsWith("release=v8.1.2-4\n");
+    assertThat(Files.readString(updater.lock())).startsWith("release=v8.1.2-4-streamarr.1\n");
   }
 
   @Test
   @DisplayName("Should accept one FFmpeg release line when the final newline is absent")
   void shouldAcceptOneFfmpegReleaseLineWhenTheFinalNewlineIsAbsent() throws Exception {
     var updater = lockUpdater();
-    Files.writeString(updater.lock().resolveSibling("release"), "v8.1.2-4");
+    Files.writeString(updater.lock().resolveSibling("release"), "v8.1.2-4-streamarr.1");
 
     var result = updater.command().execute();
 
@@ -168,7 +171,7 @@ class FfmpegPackagingScriptsTest {
     var result = updater.command().argument("--release").argument("").execute();
 
     assertThat(result.exitCode()).isEqualTo(1);
-    assertThat(result.output()).contains("Expected an exact Jellyfin release tag, found:");
+    assertThat(result.output()).contains("Expected an exact Streamarr FFmpeg release tag, found:");
   }
 
   @Test
@@ -176,7 +179,7 @@ class FfmpegPackagingScriptsTest {
   void shouldReportStaleFfmpegLockWithoutModifyingItWhenChecking() throws Exception {
     var updater = lockUpdater();
     assertThat(updater.command().execute().exitCode()).isZero();
-    Files.writeString(updater.lock().resolveSibling("release"), "v8.1.2-5\n");
+    Files.writeString(updater.lock().resolveSibling("release"), "v8.1.2-5-streamarr.1\n");
     var staleLock = Files.readString(updater.lock());
 
     var result = updater.command().argument("--check").execute();
@@ -292,13 +295,15 @@ class FfmpegPackagingScriptsTest {
   private static Stream<Arguments> incoherentLockValues() {
     return Stream.of(
         Arguments.of(
-            "version=8.1.2-4", "version=8.1.2-5", "FFmpeg lock version contradicts release"),
+            "version=8.1.2-4-streamarr.1",
+            "version=8.1.2-5-streamarr.1",
+            "FFmpeg lock version contradicts release"),
         Arguments.of(
             "source_revision=9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b",
             "source_revision=not-a-commit",
             "FFmpeg lock source revision is not a full commit SHA"),
         Arguments.of(
-            "amd64_asset=jellyfin-ffmpeg_8.1.2-4_portable_linux64-gpl.tar.xz",
+            "amd64_asset=streamarr-ffmpeg_8.1.2-4-streamarr.1_portable_linux64-gpl.tar.xz",
             "amd64_asset=unexpected.tar.xz",
             "FFmpeg lock asset contradicts version and variant"),
         Arguments.of(
@@ -351,8 +356,8 @@ class FfmpegPackagingScriptsTest {
   }
 
   @Test
-  @DisplayName("Should resolve full source revision when given a Jellyfin release tag")
-  void shouldResolveFullSourceRevisionWhenGivenAJellyfinReleaseTag() throws Exception {
+  @DisplayName("Should resolve full source revision when given a Streamarr FFmpeg release tag")
+  void shouldResolveFullSourceRevisionWhenGivenAStreamarrFfmpegReleaseTag() throws Exception {
     var updater = lockUpdater();
     var fullRevision = "1234567890abcdef1234567890abcdef12345678";
 
@@ -360,7 +365,7 @@ class FfmpegPackagingScriptsTest {
 
     assertThat(result.exitCode()).isZero();
     assertThat(Files.readString(updater.lock()))
-        .contains("version=8.1.2-4", "source_revision=" + fullRevision);
+        .contains("version=8.1.2-4-streamarr.1", "source_revision=" + fullRevision);
   }
 
   @Test
@@ -380,11 +385,11 @@ class FfmpegPackagingScriptsTest {
   }
 
   private LockUpdaterFixture lockUpdater() throws Exception {
-    var release = "v8.1.2-4";
-    var version = "8.1.2-4";
+    var release = "v8.1.2-4-streamarr.1";
+    var version = "8.1.2-4-streamarr.1";
     var fullRevision = "9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b";
-    var amd64Asset = "jellyfin-ffmpeg_%s_portable_linux64-gpl.tar.xz".formatted(version);
-    var arm64Asset = "jellyfin-ffmpeg_%s_portable_linuxarm64-gpl.tar.xz".formatted(version);
+    var amd64Asset = "streamarr-ffmpeg_%s_portable_linux64-gpl.tar.xz".formatted(version);
+    var arm64Asset = "streamarr-ffmpeg_%s_portable_linuxarm64-gpl.tar.xz".formatted(version);
     var amd64Digest = "a".repeat(64);
     var arm64Digest = "b".repeat(64);
     var repository = Files.createDirectories(temporaryDirectory.resolve("repository"));
@@ -473,7 +478,7 @@ class FfmpegPackagingScriptsTest {
         done
         case "${url}" in
           */releases/tags/*) cp "${FAKE_RELEASE_JSON}" "${output}" ;;
-          */repos/jellyfin/jellyfin-ffmpeg/commits/v8.1.2-4) printf '{"sha":"%s"}\n' "${FAKE_FFMPEG_COMMIT}" >"${output}" ;;
+          */repos/streamarr/streamarr-ffmpeg/commits/v8.1.2-4-streamarr.1) printf '{"sha":"%s"}\n' "${FAKE_FFMPEG_COMMIT}" >"${output}" ;;
           *) echo "Unexpected URL: ${url}" >&2; exit 1 ;;
         esac
         """);
@@ -513,7 +518,7 @@ class FfmpegPackagingScriptsTest {
   void shouldContributeSelectedFfmpegVersionWhenRuntimeLockChanges() throws Exception {
     var buildpackRoot = Files.createDirectories(temporaryDirectory.resolve("future-buildpack"));
     var buildpackScript = copyBuildpackScript(buildpackRoot);
-    var futureVersion = "8.2.0-1";
+    var futureVersion = "8.2.0-1-streamarr.1";
     var futureLock = lockWithVersion(futureVersion, "abcdef1234" + "0".repeat(30));
     Files.writeString(buildpackRoot.resolve("ffmpeg.lock"), futureLock);
     Files.writeString(
@@ -556,14 +561,14 @@ class FfmpegPackagingScriptsTest {
   }
 
   @Test
-  @DisplayName("Should reject runtime banner when it does not match locked Jellyfin version")
-  void shouldRejectRuntimeBannerWhenItDoesNotMatchLockedJellyfinVersion() throws Exception {
+  @DisplayName("Should reject runtime banner when it does not match the locked FFmpeg version")
+  void shouldRejectRuntimeBannerWhenItDoesNotMatchTheLockedFfmpegVersion() throws Exception {
     var buildpack = buildpack();
 
     var result = buildpack.command().environment("FAKE_FFMPEG_SUFFIX", "other-build").execute();
 
     assertThat(result.exitCode()).isEqualTo(1);
-    assertThat(result.output()).contains("Expected Jellyfin FFmpeg runtime version");
+    assertThat(result.output()).contains("Expected FFmpeg runtime version");
   }
 
   @Test
@@ -669,8 +674,8 @@ class FfmpegPackagingScriptsTest {
   }
 
   @Test
-  @DisplayName("Should extract portable Jellyfin binaries when archive has no wrapper directory")
-  void shouldExtractPortableJellyfinBinariesWhenArchiveHasNoWrapperDirectory() throws Exception {
+  @DisplayName("Should extract portable FFmpeg binaries when archive has no wrapper directory")
+  void shouldExtractPortableFfmpegBinariesWhenArchiveHasNoWrapperDirectory() throws Exception {
     var buildpack = buildpack();
 
     var result = buildpack.execute();
@@ -681,6 +686,94 @@ class FfmpegPackagingScriptsTest {
         .doesNotContain("--strip-components", "/bin/ffmpeg");
     assertThat(Files.readString(buildpack.layer().resolve("LICENSE.txt")))
         .isEqualTo(Files.readString(Path.of("buildpacks/ffmpeg/LICENSE.txt")));
+  }
+
+  @Test
+  @DisplayName(
+      "Should extract only the root-level binaries when the archive also carries its licenses")
+  void shouldExtractOnlyTheRootLevelBinariesWhenTheArchiveAlsoCarriesItsLicenses()
+      throws Exception {
+    var contents = Files.createDirectories(temporaryDirectory.resolve("archive-contents"));
+    var members =
+        List.of(
+            "ffmpeg",
+            "ffprobe",
+            "SOURCE.txt",
+            "BUILD-SOURCES.txt",
+            "licenses/COPYING.GPLv3",
+            "licenses/components/x264/COPYING.txt");
+    for (var member : members) {
+      var file = contents.resolve(member);
+      Files.createDirectories(file.getParent());
+      Files.writeString(file, member + "\n");
+    }
+    var archive = temporaryDirectory.resolve("portable.tar.xz");
+    var tar =
+        new ProcessBuilder(
+                "tar",
+                "-cJf",
+                archive.toString(),
+                "-C",
+                contents.toString(),
+                "ffmpeg",
+                "ffprobe",
+                "SOURCE.txt",
+                "BUILD-SOURCES.txt",
+                "licenses")
+            .redirectErrorStream(true)
+            .start();
+    assertThat(tar.waitFor()).as(new String(tar.getInputStream().readAllBytes())).isZero();
+    var lockFile = Path.of("buildpacks/ffmpeg/ffmpeg.lock");
+    var lock = temporaryDirectory.resolve("ffmpeg.lock");
+    Files.writeString(
+        lock,
+        Files.readString(lockFile)
+            .replace(
+                "amd64_sha256=" + lockValue(lockFile, "amd64_sha256"),
+                "amd64_sha256=" + sha256(archive)));
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(
+        commands,
+        "curl",
+        """
+        while (( $# > 0 )); do
+          if [[ "$1" == --output ]]; then
+            cp "${FAKE_ARCHIVE}" "$2"
+          fi
+          shift
+        done
+        """);
+    var extraction = temporaryDirectory.resolve("extract");
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "extract",
+        """
+        for library in http lock checksum runtime; do
+          . "${LIBRARIES}/${library}.sh"
+        done
+        ffmpeg_runtime_extract "${LOCK}" amd64 "${DESTINATION}" ffmpeg ffprobe
+        """);
+    var destination = Files.createDirectory(temporaryDirectory.resolve("bin"));
+
+    var result =
+        command(extraction)
+            .prependPath(commands)
+            .environment("FAKE_ARCHIVE", archive.toString())
+            .environment("LIBRARIES", LOCK_LIBRARY.getParent().toString())
+            .environment("LOCK", lock.toString())
+            .environment("DESTINATION", destination.toString())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    try (var extracted = Files.list(destination)) {
+      assertThat(extracted.map(path -> path.getFileName().toString()))
+          .containsExactlyInAnyOrder("ffmpeg", "ffprobe");
+    }
+  }
+
+  private static String sha256(Path file) throws Exception {
+    return HexFormat.of()
+        .formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file)));
   }
 
   @Test
@@ -1027,7 +1120,7 @@ class FfmpegPackagingScriptsTest {
             printf '%s\n' "${FAKE_FFMPEG_BANNER_PREFIX}"
           fi
           printf '%s\n' \
-            "ffmpeg version ${FAKE_FFMPEG_VERSION%-*}-${FAKE_FFMPEG_SUFFIX:-Jellyfin} Copyright" \
+            "ffmpeg version ${FAKE_FFMPEG_BANNER_VERSION}-${FAKE_FFMPEG_SUFFIX:-Jellyfin} Copyright" \
             'configuration: --enable-gpl --enable-libfdk-aac'
         fi
         if [[ "$*" == *"muxer=mp4"* ]]; then
@@ -1061,7 +1154,7 @@ class FfmpegPackagingScriptsTest {
                 .environment("FAKE_FFMPEG_LAYER", layer.toString())
                 .environment("FAKE_TAR_ARGUMENTS", tarArguments.toString())
                 .environment("FAKE_VERIFIED", verified.toString())
-                .environment("FAKE_FFMPEG_VERSION", ffmpegVersion)
+                .environment("FAKE_FFMPEG_BANNER_VERSION", bannerVersion(ffmpegVersion))
                 .environment(
                     "FAKE_FFMPEG_NOTICES",
                     Path.of("buildpacks/ffmpeg/notices").toAbsolutePath().toString()))
@@ -1107,6 +1200,12 @@ class FfmpegPackagingScriptsTest {
             .argument(root.toString())
             .execute();
     assertThat(result.exitCode()).as(result.output()).isZero();
+  }
+
+  // The fork keeps the upstream build's banner, which drops both revisions: 8.1.3-2-streamarr.1
+  // reports 8.1.3.
+  private static String bannerVersion(String lockVersion) {
+    return lockVersion.replaceFirst("-\\d+-streamarr\\.\\d+$", "");
   }
 
   private static String lockWithVersion(String version, String sourceRevision) throws IOException {
@@ -1163,7 +1262,7 @@ class FfmpegPackagingScriptsTest {
     var buildpackLibrary = Files.createDirectory(buildpackDirectory.resolve("lib"));
     Files.copy(LOCK_LIBRARY, buildpackLibrary.resolve("lock.sh"));
     Files.copy(RUNTIME_LIBRARY, buildpackLibrary.resolve("runtime.sh"));
-    var futureVersion = "8.2.0-1";
+    var futureVersion = "8.2.0-1-streamarr.1";
     var futureLock = lockWithVersion(futureVersion, "abcdef1234" + "0".repeat(30));
     Files.writeString(buildpackDirectory.resolve("ffmpeg.lock"), futureLock);
     var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));

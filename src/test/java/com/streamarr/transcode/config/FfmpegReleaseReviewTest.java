@@ -3,6 +3,7 @@ package com.streamarr.transcode.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -31,13 +32,16 @@ class FfmpegReleaseReviewTest {
   private static final Path REVIEWER = BUILDPACK.resolve("bin/review-release").toAbsolutePath();
   private static final Path LOCK_UPDATER = BUILDPACK.resolve("bin/update-lock").toAbsolutePath();
   private static final int HUMAN_REVIEW_REQUIRED = 3;
-  private static final String LOCKED_RELEASE = "v99.0.0-1";
+  private static final String LOCKED_RELEASE = "v99.0.0-1-streamarr.1";
   private static final String LOCKED_REVISION = "c".repeat(40);
-  private static final String LOCKED_AMD64_SHA256 = "d".repeat(64);
-  private static final String LOCKED_ARM64_SHA256 = "e".repeat(64);
+  // The locked archives are the ones whose build-source records the reviewed offer carries, so a
+  // carry-forward or an approval can bind them; a test that wants other archives relocks them.
+  private static final String LOCKED_AMD64_SHA256 = reviewedOrFail("amd64_sha256");
+  private static final String LOCKED_ARM64_SHA256 = reviewedOrFail("arm64_sha256");
+  private static final String UNRECORDED_SHA256 = "d".repeat(64);
   private static final String PATCH = "debian/patches/0099-fix-qsv-av1-hdr-side-data.patch";
   private static final String CONTENTS_URL =
-      "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/contents";
+      "https://api.github.com/repos/streamarr/streamarr-ffmpeg/contents";
 
   @TempDir Path temporaryDirectory;
 
@@ -53,7 +57,7 @@ class FfmpegReleaseReviewTest {
                 "debian/changelog",
                 "debian/patches/series",
                 "build.yaml",
-                "builder/images/macos/00-dep.sh",
+                "builder/images/base-win64/Dockerfile",
                 ".github/workflows/_meta_mac_portable.yaml")
             .upstreamPatch(
                 PatchChange.builder()
@@ -81,7 +85,7 @@ class FfmpegReleaseReviewTest {
                     FfmpegInventoryDigest.of(review.buildpack())));
     assertThat(Files.readString(review.inventory()))
         .contains(
-            "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/%s/LICENSE.md"
+            "https://raw.githubusercontent.com/streamarr/streamarr-ffmpeg/%s/LICENSE.md"
                 .formatted(LOCKED_REVISION))
         .doesNotContain(reviewedRevision);
     assertThat(Files.readString(review.sourceAccess()))
@@ -101,6 +105,7 @@ class FfmpegReleaseReviewTest {
       strings = {
         "builder/scripts.d/50-x264.sh",
         "builder/images/base-linux64/Dockerfile",
+        "builder/images/macos/05-libpng.sh",
         "builder/variants/linux64-gpl.sh",
         "LICENSE.md",
         "COPYING.GPLv3",
@@ -317,7 +322,7 @@ class FfmpegReleaseReviewTest {
                 .formatted(reviewed("release"), LOCKED_RELEASE));
     assertThat(review.upstreamRequests())
         .contains(
-            "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/%s...%s"
+            "https://api.github.com/repos/streamarr/streamarr-ffmpeg/compare/%s...%s"
                 .formatted(reviewed("source_revision"), LOCKED_REVISION));
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
@@ -877,7 +882,7 @@ class FfmpegReleaseReviewTest {
     assertThat(Files.readAllLines(review.sourceAccess()))
         .filteredOn(line -> line.startsWith("Binary release:"))
         .containsExactly(
-            "Binary release: https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/"
+            "Binary release: https://github.com/streamarr/streamarr-ffmpeg/releases/tag/"
                 + lockedRelease);
     assertThat(Files.readString(review.manifest())).contains("release=" + lockedRelease + "\n");
   }
@@ -1015,6 +1020,47 @@ class FfmpegReleaseReviewTest {
     assertThat(result.exitCode()).as(result.output()).isEqualTo(2);
     assertThat(result.output()).contains("Usage:");
     assertThat(review.upstreamRequests()).isEmpty();
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require human review when the source offer has no build-source record of a locked"
+          + " archive")
+  void shouldRequireHumanReviewWhenTheSourceOfferHasNoBuildSourceRecordOfALockedArchive()
+      throws Exception {
+    var review = review().upstreamChanges("debian/changelog");
+    relockArchive(review, "amd64_sha256", UNRECORDED_SHA256);
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains("no build-source record of a locked archive");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse an approval when the source offer has no build-source record of a locked"
+          + " archive")
+  void shouldRefuseAnApprovalWhenTheSourceOfferHasNoBuildSourceRecordOfALockedArchive()
+      throws Exception {
+    var review = review();
+    for (var input : List.of(review.inventory(), review.sourceAccess())) {
+      rebindRevision(input);
+    }
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace("releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE));
+    relockArchive(review, "arm64_sha256", UNRECORDED_SHA256);
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("no build-source record of a locked archive");
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
@@ -1160,9 +1206,9 @@ class FfmpegReleaseReviewTest {
         version=%s
         source_revision=%s
         asset_variant=gpl
-        amd64_asset=jellyfin-ffmpeg_%s_portable_linux64-gpl.tar.xz
+        amd64_asset=streamarr-ffmpeg_%s_portable_linux64-gpl.tar.xz
         amd64_sha256=%s
-        arm64_asset=jellyfin-ffmpeg_%s_portable_linuxarm64-gpl.tar.xz
+        arm64_asset=streamarr-ffmpeg_%s_portable_linuxarm64-gpl.tar.xz
         arm64_sha256=%s
         """
             .formatted(
@@ -1233,9 +1279,25 @@ class FfmpegReleaseReviewTest {
     return new ReviewFixture(repository, commands, temporaryDirectory);
   }
 
+  private static void relockArchive(ReviewFixture review, String key, String digest)
+      throws IOException {
+    var lock = review.buildpack().resolve("ffmpeg.lock");
+    var locked = key + "=" + reviewed(key);
+    assertThat(Files.readString(lock)).contains(locked);
+    Files.writeString(lock, Files.readString(lock).replace(locked, key + "=" + digest));
+  }
+
   private static void rebindRevision(Path input) throws IOException {
     Files.writeString(
         input, Files.readString(input).replace(reviewed("source_revision"), LOCKED_REVISION));
+  }
+
+  private static String reviewedOrFail(String key) {
+    try {
+      return reviewed(key);
+    } catch (IOException exception) {
+      throw new UncheckedIOException(exception);
+    }
   }
 
   private static String reviewed(String key) throws IOException {
@@ -1324,7 +1386,7 @@ class FfmpegReleaseReviewTest {
               .environment("FAKE_COMPARISON", comparison.toString())
               .environment(
                   "FAKE_COMPARISON_URL",
-                  "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/%s...%s"
+                  "https://api.github.com/repos/streamarr/streamarr-ffmpeg/compare/%s...%s"
                       .formatted(reviewed("source_revision"), LOCKED_REVISION))
               .environment("FAKE_CONTENTS", contents.toString())
               .environment("FAKE_CONTENTS_URL", CONTENTS_URL);

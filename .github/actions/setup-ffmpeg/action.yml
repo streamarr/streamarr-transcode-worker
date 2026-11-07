@@ -1,5 +1,5 @@
 name: Set up locked FFmpeg
-description: Install the same verified Jellyfin runtime used in the package image
+description: Install the same verified FFmpeg runtime used in the package image
 runs:
   using: composite
   steps:

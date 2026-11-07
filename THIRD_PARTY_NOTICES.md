@@ -4,7 +4,7 @@ This notice identifies third-party material included with the Streamarr Transcod
 
 ## FFmpeg and bundled libraries
 
-Worker container images include Jellyfin builds of FFmpeg and ffprobe and their bundled libraries. See the [redistribution documentation](buildpacks/ffmpeg/README.md#redistribution-materials), [component inventory](buildpacks/ffmpeg/notices/sources.json), and [Corresponding Source instructions](buildpacks/ffmpeg/SOURCE.txt).
+Worker container images include FFmpeg and ffprobe, built by [Streamarr's fork](https://github.com/streamarr/streamarr-ffmpeg) of the pinned FFmpeg build, and their bundled libraries. See the [redistribution documentation](buildpacks/ffmpeg/README.md#redistribution-materials), [component inventory](buildpacks/ffmpeg/notices/sources.json), and [Corresponding Source instructions](buildpacks/ffmpeg/SOURCE.txt).
 
 The FFmpeg image layer carries the generated `THIRD-PARTY-NOTICES.txt`, `LICENSE.txt`, `SOURCE.txt`, and `notices/` directory. These contain the runtime's license texts, attribution, and source information.
 
