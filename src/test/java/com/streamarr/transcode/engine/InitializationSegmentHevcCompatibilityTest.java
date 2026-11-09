@@ -30,20 +30,21 @@ class InitializationSegmentHevcCompatibilityTest {
             .codecString("hvc1.1.6.L90.90")
             .build();
     var rewritten = InitializationSegmentRewrite.rewrite(decision, recordedInitialization());
-    var record = recordOf(rewritten);
-    assertThat(record.getInt(2)).isEqualTo(0x60000000);
-    record.position(22);
-    var arrays = Byte.toUnsignedInt(record.get());
+    var configuration = recordOf(rewritten);
+    assertThat(configuration.getInt(2)).isEqualTo(0x60000000);
+    configuration.position(22);
+    var arrays = Byte.toUnsignedInt(configuration.get());
     for (var array = 0; array < arrays; array++) {
-      var type = record.get() & 0x3F;
-      var count = Short.toUnsignedInt(record.getShort());
+      var type = configuration.get() & 0x3F;
+      var count = Short.toUnsignedInt(configuration.getShort());
       for (var unit = 0; unit < count; unit++) {
-        var size = Short.toUnsignedInt(record.getShort());
-        assertParameterCompatibility(type, record.slice(record.position(), size));
-        record.position(record.position() + size);
+        var size = Short.toUnsignedInt(configuration.getShort());
+        assertParameterCompatibility(type, configuration.slice(configuration.position(), size));
+        configuration.position(configuration.position() + size);
       }
     }
-    assertThat(record.hasRemaining()).isFalse();
+
+    assertThat(configuration.hasRemaining()).isFalse();
   }
 
   @Test
@@ -86,9 +87,10 @@ class InitializationSegmentHevcCompatibilityTest {
       int offset, int value) throws IOException {
     var original = recordedInitialization();
     recordOf(original).put(offset, (byte) value);
-    var rewritten = InitializationSegmentRewrite.rewrite(mainEncode(), original);
+    var decision = mainEncode();
+    var rewritten = InitializationSegmentRewrite.rewrite(decision, original);
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> VideoOutputCheck.requireMatch(mainEncode(), rewritten))
+        .isThrownBy(() -> VideoOutputCheck.requireMatch(decision, rewritten))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(FragmentedMp4Exception.Reason.OUTPUT_MISMATCH);
   }
@@ -101,8 +103,9 @@ class InitializationSegmentHevcCompatibilityTest {
     var original = recordedInitialization();
     // The recording's first array is one VPS, beginning after the 23-byte header and array fields.
     recordOf(original).put(offset, (byte) value);
+    var decision = mainEncode();
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> InitializationSegmentRewrite.rewrite(mainEncode(), original))
+        .isThrownBy(() -> InitializationSegmentRewrite.rewrite(decision, original))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(FragmentedMp4Exception.Reason.OUTPUT_MISMATCH);
   }

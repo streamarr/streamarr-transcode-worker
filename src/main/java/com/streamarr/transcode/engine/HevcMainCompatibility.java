@@ -17,28 +17,28 @@ final class HevcMainCompatibility {
   // Some NVENC devices omit compatibility flag 2 for Main. Add only that implied flag, both in
   // hvcC and in every VPS/SPS: hvcC's compatibility flags are their intersection. Never relabel a
   // different profile, picture format, level, tier or constraint to make the output check pass.
-  static byte[] normalize(byte[] record) {
-    var reading = ByteBuffer.wrap(record);
-    if (record.length < RECORD_FIELDS
-        || (record[1] & 0xDF) != 1
+  static byte[] normalize(byte[] configuration) {
+    var reading = ByteBuffer.wrap(configuration);
+    if (configuration.length < RECORD_FIELDS
+        || (configuration[1] & 0xDF) != 1
         || reading.getInt(2) != MAIN_COMPATIBILITY
-        || (record[16] & 3) != 1
-        || (record[17] & 7) != 0
-        || (record[18] & 7) != 0) {
-      return record;
+        || (configuration[16] & 3) != 1
+        || (configuration[17] & 7) != 0
+        || (configuration[18] & 7) != 0) {
+      return configuration;
     }
 
-    var result = new ByteArrayOutputStream(record.length);
-    var header = Arrays.copyOf(record, RECORD_FIELDS);
+    var result = new ByteArrayOutputStream(configuration.length);
+    var header = Arrays.copyOf(configuration, RECORD_FIELDS);
     ByteBuffer.wrap(header).putInt(2, MAIN_AND_MAIN_10_COMPATIBILITY);
     result.writeBytes(header);
     reading.position(RECORD_FIELDS);
     var fields = new BoxFields("hvcC", reading);
-    for (var array = 0; array < Byte.toUnsignedInt(record[22]); array++) {
+    for (var array = 0; array < Byte.toUnsignedInt(configuration[22]); array++) {
       rewriteArray(fields, result);
     }
 
-    result.writeBytes(Arrays.copyOfRange(record, reading.position(), record.length));
+    result.writeBytes(Arrays.copyOfRange(configuration, reading.position(), configuration.length));
     return result.toByteArray();
   }
 

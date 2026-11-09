@@ -267,8 +267,8 @@ final class InitializationSegmentRewrite {
   }
 
   private byte[] rewrittenHevcRecord(ByteBuffer hvcC) {
-    var record = withPlannedSeiArray(hvcC);
-    return encodesHevcMain ? HevcMainCompatibility.normalize(record) : record;
+    var configuration = withPlannedSeiArray(hvcC);
+    return encodesHevcMain ? HevcMainCompatibility.normalize(configuration) : configuration;
   }
 
   // FFmpeg copies the source's metadata OBUs into av1C's configOBUs (AV1 ISOBMFF binding 2.3.3),
