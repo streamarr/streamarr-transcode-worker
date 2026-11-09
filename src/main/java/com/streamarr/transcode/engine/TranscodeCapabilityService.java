@@ -431,7 +431,7 @@ public class TranscodeCapabilityService {
       return Map.of();
     }
 
-    try (var dolbyVisionFrame = DolbyVisionTestFrame.extract()) {
+    try (var dolbyVisionFrame = SampleDolbyVisionFrame.extract()) {
       var features = new EnumMap<CodecFamily, Set<EncodeFeature>>(CodecFamily.class);
       for (var backend : testedBackends) {
         features.put(backend.codecFamily(), detectEncodeFeatures(backend, dolbyVisionFrame.path()));

@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.EncodeFeature.DOLBY_VISION_TO_PQ;
 import static com.streamarr.transcode.engine.EncodeFeature.HLG;
+import static com.streamarr.transcode.engine.EncodeFeature.PQ;
 import static com.streamarr.transcode.engine.EncodeFeature.TEN_BIT;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
@@ -15,6 +16,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -152,6 +154,45 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
             permissions ->
                 assertThat(permissions).isEqualTo(PosixFilePermissions.fromString("rw-------")));
     assertThat(inputsOfTheReshapeTests).allSatisfy(input -> assertThat(input).doesNotExist());
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep verified encode features when the Dolby Vision sample cannot be deleted")
+  void shouldKeepVerifiedEncodeFeaturesWhenTheDolbyVisionSampleCannotBeDeleted()
+      throws IOException {
+    var blockedSamples = new HashSet<Path>();
+    var service =
+        serviceWhoseTestEncodesWrite(
+            test -> {
+              if (test.feature() != DOLBY_VISION_TO_PQ) {
+                return TestEncodeOutput.faithful(test);
+              }
+
+              var input = test.input().orElseThrow();
+              if (blockedSamples.add(input)) {
+                preventSampleCleanup(input);
+              }
+
+              return new TestEncodeOutput(new byte[0], FAILED_EXIT_CODE);
+            });
+
+    try {
+      service.detectCapabilities();
+
+      var verifiedFeatures = Set.of(TEN_BIT, PQ, HLG);
+      assertThat(featuresByEncoder(service))
+          .containsEntry("libx265", verifiedFeatures)
+          .containsEntry("libsvtav1", verifiedFeatures);
+      assertThat(blockedSamples)
+          .isNotEmpty()
+          .allSatisfy(input -> assertThat(input.resolve("retained")).isRegularFile());
+    } finally {
+      for (var input : blockedSamples) {
+        Files.deleteIfExists(input.resolve("retained"));
+        Files.deleteIfExists(input);
+      }
+    }
   }
 
   @Test
@@ -390,6 +431,16 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         TranscodeCapabilityService.class.getResourceAsStream("dolby-vision-5-test-frame.mp4")) {
       assertThat(resource).as("the Dolby Vision test frame").isNotNull();
       return resource.readAllBytes();
+    }
+  }
+
+  private static void preventSampleCleanup(Path input) {
+    try {
+      Files.delete(input);
+      Files.createDirectory(input);
+      Files.createFile(input.resolve("retained"));
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
     }
   }
 
