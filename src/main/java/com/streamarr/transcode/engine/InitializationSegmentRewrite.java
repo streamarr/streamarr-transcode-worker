@@ -56,6 +56,7 @@ final class InitializationSegmentRewrite {
   // The sequence header that av1C takes from the first video sample; empty for any video but an AV1
   // encode.
   private final Optional<Av1SequenceHeader> inBandSequenceHeader;
+  private final boolean encodesHevcMain;
 
   private InitializationSegmentRewrite(
       VideoDecision decision, Optional<Av1SequenceHeader> inBandSequenceHeader) {
@@ -71,6 +72,9 @@ final class InitializationSegmentRewrite {
             .map(output -> DolbyVisionRecord.normalizedFor(output).box());
     this.configurationObuRewrite = configurationObuRewriteOf(decision);
     this.inBandSequenceHeader = inBandSequenceHeader;
+    this.encodesHevcMain =
+        decision instanceof VideoDecision.Encode encode
+            && encode.codecProfile() == VideoCodecProfile.HEVC_MAIN;
   }
 
   private static Optional<Av1SampleRewrite> configurationObuRewriteOf(VideoDecision decision) {
@@ -195,7 +199,7 @@ final class InitializationSegmentRewrite {
       case "moov", "trak", "mdia", "minf", "stbl" -> rebuiltChildren(type, body, Set.of());
       case "stsd" -> rebuiltAfter(type, body, STSD_FIELDS);
       case "hvc1", "av01" -> rebuiltVideoSampleEntry(type, body);
-      case "hvcC" -> readable(() -> withPlannedSeiArray(body));
+      case "hvcC" -> readable(() -> rewrittenHevcRecord(body));
       case "av1C" -> withInBandSequenceHeader(withoutStrippedConfigurationObus(body));
       default -> bytesOf(body);
     };
@@ -260,6 +264,11 @@ final class InitializationSegmentRewrite {
         new byte[] {(byte) keptArrays},
         kept.toByteArray(),
         bytesOf(reading));
+  }
+
+  private byte[] rewrittenHevcRecord(ByteBuffer hvcC) {
+    var configuration = withPlannedSeiArray(hvcC);
+    return encodesHevcMain ? HevcMainCompatibility.normalize(configuration) : configuration;
   }
 
   // FFmpeg copies the source's metadata OBUs into av1C's configOBUs (AV1 ISOBMFF binding 2.3.3),
