@@ -43,7 +43,7 @@ final class EncodeFeatureCheck {
     this.encode =
         VideoDecision.Encode.builder()
             .sourceCodecFamily(Optional.empty())
-            .sourceDynamicRange(output)
+            .sourceDynamicRange(sourceOf(feature, output))
             .outputDynamicRange(output)
             .codecProfile(
                 family == CodecFamily.HEVC
@@ -82,7 +82,8 @@ final class EncodeFeatureCheck {
       arguments.addAll(List.of("-f", "lavfi", "-i", LAVFI_SOURCE));
     }
 
-    arguments.addAll(List.of("-frames:v", "1", "-an", "-vf", filters()));
+    arguments.addAll(
+        List.of("-frames:v", "1", "-an", "-vf", FfmpegCommandBuilder.videoFormat(encoder, encode)));
     arguments.addAll(FfmpegCommandBuilder.encoderArguments(encoder, encode));
     arguments.addAll(
         List.of(
@@ -125,18 +126,20 @@ final class EncodeFeatureCheck {
     }
   }
 
-  private String filters() {
-    return switch (feature) {
-      case TEN_BIT -> "format=yuv420p10le";
-      case PQ, HLG ->
-          "format=yuv420p10le,"
-              + FfmpegCommandBuilder.frameColourFilter(
-                  HdrTransfer.of(encode.outputDynamicRange()).orElseThrow());
-      case DOLBY_VISION_TO_PQ ->
-          FfmpegCommandBuilder.DOLBY_VISION_TO_PQ_RESHAPE_FILTERS
-              + ","
-              + FfmpegCommandBuilder.frameColourFilter(HdrTransfer.PQ);
-    };
+  // The reshape's source is Dolby Vision without a compatible base; every other test encodes a
+  // source of its output's range.
+  private static VideoDynamicRange sourceOf(EncodeFeature feature, VideoDynamicRange output) {
+    if (feature != EncodeFeature.DOLBY_VISION_TO_PQ) {
+      return output;
+    }
+
+    return new VideoDynamicRange(
+        VideoDynamicRange.CompatibleBase.NONE,
+        VideoDynamicRange.Presence.ABSENT,
+        new VideoDynamicRange.DolbyVision.Present(
+            Optional.empty(),
+            VideoDynamicRange.Presence.PRESENT,
+            VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
   }
 
   private static VideoDynamicRange outputOf(EncodeFeature feature) {
