@@ -60,8 +60,8 @@ public class TranscodeCapabilityService {
   // not offer it again. The worker offers the software encoder of their families instead.
   private final Map<String, Long> withdrawnHardwareEncoders = new HashMap<>();
 
-  // The outputs beyond 8-bit 4:2:0 SDR whose own test encode each encoder passed, by encoder name.
-  private final AtomicReference<Map<String, Set<EncodeFeature>>> encodeFeatures =
+  // What each encoder's own test encodes showed, by encoder name.
+  private final AtomicReference<Map<String, TestedEncodes>> testedEncodes =
       new AtomicReference<>(Map.of());
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
@@ -96,7 +96,7 @@ public class TranscodeCapabilityService {
             .build();
     detectedHardwareEncoders = hwEncoders;
     softwareEncoderFamilies = detectSoftwareEncoders();
-    encodeFeatures.set(detectEncodeFeatures(hwEncoders, softwareEncoderFamilies));
+    testedEncodes.set(runFeatureTestEncodes(hwEncoders, softwareEncoderFamilies));
     encoders.set(resolveEncoders(hwEncoders, softwareEncoderFamilies));
 
     log.info(
@@ -106,7 +106,7 @@ public class TranscodeCapabilityService {
         hwEncoders,
         accelerator,
         encoders.get().values(),
-        encodeFeatures.get());
+        testedEncodes.get());
   }
 
   private void markUnavailable(String reason) {
@@ -186,8 +186,8 @@ public class TranscodeCapabilityService {
 
     var passed =
         withdrawn.entrySet().stream().filter(entry -> canEncodeCpuFrames(entry.getKey())).toList();
-    var recheckedFeatures =
-        detectEncodeFeatures(
+    var rechecked =
+        runFeatureTestEncodes(
             passed.stream()
                 .map(Map.Entry::getKey)
                 .flatMap(TranscodeCapabilityService::hardwareBackendsOf)
@@ -202,10 +202,10 @@ public class TranscodeCapabilityService {
         return false;
       }
 
-      var features = new HashMap<>(encodeFeatures.get());
+      var tested = new HashMap<>(testedEncodes.get());
       offeredAgain.forEach(
-          encoder -> features.put(encoder, recheckedFeatures.getOrDefault(encoder, Set.of())));
-      encodeFeatures.set(Collections.unmodifiableMap(features));
+          encoder -> tested.put(encoder, rechecked.getOrDefault(encoder, TestedEncodes.NONE)));
+      testedEncodes.set(Collections.unmodifiableMap(tested));
       resolveOfferedEncoders();
       return true;
     }
@@ -274,7 +274,8 @@ public class TranscodeCapabilityService {
     return WorkerVerifiedEncoder.builder()
         .backend(backend)
         .keyframeVerified(FfmpegCommandBuilder.isKeyframeVerified(backend.encoder()))
-        .encodeFeatures(encodeFeatures.get().getOrDefault(backend.encoder(), Set.of()))
+        .encodeFeatures(
+            testedEncodes.get().getOrDefault(backend.encoder(), TestedEncodes.NONE).features())
         .build();
   }
 
@@ -440,16 +441,16 @@ public class TranscodeCapabilityService {
   // which is none for H.264 and for a hardware encoder without recordings of its 10-bit output. A
   // software encoder runs them whether or not its family offers a hardware encoder, which a
   // failure during a stream can withdraw (ADR 0044).
-  private Map<String, Set<EncodeFeature>> detectEncodeFeatures(
+  private Map<String, TestedEncodes> runFeatureTestEncodes(
       Set<String> hardwareEncoders, Set<CodecFamily> softwareFamilies) {
-    return detectEncodeFeatures(
+    return runFeatureTestEncodes(
         Arrays.stream(CodecFamily.values())
             .flatMap(family -> usableBackends(family, hardwareEncoders, softwareFamilies))
             .toList());
   }
 
-  // The encode features of each backend that the command builder names feature tests for.
-  private Map<String, Set<EncodeFeature>> detectEncodeFeatures(List<EncoderBackend> backends) {
+  // The test encode results of each backend that the command builder names feature tests for.
+  private Map<String, TestedEncodes> runFeatureTestEncodes(List<EncoderBackend> backends) {
     var testedBackends =
         backends.stream()
             .filter(
@@ -460,12 +461,14 @@ public class TranscodeCapabilityService {
     }
 
     try (var dolbyVisionFrame = SampleDolbyVisionFrame.extract()) {
-      var features = new HashMap<String, Set<EncodeFeature>>();
+      var tested = new HashMap<String, TestedEncodes>();
       for (var backend : testedBackends) {
-        features.put(backend.encoder(), detectEncodeFeatures(backend, dolbyVisionFrame.path()));
+        tested.put(
+            backend.encoder(),
+            new TestedEncodes(detectEncodeFeatures(backend, dolbyVisionFrame.path())));
       }
 
-      return Collections.unmodifiableMap(features);
+      return Collections.unmodifiableMap(tested);
     } catch (IOException e) {
       log.warn("Encode feature detection could not extract its Dolby Vision test frame", e);
       return Map.of();
@@ -482,6 +485,12 @@ public class TranscodeCapabilityService {
                     EncodeFeatureCheck.of(feature, backend.codecFamily()),
                     dolbyVisionFrame))
         .collect(Collectors.toUnmodifiableSet());
+  }
+
+  // What an encoder's own test encodes showed: the outputs beyond 8-bit 4:2:0 SDR that it writes.
+  private record TestedEncodes(Set<EncodeFeature> features) {
+
+    private static final TestedEncodes NONE = new TestedEncodes(Set.of());
   }
 
   private boolean passesFeatureTest(
