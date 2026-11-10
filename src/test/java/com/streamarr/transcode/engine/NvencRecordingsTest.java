@@ -178,10 +178,10 @@ class NvencRecordingsTest {
 
   @Test
   @DisplayName(
-      "Should declare 10 bits and no sample with static HDR metadata in every Main 10 recording"
-          + " when its source carries a mastering display and a content light level")
+      "Should declare 10 bits and carry static HDR metadata in no sample of any Main 10 recording"
+          + " when the worker deletes the frames' static HDR metadata before NVENC")
   void
-      shouldDeclareTenBitsAndNoSampleWithStaticHdrMetadataInEveryMain10RecordingWhenItsSourceCarriesAMasteringDisplayAndAContentLightLevel() {
+      shouldDeclareTenBitsAndCarryStaticHdrMetadataInNoSampleOfAnyMain10RecordingWhenTheWorkerDeletesTheFramesStaticHdrMetadataBeforeNvenc() {
     var tenBit = new ArrayList<JsonNode>();
     for (var recording : committedRecordings().get("recordings")) {
       if (recording.get("plan").get("bitDepth").asInt() == 10) {

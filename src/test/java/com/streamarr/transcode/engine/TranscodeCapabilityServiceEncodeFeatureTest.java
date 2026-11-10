@@ -308,9 +308,10 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
   @ParameterizedTest(name = "{0}")
   @MethodSource("failedFeatureTests")
   @DisplayName(
-      "Should list no encode feature of hevc_nvenc whose test encode with it fails or writes"
-          + " another output, and keep the software HEVC encoder's own results")
-  void shouldListNoEncodeFeatureOfHevcNvencWhoseTestEncodeWithItFailsOrWritesAnotherOutput(
+      "Should leave an encode feature out of hevc_nvenc's list and keep the software HEVC"
+          + " encoder's own results when the feature's test encode with hevc_nvenc fails or"
+          + " writes another output")
+  void shouldLeaveAnEncodeFeatureOutOfHevcNvencsListWhenItsTestEncodeWithHevcNvencFails(
       String failure, EncodeFeature failedFeature, TestEncodeOutput failedOutput) {
     var service =
         serviceWithHardware(
@@ -393,9 +394,8 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
 
   @Test
   @DisplayName(
-      "Should offer the software HEVC encoder with its own encode features once hevc_nvenc is"
-          + " withdrawn, and hevc_nvenc with its encode features once it passes its test encode"
-          + " again")
+      "Should offer each HEVC encoder with its own encode features when hevc_nvenc is withdrawn"
+          + " and then passes its test encode again")
   void shouldOfferEachHevcEncoderWithItsOwnEncodeFeaturesWhenHevcNvencIsWithdrawnAndRestored() {
     var service =
         serviceWithHardware(
