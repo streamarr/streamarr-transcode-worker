@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -28,7 +29,11 @@ import java.util.stream.Collectors;
  * that one before it chooses its coding tools, and puts another in the video stream itself. Every
  * sequence header of a coded video sequence must match (AV1 7.5), and a decoder can initialize from
  * {@code av1C}. The encoder settings alone decide the in-band header, so every attempt writes the
- * same record.
+ * same record. An encode's {@code hvc1} or {@code av01} sample entry holds the job's static HDR
+ * metadata as one {@code mdcv} and one {@code clli} box when its output is PQ, and neither box
+ * otherwise, whatever FFmpeg wrote there: FFmpeg writes none for the worker's encodes, and would
+ * take the values of any it wrote from the source's frames. A copy's entry keeps the boxes that
+ * FFmpeg wrote.
  */
 final class InitializationSegmentRewrite {
 
@@ -43,6 +48,12 @@ final class InitializationSegmentRewrite {
   private static final int OBU_SEQUENCE_HEADER = 1;
   // A box header's type follows its 32-bit size, in the compact and the 64-bit form alike.
   private static final int TYPE_OFFSET = 4;
+  // The mastering display colour volume and content light level boxes (ISO/IEC 14496-12 12.1.5
+  // and 12.1.6).
+  private static final String MASTERING_DISPLAY_BOX = "mdcv";
+  private static final String CONTENT_LIGHT_LEVEL_BOX = "clli";
+  private static final Set<String> STATIC_HDR_METADATA_BOX_TYPES =
+      Set.of(MASTERING_DISPLAY_BOX, CONTENT_LIGHT_LEVEL_BOX);
 
   // The SEI NAL units that every hvc1 record of the segment holds after the rewrite.
   private final List<byte[]> seiUnits;
@@ -57,6 +68,9 @@ final class InitializationSegmentRewrite {
   // encode.
   private final Optional<Av1SequenceHeader> inBandSequenceHeader;
   private final boolean encodesHevcMain;
+  // The static HDR metadata boxes that replace any of an encode's video sample entry: the job's
+  // for a PQ output and none for another output. Empty for a copy, whose entry keeps its boxes.
+  private final Optional<byte[]> encodedStaticHdrMetadataBoxes;
 
   private InitializationSegmentRewrite(
       VideoDecision decision, Optional<Av1SequenceHeader> inBandSequenceHeader) {
@@ -75,6 +89,30 @@ final class InitializationSegmentRewrite {
     this.encodesHevcMain =
         decision instanceof VideoDecision.Encode encode
             && encode.codecProfile() == VideoCodecProfile.HEVC_MAIN;
+    this.encodedStaticHdrMetadataBoxes = encodedStaticHdrMetadataBoxesOf(decision);
+  }
+
+  // Each box holds its values as the HEVC SEI message of the same name does, in the same units.
+  private static Optional<byte[]> encodedStaticHdrMetadataBoxesOf(VideoDecision decision) {
+    if (!(decision instanceof VideoDecision.Encode encode)) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        encode
+            .staticHdrMetadata()
+            .map(
+                metadata ->
+                    concat(
+                        box(
+                            MASTERING_DISPLAY_BOX,
+                            HevcStaticMetadataSei.masteringDisplayPayload(
+                                metadata.masteringDisplay())),
+                        box(
+                            CONTENT_LIGHT_LEVEL_BOX,
+                            HevcStaticMetadataSei.contentLightLevelPayload(
+                                metadata.contentLightLevel()))))
+            .orElse(new byte[0]));
   }
 
   private static Optional<Av1SampleRewrite> configurationObuRewriteOf(VideoDecision decision) {
@@ -211,14 +249,21 @@ final class InitializationSegmentRewrite {
     return concat(bytesOf(body.slice(0, fieldBytes)), children);
   }
 
-  // A normalized record replaces every record that FFmpeg wrote, after the entry's other boxes.
+  // An encode's static HDR metadata boxes and a normalized record each replace every box of
+  // their types that FFmpeg wrote, after the entry's other boxes.
   private byte[] rebuiltVideoSampleEntry(String type, ByteBuffer body) {
     var fieldBytes = CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES;
-    var droppedTypes = normalizedRecord.map(_ -> DolbyVisionRecord.BOX_TYPES).orElse(Set.of());
+    var droppedTypes = new HashSet<String>();
+    normalizedRecord.ifPresent(_ -> droppedTypes.addAll(DolbyVisionRecord.BOX_TYPES));
+    encodedStaticHdrMetadataBoxes.ifPresent(
+        _ -> droppedTypes.addAll(STATIC_HDR_METADATA_BOX_TYPES));
     var children =
         rebuiltChildren(type, new BoxView(type, body).after(fieldBytes).body(), droppedTypes);
     return concat(
-        bytesOf(body.slice(0, fieldBytes)), children, normalizedRecord.orElse(new byte[0]));
+        bytesOf(body.slice(0, fieldBytes)),
+        children,
+        encodedStaticHdrMetadataBoxes.orElse(new byte[0]),
+        normalizedRecord.orElse(new byte[0]));
   }
 
   // The header with the type that the box takes: a planned dvh1 output renames the hvc1 entry.
@@ -361,6 +406,14 @@ final class InitializationSegmentRewrite {
     }
 
     return box.putInt(0, box.capacity()).array();
+  }
+
+  private static byte[] box(String type, byte[] body) {
+    return ByteBuffer.allocate(BoxHeader.COMPACT_LENGTH + body.length)
+        .putInt(BoxHeader.COMPACT_LENGTH + body.length)
+        .put(type.getBytes(StandardCharsets.US_ASCII))
+        .put(body)
+        .array();
   }
 
   private static byte[] bytesOf(ByteBuffer buffer) {

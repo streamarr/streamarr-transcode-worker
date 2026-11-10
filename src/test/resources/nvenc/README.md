@@ -32,7 +32,8 @@ source that each keep their range:
 - no sample carries a mastering display or content light level message, although every keyframe of
   the PQ source carries both. NVENC writes the messages of each keyframe's frame into the samples
   and takes no values from the command, so the worker deletes them from the frames, and the
-  producer writes the job's values into the `hvc1` record.
+  producer writes the job's values into the `hvc1` record and into the sample entry's `mdcv` and
+  `clli` boxes. The recorded initialization segments are FFmpeg's own and hold neither box.
 
 The reshape of Dolby Vision profile 5 or 10.0 into PQ runs on the CPU before the encoder, which
 takes the arguments of a PQ encode, so the PQ recordings also stand for that encode. No recording

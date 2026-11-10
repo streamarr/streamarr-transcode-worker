@@ -73,6 +73,14 @@ class HdrEncodeSmokeTest {
   private static final StaticHdrMetadata FALLBACK_METADATA =
       new StaticHdrMetadata(display(10_000_000, 1), new PlannedCopyOutput.ContentLightLevel(0, 0));
 
+  // The P3 D65 display and its white point as an mdcv box holds them (ISO/IEC 14496-12 12.1.6), and
+  // each metadata's luminances and clli box (12.1.5).
+  private static final String P3_D65_PRIMARIES = "33C286C41D4C0BB884D03E803D134042";
+  private static final String SOURCE_MDCV = P3_D65_PRIMARIES + "0098968000000032";
+  private static final String SOURCE_CLLI = "03E80190";
+  private static final String FALLBACK_MDCV = P3_D65_PRIMARIES + "0098968000000001";
+  private static final String FALLBACK_CLLI = "00000000";
+
   @TempDir static Path root;
   private static Path hdr10;
   private static Path hlg;
@@ -113,6 +121,8 @@ class HdrEncodeSmokeTest {
 
     var probed = probed(delivered.acceptedBytes());
 
+    assertStaticHdrMetadataBoxes(delivered, List.of(SOURCE_MDCV), List.of(SOURCE_CLLI));
+
     assertThat(probed)
         .contains(
             "profile=Main 10",
@@ -152,8 +162,10 @@ class HdrEncodeSmokeTest {
             .staticHdrMetadata(Optional.of(SOURCE_METADATA))
             .build();
 
-    var probed = probed(encoded(hdr10, encode, 0).acceptedBytes());
+    var delivered = encoded(hdr10, encode, 0);
+    var probed = probed(delivered.acceptedBytes());
 
+    assertStaticHdrMetadataBoxes(delivered, List.of(SOURCE_MDCV), List.of(SOURCE_CLLI));
     // AV1 stores the chromaticities in units of 1/65536 and the peak in units of 1/256 cd/m².
     assertThat(probed)
         .contains(
@@ -318,7 +330,10 @@ class HdrEncodeSmokeTest {
             .staticHdrMetadata(Optional.of(FALLBACK_METADATA))
             .build();
 
-    var probed = probed(encoded(hdr10, encode, 0).acceptedBytes());
+    var delivered = encoded(hdr10, encode, 0);
+    var probed = probed(delivered.acceptedBytes());
+
+    assertStaticHdrMetadataBoxes(delivered, List.of(FALLBACK_MDCV), List.of(FALLBACK_CLLI));
 
     assertThat(probed)
         .contains(
@@ -347,7 +362,10 @@ class HdrEncodeSmokeTest {
             .staticHdrMetadata(Optional.empty())
             .build();
 
-    var probed = probed(encoded(hlg, encode, 0).acceptedBytes());
+    var delivered = encoded(hlg, encode, 0);
+    var probed = probed(delivered.acceptedBytes());
+
+    assertStaticHdrMetadataBoxes(delivered, List.of(), List.of());
 
     assertThat(probed)
         .contains(
@@ -374,6 +392,7 @@ class HdrEncodeSmokeTest {
     var fromSegment2 = encoded(profile5Source(), encode, 2);
 
     assertThat(fromSegment2.contentOf("init.mp4")).isEqualTo(fromStart.contentOf("init.mp4"));
+    assertStaticHdrMetadataBoxes(fromSegment2, List.of(FALLBACK_MDCV), List.of(FALLBACK_CLLI));
     assertThat(probed(fromSegment2.acceptedBytes()))
         .contains(
             "profile=Main 10", "color_transfer=smpte2084", "min_luminance=1/10000", "max_content=0")
@@ -453,6 +472,14 @@ class HdrEncodeSmokeTest {
         .maxLuminance(maxLuminance)
         .minLuminance(minLuminance)
         .build();
+  }
+
+  private static void assertStaticHdrMetadataBoxes(
+      RecordingSegmentSink delivered, List<String> masteringDisplay, List<String> lightLevel) {
+    var initialization = new InitializationSegment(delivered.contentOf("init.mp4"));
+
+    assertThat(SampleEntryBoxes.bodiesOf(initialization, "mdcv")).isEqualTo(masteringDisplay);
+    assertThat(SampleEntryBoxes.bodiesOf(initialization, "clli")).isEqualTo(lightLevel);
   }
 
   private static List<String> staticMetadataLines(String probed) {
