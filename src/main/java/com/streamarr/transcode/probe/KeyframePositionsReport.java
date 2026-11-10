@@ -5,7 +5,6 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.MeasuredStream;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
-import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
@@ -33,29 +32,12 @@ record KeyframePositionsReport(
     @NonNull List<KeyframeTime> keyframes,
     List<TrackMeasurement> measured) {
 
-  /** The most keyframes whose positions one probe report holds. */
-  static final int MAXIMUM_KEYFRAMES_PER_PROBE = 1_048_576;
-
-  /** The most keyframe intervals, added up over the measured streams, in one probe report. */
-  static final long MAXIMUM_INTERVALS_PER_PROBE = 8_388_608;
-
-  /** The most streams that one probe report's measurement names. */
-  static final int MAXIMUM_MEASURED_STREAMS = 1_024;
-
   KeyframePositionsReport {
     keyframes = List.copyOf(keyframes);
     measured = measured == null ? List.of() : List.copyOf(measured);
   }
 
   ProbeAttemptReport report() {
-    if (keyframes.size() > MAXIMUM_KEYFRAMES_PER_PROBE) {
-      return ProbeReports.resultOnly(
-          probed.result().toBuilder()
-              .clearMedia()
-              .setFailure(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE)
-              .build());
-    }
-
     var start = containerStart(probed.ffprobeOutput(), timeBase);
     var zeroBased =
         keyframes.stream()
@@ -112,13 +94,11 @@ record KeyframePositionsReport(
 
   /**
    * Whether the contract can carry the measurement: each stream has one entry for each keyframe,
-   * the time bases fit, and the entries stay within the report's bounds. A measurement that cannot
-   * be carried is left out, and the result reports no measurement.
+   * and the time bases fit. A measurement that cannot be carried is left out, and the result
+   * reports no measurement.
    */
   private static boolean isReportable(List<TrackMeasurement> measured, int keyframeCount) {
     return !measured.isEmpty()
-        && measured.size() <= MAXIMUM_MEASURED_STREAMS
-        && (long) keyframeCount * measured.size() <= MAXIMUM_INTERVALS_PER_PROBE
         && measured.stream()
             .allMatch(
                 stream ->

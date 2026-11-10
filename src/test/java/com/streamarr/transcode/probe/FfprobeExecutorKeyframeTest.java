@@ -34,6 +34,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.StreamMeasurementIntervals;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import com.streamarr.transcode.probe.SyntheticMp4.DurationRun;
@@ -454,41 +455,25 @@ class FfprobeExecutorKeyframeTest {
   }
 
   @Test
-  @DisplayName("Should report the measurement when it measures exactly 1,024 streams")
-  void shouldReportMeasurementWhenItMeasuresExactly1024Streams(@TempDir Path directory)
-      throws Exception {
-    var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 24_000));
-    var ffprobe = twoTrackFfprobe(audioStreamsOfSecondTrack(1_023));
-
-    var report = ffprobe.executor().probe(source, keyframeRequest());
-
-    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsCount())
-        .isEqualTo(1_024);
-  }
-
-  // worker_session.proto: the parts of one attempt name at most 1,024 streams.
-  @Test
-  @DisplayName("Should report no measurement when it would measure more than 1,024 streams")
-  void shouldReportNoMeasurementWhenItWouldMeasureMoreThan1024Streams(@TempDir Path directory)
+  @DisplayName("Should report the measurement of every stream when it measures 1,025 streams")
+  void shouldReportTheMeasurementOfEveryStreamWhenItMeasures1025Streams(@TempDir Path directory)
       throws Exception {
     var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 24_000));
     var ffprobe = twoTrackFfprobe(audioStreamsOfSecondTrack(1_024));
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.getResult().getMedia().getKeyframes().hasPositions()).isTrue();
-    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsCount())
+        .isEqualTo(1_025);
+    assertThat(report.getStreamMeasurementIntervalsList()).hasSize(1_025);
   }
 
-  // worker_session.proto: the parts of one attempt hold at most 8,388,608 interval entries.
   @Test
   @DisplayName(
-      "Should report no measurement when its streams would hold more than 8,388,608 keyframe"
-          + " intervals in all")
-  void shouldReportNoMeasurementWhenItsStreamsWouldHoldMoreThan8388608KeyframeIntervals(
+      "Should report the measurement when its streams hold 8,389,632 keyframe intervals in all")
+  void shouldReportTheMeasurementWhenItsStreamsHold8389632KeyframeIntervalsInAll(
       @TempDir Path directory) throws Exception {
-    // 8,193 keyframe intervals in each of 1,024 streams make 8,389,632.
+    // 8,193 keyframe intervals in each of 1,024 streams.
     var source =
         Files.write(
             directory.resolve("source.mp4"),
@@ -506,10 +491,44 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsCount())
+        .isEqualTo(1_024);
+    assertThat(
+            report.getStreamMeasurementIntervalsList().stream()
+                .mapToLong(StreamMeasurementIntervals::getKeyframeIntervalBytesCount)
+                .sum())
+        .isEqualTo(8_389_632L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should report every keyframe position when an MP4 without a sync-sample table holds"
+          + " 1,048,577 samples")
+  void shouldReportEveryKeyframePositionWhenMp4WithoutSyncSampleTableHolds1048577Samples(
+      @TempDir Path directory) throws Exception {
+    // No stss: every sample is a sync sample, as in an intra-only track.
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(1_048_577, 1)
+                .build()
+                .bytes());
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(streamsBesideVideoTrack(""))
+            .packet(
+                "1048.576000%+#1",
+                "{\"packets\":[{\"pts\":1048576,\"dts\":1048576,\"flags\":\"K__\"}]}")
+            .build();
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
     assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
-        .isEqualTo(8_193);
-    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
+        .isEqualTo(1_048_577);
+    assertThat(report.getKeyframePresentationTimeDeltasCount()).isEqualTo(1_048_577);
+    assertThat(report.getKeyframeDecodeTimeDeltasCount()).isEqualTo(1_048_577);
   }
 
   // FFmpeg walks the stss in order, as the keyframe reader does, so a sync sample that the stss
