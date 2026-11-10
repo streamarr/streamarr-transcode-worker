@@ -126,6 +126,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final AtomicReference<SegmentUploadLimit> uploadLimit;
   private WorkerProbeSession probeSession;
   private ScheduledExecutorService sessionTimers;
+  private ScheduledExecutorService encoderRecheckTimer;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
   private CompletableFuture<Void> disconnected;
   private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
@@ -251,8 +252,12 @@ public final class TranscodeWorker implements AutoCloseable {
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
-    // The test encode of a withdrawn hardware encoder runs off the worker monitor (ADR 0044).
-    sessionTimers.scheduleWithFixedDelay(
+    // The test encode of a withdrawn hardware encoder runs off the worker monitor (ADR 0044), and
+    // on its own thread: it can take its whole deadline, and progress reports must not wait for it.
+    encoderRecheckTimer =
+        Executors.newSingleThreadScheduledExecutor(
+            Thread.ofVirtual().name("encoder-recheck").factory());
+    encoderRecheckTimer.scheduleWithFixedDelay(
         this::recheckWithdrawnEncoders,
         configuration.hardwareEncoderRecheckInterval().toMillis(),
         configuration.hardwareEncoderRecheckInterval().toMillis(),
@@ -1334,6 +1339,8 @@ public final class TranscodeWorker implements AutoCloseable {
     probeSession.shutdown();
     sessionTimers.shutdownNow();
     sessionTimers = null;
+    encoderRecheckTimer.shutdownNow();
+    encoderRecheckTimer = null;
     observer.sessionYields.close();
     observer.sessionHoldBacks.close();
     var attempts = claimActiveAttempts();
