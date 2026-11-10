@@ -2544,10 +2544,13 @@ class ProducerTest {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
 
-    // Keyframes at 0 s, 10.01 s and 20.02 s on 6 s slots: slots 2 and 4 merge.
+    // Keyframes at 0 s, 10.01 s and 20.02 s on 6 s slots: slots 2 and 4 merge, so the segments
+    // start at 0 s, 6 s and 18 s.
     var producer =
         producerFor(process, recording)
-            .intervals(SegmentIntervals.onSegmentList(6, List.of(0L, 1L, 3L)))
+            .intervals(
+                SegmentIntervals.onExactStarts(
+                    6, new ExactSegmentStarts(List.of(0L, 6L, 18L), 1, 1)))
             .mediaSegmentCount(3)
             .start();
 

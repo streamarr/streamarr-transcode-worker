@@ -1142,7 +1142,7 @@ class FfmpegCommandBuilderTest {
     return request(TranscodeMode.FULL_TRANSCODE)
         .targetSegmentDuration(3)
         .mediaSegmentCount(4)
-        .segmentStartSlots(List.of(0L, 3L, 6L, 10L));
+        .exactSegmentStarts(Optional.of(new ExactSegmentStarts(List.of(0L, 9L, 18L, 30L), 1, 1)));
   }
 
   @ParameterizedTest(name = "{0}")

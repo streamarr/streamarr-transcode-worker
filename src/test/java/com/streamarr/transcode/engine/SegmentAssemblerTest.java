@@ -132,7 +132,8 @@ class SegmentAssemblerTest {
     // 1 s slots: slot 1 holds no keyframe, so segment 0 runs from 0 s to 2 s.
     var assembler =
         assemblerOfOneSecondSegments()
-            .intervals(SegmentIntervals.onSegmentList(1, List.of(0L, 2L)))
+            .intervals(
+                SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L, 2L), 1, 1)))
             .build();
 
     var closed = assembleEvery(assembler, output);
@@ -182,7 +183,7 @@ class SegmentAssemblerTest {
     var assembler =
         assemblerOfOneSecondSegments()
             .intervals(
-                SegmentIntervals.onSegmentList(1, List.of(0L, 2L, 3L))
+                SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L, 2L, 3L), 1, 1))
                     .withLastListedSegmentEndingAt(Duration.ofSeconds(4)))
             .build();
 
@@ -217,7 +218,7 @@ class SegmentAssemblerTest {
     var assembler =
         assemblerOfOneSecondSegments()
             .intervals(
-                SegmentIntervals.onSegmentList(1, List.of(0L))
+                SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L), 1, 1))
                     .withLastListedSegmentEndingAt(Duration.ofSeconds(2)))
             .build();
 

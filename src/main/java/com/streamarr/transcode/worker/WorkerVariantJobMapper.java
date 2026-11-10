@@ -112,7 +112,7 @@ final class WorkerVariantJobMapper {
           "The exact segment starts hold a tick count past a signed 64-bit value");
     }
 
-    requireSegmentList(ticks, execution.getMediaSegmentCount(), "tick");
+    requireSegmentList(ticks, execution.getMediaSegmentCount());
     var timeBase = execution.getSegmentStartTimeBase();
     if (timeBase.getNumerator() == 0 || timeBase.getDenominator() == 0) {
       throw new InvalidJobSpecificationException(
@@ -130,8 +130,8 @@ final class WorkerVariantJobMapper {
   }
 
   // A non-empty segment list holds one start for each media segment, from 0 and strictly
-  // increasing, in units such as slots.
-  private static void requireSegmentList(List<Long> starts, int mediaSegmentCount, String unit) {
+  // increasing.
+  private static void requireSegmentList(List<Long> starts, int mediaSegmentCount) {
     if (starts.isEmpty()) {
       return;
     }
@@ -147,28 +147,24 @@ final class WorkerVariantJobMapper {
 
     if (starts.getFirst() != 0) {
       throw new InvalidJobSpecificationException(
-          "The segment list starts at " + unit + " " + starts.getFirst() + " instead of 0");
+          "The segment list starts at tick " + starts.getFirst() + " instead of 0");
     }
 
     for (var index = 1; index < starts.size(); index++) {
-      requireLaterStart(starts, index, unit);
+      requireLaterStart(starts, index);
     }
   }
 
-  private static void requireLaterStart(List<Long> starts, int index, String unit) {
+  private static void requireLaterStart(List<Long> starts, int index) {
     if (starts.get(index) <= starts.get(index - 1)) {
       throw new InvalidJobSpecificationException(
           "Segment "
               + index
-              + " starts at "
-              + unit
-              + " "
+              + " starts at tick "
               + starts.get(index)
               + ", not after segment "
               + (index - 1)
-              + "'s "
-              + unit
-              + " "
+              + "'s tick "
               + starts.get(index - 1));
     }
   }
