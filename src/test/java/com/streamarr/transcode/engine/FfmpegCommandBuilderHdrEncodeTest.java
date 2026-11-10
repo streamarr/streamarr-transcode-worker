@@ -9,10 +9,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 // streamarr/streamarr-transcode-worker#27: what the command builder needs from a 10-bit or HDR
@@ -151,6 +153,36 @@ class FfmpegCommandBuilderHdrEncodeTest {
             ":range=tv,sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,"
                 + "sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL,fps=");
     assertThat(command).doesNotContain("-x265-params", "-svtav1-params");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"hevc_qsv,PQ", "hevc_qsv,HLG", "hevc_vaapi,PQ", "hevc_vaapi,HLG"})
+  @DisplayName(
+      "Should keep the frames' static HDR metadata when hevc_qsv or hevc_vaapi encodes PQ or HLG,"
+          + " because no recording shows that either writes it into the samples")
+  void shouldKeepTheFramesStaticHdrMetadataWhenHevcQsvOrHevcVaapiEncodesPqOrHlg(
+      String encoder, VideoDynamicRange.CompatibleBase base) {
+    var command = commandOf(hdrEncode(base), encoder);
+
+    assertThat(filtersOf(command)).contains("format=p010le").doesNotContain("sidedata=");
+  }
+
+  @Test
+  @DisplayName(
+      "Should test hevc_nvenc for exactly the 10-bit, PQ, HLG and Dolby Vision to PQ encode"
+          + " features and no other hardware encoder for any when the worker names the feature"
+          + " tests of an encoder")
+  void shouldTestHevcNvencForExactlyItsRecordedEncodeFeaturesWhenNamingAnEncodersFeatureTests() {
+    assertThat(FfmpegCommandBuilder.testedEncodeFeatures("hevc_nvenc"))
+        .containsExactlyInAnyOrder(
+            EncodeFeature.TEN_BIT,
+            EncodeFeature.PQ,
+            EncodeFeature.HLG,
+            EncodeFeature.DOLBY_VISION_TO_PQ);
+    assertThat(
+            Stream.of("h264_nvenc", "av1_nvenc", "hevc_qsv", "hevc_vaapi", "hevc_amf", "unknown")
+                .map(FfmpegCommandBuilder::testedEncodeFeatures))
+        .allSatisfy(features -> assertThat(features).isEmpty());
   }
 
   @Test

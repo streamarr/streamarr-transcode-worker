@@ -70,9 +70,17 @@ public class FfmpegCommandBuilder {
           .build();
   // hevc_nvenc's Main 10 recordings from 10-bit BT.709, PQ and HLG sources show the same keyframes
   // (src/test/resources/nvenc). The reshape of Dolby Vision into PQ runs on the CPU before the
-  // encoder, which then takes the arguments of a PQ encode.
+  // encoder, which then takes the arguments of a PQ encode. The features are named one by one, so
+  // a later feature joins only with recordings of its own.
   private static final EncoderTraits HEVC_NVENC =
-      NVENC.toBuilder().testedEncodeFeatures(Set.of(EncodeFeature.values())).build();
+      NVENC.toBuilder()
+          .testedEncodeFeatures(
+              Set.of(
+                  EncodeFeature.TEN_BIT,
+                  EncodeFeature.PQ,
+                  EncodeFeature.HLG,
+                  EncodeFeature.DOLBY_VISION_TO_PQ))
+          .build();
   // QSV and VAAPI take nv12 from system memory and refuse yuv420p.
   private static final String NV12 = "nv12";
   private static final EncoderTraits QSV =
@@ -1375,7 +1383,8 @@ public class FfmpegCommandBuilder {
 
   // NVENC writes the mastering display and content light level of each keyframe's frame into the
   // samples, and takes no values from the command. A source's values can differ from the job's,
-  // which the producer writes into the hvc1 record, so the frames reach NVENC without them.
+  // which the producer writes into the initialization segment, so the frames reach NVENC without
+  // them.
   private static String staticHdrMetadataDeletion(String encoder) {
     if (!traitsOf(encoder).writesStaticHdrMetadataOfFrames()) {
       return "";
