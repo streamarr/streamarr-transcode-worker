@@ -63,6 +63,7 @@ public class FfmpegCommandBuilder {
           .takesNvencPreset(true)
           .fixedGop(true)
           .tenBitPixelFormat(P010)
+          .writesStaticHdrMetadataOfFrames(true)
           .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
           .codecProfileForcing(CodecProfileForcing.NVENC)
           .build();
@@ -1349,15 +1350,31 @@ public class FfmpegCommandBuilder {
       case RESHAPE_DOLBY_VISION_TO_PQ ->
           DOLBY_VISION_TO_PQ_RESHAPE_FILTERS
               + encoderFormatAfterThePlanarOne(encoder, decision)
-              + hdrColourParameters(decision);
+              + hdrColourParameters(encoder, decision);
       case KEEP_THE_SOURCES_RANGE ->
-          FORMAT_FILTER + encoderPixelFormat(encoder, decision) + hdrColourParameters(decision);
+          FORMAT_FILTER
+              + encoderPixelFormat(encoder, decision)
+              + hdrColourParameters(encoder, decision);
       case CONVERT_TO_BT709 -> FORMAT_FILTER + encoderPixelFormat(encoder, decision);
     };
   }
 
-  private static String hdrColourParameters(VideoDecision decision) {
-    return hdrTransferOf(decision).map(transfer -> "," + frameColourFilter(transfer)).orElse("");
+  private static String hdrColourParameters(String encoder, VideoDecision decision) {
+    return hdrTransferOf(decision)
+        .map(transfer -> "," + frameColourFilter(transfer) + staticHdrMetadataDeletion(encoder))
+        .orElse("");
+  }
+
+  // NVENC writes the mastering display and content light level of each keyframe's frame into the
+  // samples, and takes no values from the command. A source's values can differ from the job's,
+  // which the producer writes into the hvc1 record, so the frames reach NVENC without them.
+  private static String staticHdrMetadataDeletion(String encoder) {
+    if (!traitsOf(encoder).writesStaticHdrMetadataOfFrames()) {
+      return "";
+    }
+
+    return ",sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA"
+        + ",sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL";
   }
 
   /**
@@ -1672,6 +1689,7 @@ public class FfmpegCommandBuilder {
       boolean disablesSceneCutsByThreshold,
       boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
+      boolean writesStaticHdrMetadataOfFrames,
       @NonNull String eightBitPixelFormat,
       @NonNull String tenBitPixelFormat,
       @NonNull List<String> frameTypeOptions,
