@@ -4,6 +4,7 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.MeasuredStream;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
+import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
@@ -37,6 +38,9 @@ record KeyframePositionsReport(
   /** The contract bounds each list of a ProbeKeyframePositionsPart to this many entries. */
   static final int MAXIMUM_KEYFRAMES_PER_PART = 4_096;
 
+  /** The contract bounds the entries across one attempt's ProbeKeyframePositionsPart messages. */
+  static final int MAXIMUM_KEYFRAMES_PER_PROBE = 1_048_576;
+
   /** The contract bounds the interval entries across one attempt's measurement parts. */
   static final long MAXIMUM_INTERVALS_PER_PROBE = 8_388_608;
 
@@ -49,6 +53,14 @@ record KeyframePositionsReport(
   }
 
   ProbeAttemptReport report() {
+    if (keyframes.size() > MAXIMUM_KEYFRAMES_PER_PROBE) {
+      return ProbeAttemptReport.resultOnly(
+          probed.result().toBuilder()
+              .clearMedia()
+              .setFailure(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE)
+              .build());
+    }
+
     var start = containerStart(probed.ffprobeOutput(), timeBase);
     var zeroBased =
         keyframes.stream()
