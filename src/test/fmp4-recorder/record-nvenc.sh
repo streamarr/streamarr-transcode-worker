@@ -11,7 +11,8 @@
 # keyframe time out. Every recording takes p4, the NVENC preset of Automatic's `faster`; at 1080p the
 # extended-GOP recordings are repeated at every other NVENC preset of the preset scale (ADR 0044).
 # hevc_nvenc also records its extended-GOP encodes in Main 10 at every rung, from 10-bit BT.709, PQ
-# and HLG sources that keep their range.
+# and HLG sources that keep their range, and from a Dolby Vision profile 5 source that NVDEC
+# decodes and the GPU scales and reshapes into PQ.
 # nvenc-recordings.mjs then derives, from the recordings alone:
 #   - whether every forced keyframe is a sync sample
 #   - whether every forced keyframe is an IDR picture with no leading pictures (a closed GOP)
@@ -28,9 +29,11 @@
 #
 # Safety: every FFmpeg run happens inside the pinned worker image, started through its launcher as
 # the worker is, with no network, no capabilities, a read-only root filesystem and only the work
-# directory mounted. The source is synthesized there with lavfi; no media file from the host is
-# read. Everything the script writes stays inside the results directory: the work directory is a
-# subdirectory of it, and it is removed on every exit. The whole run stops at --time-limit.
+# directory mounted. The source is synthesized there with lavfi; the only media file read from the
+# host is this repository's own synthetic Dolby Vision profile 5 fixture, whose RPUs the Dolby
+# Vision source carries. Everything the script writes stays inside the results directory: the work
+# directory is a subdirectory of it, and it is removed on every exit. The whole run stops at
+# --time-limit.
 set -euo pipefail
 
 SCRIPT_NAME=${0##*/}
@@ -85,10 +88,15 @@ LADDER="1080p 1080 5000000 40 avc1.640028 40 hvc1.1.6.L120.90 hvc1.2.4.L120.90
 ALL_ENCODERS="h264_nvenc hevc_nvenc"
 ALL_RUNGS="1080p 720p 480p 360p"
 # The 8-bit BT.709 range of every recording above, and the 10-bit ranges that the encoder below also
-# records in Main 10: BT.709, PQ and HLG, each from a source of that range.
+# records in Main 10: BT.709, PQ and HLG, each from a source of that range, and PQ from the Dolby
+# Vision profile 5 source, which NVDEC decodes and the GPU scales and reshapes.
 EIGHT_BIT_RANGE=sdr
-TEN_BIT_RANGES="sdr10 pq hlg"
+DOLBY_VISION_RANGE=dolby-vision
+TEN_BIT_RANGES="sdr10 pq hlg $DOLBY_VISION_RANGE"
 TEN_BIT_ENCODER=hevc_nvenc
+# The repository's synthetic 64x64 Dolby Vision profile 5 fixture, whose RPUs the Dolby Vision
+# source carries: FFmpeg's test sources generate no RPU.
+DOLBY_VISION_RPU_FIXTURE="$REPOSITORY/src/test/resources/sample-entries/dolby-vision-5-dvh1.mp4"
 # The constructed HDR10 static metadata of the PQ source, as x265 takes it: a P3 D65 display of
 # 1000 cd/m2 and 0.005 cd/m2, MaxCLL 1000 and MaxFALL 400. The worker deletes it from the frames, so
 # no recording may carry it in a sample.
@@ -216,10 +224,10 @@ level_name() {
   printf '%s.%s' "$(($1 / 10))" "$(($1 % 10))"
 }
 
-# hdr_transfer <range>: FFmpeg's name of the transfer of a PQ or HLG range, else nothing.
+# hdr_transfer <range>: FFmpeg's name of the transfer of a PQ or HLG output, else nothing.
 hdr_transfer() {
   case "$1" in
-    pq) printf 'smpte2084' ;;
+    pq | "$DOLBY_VISION_RANGE") printf 'smpte2084' ;;
     hlg) printf 'arib-std-b67' ;;
   esac
 }
@@ -231,13 +239,14 @@ hdr_transfer() {
 # as the worker does, and extended-missed also leaves SKIPPED_FORCED_TIME out of the forced keyframe
 # times. The preset defaults to AUTOMATIC_PRESET; a recording at another preset names it. The range
 # defaults to EIGHT_BIT_RANGE; a recording of a 10-bit range names it, reads the source of that
-# range and encodes Main 10.
+# range and encodes Main 10. The Dolby Vision range decodes its source with NVDEC and scales and
+# reshapes on the GPU, as the worker does once hevc_nvenc passed its GPU reshape test.
 plan_recording() {
   local encoder=$1 rung=$2 variant=$3 preset=${4:-$AUTOMATIC_PRESET} range=${5:-$EIGHT_BIT_RANGE}
   local height bitrate level codec_string tag profile tier=() start=0 gop=$GOP_FLOORED recipe=floored
   local skipped="" replaces="" seek=() bit_depth=8 source=/work/source.mp4 pixel_format=yuv420p
   local transfer colour=() colour_conversion=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709
-  local frame_colour=""
+  local frame_colour="" gpu_decode=() scale_and_format
   local NAME_PREFIX="$encoder-$rung-"
   if [[ $preset != "$AUTOMATIC_PRESET" ]]; then
     NAME_PREFIX="$encoder-$rung-$preset-"
@@ -271,7 +280,12 @@ plan_recording() {
     *replacement) start=$REPLACEMENT_START; replaces="$NAME_PREFIX${variant%replacement}first" ;;
     extended-missed) skipped=$SKIPPED_FORCED_TIME ;;
   esac
-  local video_filter="scale=-2:$height:out_color_matrix=$colour_conversion,format=$pixel_format$frame_colour,fps=$FRAME_RATE:eof_action=pass"
+  scale_and_format="scale=-2:$height:out_color_matrix=$colour_conversion,format=$pixel_format"
+  if [[ $range == "$DOLBY_VISION_RANGE" ]]; then
+    gpu_decode=(-hwaccel cuda -hwaccel_output_format cuda)
+    scale_and_format="scale_cuda=-2:$height,tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=$pixel_format"
+  fi
+  local video_filter="$scale_and_format$frame_colour,fps=$FRAME_RATE:eof_action=pass"
   if ((start > 0)); then
     # The worker's encoded replacement decodes from its seek and trims after fps at the first frame
     # at or after its first segment's start.
@@ -299,7 +313,8 @@ gopFrames=$gop
 forcedKeyframeTimes=$times
 skippedForcedTime=$skipped
 replaces=$replaces"
-  COMMAND=(ffmpeg -hide_banner -nostdin -loglevel error -y ${seek[@]+"${seek[@]}"} -i "$source"
+  COMMAND=(ffmpeg -hide_banner -nostdin -loglevel error -y ${gpu_decode[@]+"${gpu_decode[@]}"}
+    ${seek[@]+"${seek[@]}"} -i "$source"
     -map 0:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled
     -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000
     -c:v "$encoder" -preset "$preset" -tag:v "$tag" -profile:v "$profile" -level:v "$(level_name "$level")" ${tier[@]+"${tier[@]}"}
@@ -573,6 +588,7 @@ for_each_recording write_recording
 TEN_BIT_SOURCES=0
 if records_ten_bit; then
   TEN_BIT_SOURCES=1
+  cp "$DOLBY_VISION_RPU_FIXTURE" "$WORK/dolby-vision-rpus.mp4"
 fi
 
 cat >"$WORK/record.sh" <<CONTAINER
@@ -602,6 +618,21 @@ if [ $TEN_BIT_SOURCES = 1 ]; then
   ten_bit_source sdr10 "colorprim=bt709:transfer=bt709:colormatrix=bt709"
   ten_bit_source pq "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:$PQ_SOURCE_STATIC_METADATA"
   ten_bit_source hlg "colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc"
+  # The Dolby Vision profile 5 source holds the same picture, and each frame carries an RPU of the
+  # fixture, whose 144 RPUs repeat. libx265 writes each RPU after its picture's slices. FFmpeg's
+  # libx265 declares the IPT-C2 matrix for Dolby Vision, which a profile 5 stream usually leaves
+  # unspecified, so the stream declares none. x265 encodes Dolby Vision only with a VBV.
+  ffmpeg -hide_banner -nostdin -loglevel error -y -stream_loop -1 -i dolby-vision-rpus.mp4 \\
+    -frames:v \$(($SOURCE_SECONDS * 24)) -c copy -bsf:v hevc_mp4toannexb -f hevc dolby-vision-rpus.hevc
+  ffmpeg -hide_banner -nostdin -loglevel error -y -r $FRAME_RATE -i dolby-vision-rpus.hevc \\
+    -f lavfi -i testsrc2=size=1920x1080:rate=$FRAME_RATE:duration=$SOURCE_SECONDS \\
+    -f lavfi -i smptehdbars=size=1920x1080:rate=$FRAME_RATE:duration=$SOURCE_SECONDS \\
+    -filter_complex "[0:v]scale=1920:1080,format=yuv420p10le[rpus];[1:v][2:v]overlay=enable='gte(t,3.5)*lt(t,4.5)+gte(t,27.5)*lt(t,28.5)',format=yuv420p10le[picture];[rpus][picture]overlay=format=yuv420p10:shortest=1[v]" -map "[v]" \\
+    -c:v libx265 -preset ultrafast -tag:v dvh1 -dolbyvision 1 -strict unofficial \\
+    -bsf:v hevc_metadata=matrix_coefficients=2 \\
+    -x265-params "keyint=48:no-open-gop=1:log-level=error:vbv-maxrate=40000:vbv-bufsize=40000" \\
+    "source-$DOLBY_VISION_RANGE.mp4"
+  rm dolby-vision-rpus.hevc
 fi
 duration=\$(ffprobe -v error -show_entries format=duration -of csv=p=0 source.mp4)
 millis=\$(awk -v seconds="\$duration" 'BEGIN { printf "%d", seconds * 1000 }')

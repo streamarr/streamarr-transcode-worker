@@ -137,10 +137,10 @@ class NvencRecorderCommandsTest {
 
   @Test
   @DisplayName(
-      "Should plan hevc_nvenc in Main 10 at every default-ladder rung from 10-bit BT.709, PQ and HLG"
-          + " sources with the extended GOP when the recorder runs with its defaults")
+      "Should plan hevc_nvenc in Main 10 at every default-ladder rung from 10-bit BT.709, PQ, HLG and"
+          + " Dolby Vision sources with the extended GOP when the recorder runs with its defaults")
   void
-      shouldPlanHevcNvencInMain10AtEveryDefaultLadderRungFromTenBitBt709PqAndHlgSourcesWithTheExtendedGopWhenTheRecorderRunsWithItsDefaults() {
+      shouldPlanHevcNvencInMain10AtEveryDefaultLadderRungFromTenBitBt709PqHlgAndDolbyVisionSourcesWithTheExtendedGopWhenTheRecorderRunsWithItsDefaults() {
     var variants = List.of("extended-first", "extended-replacement", "extended-missed");
     var tenBit =
         plannedRecordings().stream()
@@ -153,7 +153,7 @@ class NvencRecorderCommandsTest {
             Stream.of("1080p", "720p", "480p", "360p")
                 .flatMap(
                     rung ->
-                        Stream.of("sdr10", "pq", "hlg")
+                        Stream.of("sdr10", "pq", "hlg", "dolby-vision")
                             .flatMap(
                                 range ->
                                     variants.stream()
@@ -244,7 +244,14 @@ class NvencRecorderCommandsTest {
             .height(Integer.parseInt(job.get("height")))
             .bitrate(Long.parseLong(job.get("bitrate")))
             .build();
-    return TranscodeJob.builder().request(request).videoEncoder(encoder).build();
+    // The recorder runs the GPU reshape of the Dolby Vision source, as the worker does once the
+    // encoder passed its GPU reshape test.
+    return TranscodeJob.builder()
+        .request(request)
+        .videoEncoder(encoder)
+        .gpuDolbyVisionReshapeVerified(
+            job.get("range").equals(NvencRecordedEncodes.DOLBY_VISION_RANGE))
+        .build();
   }
 
   // The recorder's H.264 source, or its HEVC source of a 10-bit range.

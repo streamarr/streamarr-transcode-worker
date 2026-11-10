@@ -372,16 +372,20 @@ export function initializationSegmentFacts(bytes) {
 }
 
 // The limited-range BT.2020 colour description that a PQ or HLG encode declares (ITU-T H.273):
-// primaries 9, the range's transfer and the non-constant luminance matrix 9.
+// primaries 9, the range's transfer and the non-constant luminance matrix 9. The Dolby Vision range
+// names its source: the GPU reshapes it into PQ.
+const PQ_COLOUR_DESCRIPTION = { primaries: 9, transfer: 16, matrix: 9, fullRange: false };
 const HDR_COLOUR_DESCRIPTIONS = {
-  pq: { primaries: 9, transfer: 16, matrix: 9, fullRange: false },
+  pq: PQ_COLOUR_DESCRIPTION,
+  'dolby-vision': PQ_COLOUR_DESCRIPTION,
   hlg: { primaries: 9, transfer: 18, matrix: 9, fullRange: false },
 };
 
 /**
  * Whether the initialization segment passes the output check against the job: its codec string, its
- * bit depth in 4:2:0, its parameter sets and, for a PQ or HLG job, the colour description of its
- * range. Any other job's colour description is not compared, as the worker compares none.
+ * bit depth in 4:2:0, its parameter sets and, for a job whose output is PQ or HLG, the colour
+ * description of that output. Any other job's colour description is not compared, as the worker
+ * compares none.
  */
 export function outputCheck(initializationSegment, { expectedCodecString, bitDepth, range }) {
   const { codecString, pictureFormat, holdsParameterSets, colourDescription } = initializationSegment;

@@ -504,6 +504,15 @@ describe('output check', () => {
     assert.equal(outputCheck({ ...main10, colourDescription: { ...pq, matrix: 1 } }, pqJob).passes, false);
     assert.equal(outputCheck({ ...main10, colourDescription: { ...pq, fullRange: true } }, pqJob).passes, false);
   });
+
+  it('Should pass a Dolby Vision job only when the colr box declares limited-range BT.2020 PQ, into which the GPU reshapes its source', () => {
+    const dolbyVisionJob = { ...pqJob, range: 'dolby-vision' };
+
+    assert.deepEqual(outputCheck(main10, dolbyVisionJob).expectedColourDescription, pq);
+    assert.equal(outputCheck(main10, dolbyVisionJob).passes, true);
+    assert.equal(outputCheck({ ...main10, colourDescription: null }, dolbyVisionJob).passes, false);
+    assert.equal(outputCheck({ ...main10, colourDescription: { ...pq, transfer: 18 } }, dolbyVisionJob).passes, false);
+  });
 });
 
 describe('initialization segment pairs', () => {
