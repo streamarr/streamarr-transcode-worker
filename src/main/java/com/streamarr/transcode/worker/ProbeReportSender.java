@@ -4,6 +4,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -15,11 +16,12 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Sends the probe reports of one worker session, each in a report call of its own on a virtual
- * thread (ADR 0062). A report whose call fails is logged and discarded: the worker never sends a
- * report twice, and the server runs the probe again. This object's monitor guards the open calls,
- * and no thread waits under it, so a probe's thread, the control stream's thread and a holder of
- * the worker monitor can each hand over a report or shut the sender down without waiting for the
- * server.
+ * thread (ADR 0062). It keeps at most the report calls open that the server accepts from the worker
+ * at once, and its other reports wait in a {@link ProbeReportQueue}. A report whose call fails is
+ * logged and discarded: the worker never sends a report twice, and the server runs the probe again.
+ * This object's monitor guards the waiting reports and the open calls, and no thread waits under
+ * it, so a probe's thread, the control stream's thread and a holder of the worker monitor can each
+ * hand over a report or shut the sender down without waiting for the server.
  */
 @Slf4j
 final class ProbeReportSender implements AutoCloseable {
@@ -28,7 +30,10 @@ final class ProbeReportSender implements AutoCloseable {
   private final ExecutorService executor;
   private final Duration readinessTimeout;
   private final Duration acknowledgementTimeout;
+  private final ProbeReportQueue waiting = new ProbeReportQueue();
   private final Set<ProbeReportCall> open = new HashSet<>();
+  // The most calls open at once; 0 until the server states a limit, and when it states none.
+  private long limit;
   private boolean shutdown;
 
   @Builder(access = AccessLevel.PACKAGE)
@@ -43,15 +48,49 @@ final class ProbeReportSender implements AutoCloseable {
     this.acknowledgementTimeout = acknowledgementTimeout;
   }
 
-  /** Takes a probe attempt's report to send. A sender that has shut down discards it. */
-  synchronized void submit(@NonNull ProbeAttemptReport report) {
+  /**
+   * Takes the number of report calls that the server accepts from the worker at once, which the
+   * server states when it accepts the worker session. A value of 0 states no limit.
+   */
+  synchronized void limit(int probeReportLimit) {
+    limit = Integer.toUnsignedLong(probeReportLimit);
+    openWaiting();
+  }
+
+  /**
+   * Takes a probe attempt's report to send, which waits in this order while the sender holds its
+   * limit of open calls. A sender that has shut down discards the report.
+   */
+  synchronized void submit(
+      @NonNull ProbeAttemptReport report, @NonNull ProbeReportQueue.Order order) {
     if (shutdown) {
       return;
     }
 
-    var call = new ProbeReportCall(report, readinessTimeout, acknowledgementTimeout);
-    open.add(call);
-    executor.execute(() -> send(call));
+    waiting.add(report, order);
+    openWaiting();
+  }
+
+  /**
+   * Moves this probe attempt's report, when it still waits, to the reports of canceled probes. The
+   * server ends the worker session when a canceled probe's report is late.
+   */
+  synchronized void sendFirst(@NonNull UUID probeAttemptId) {
+    waiting.moveToCanceled(probeAttemptId);
+  }
+
+  // Holds this monitor.
+  private void openWaiting() {
+    while (limit == 0 || open.size() < limit) {
+      var next = waiting.poll();
+      if (next.isEmpty()) {
+        return;
+      }
+
+      var call = new ProbeReportCall(next.get(), readinessTimeout, acknowledgementTimeout);
+      open.add(call);
+      executor.execute(() -> send(call));
+    }
   }
 
   private void send(ProbeReportCall call) {
@@ -92,14 +131,18 @@ final class ProbeReportSender implements AutoCloseable {
 
   private synchronized void ended(ProbeReportCall call) {
     open.remove(call);
+    if (!shutdown) {
+      openWaiting();
+    }
   }
 
   /**
-   * Cancels the open report calls and takes no further report. The session that produced them has
-   * ended, so none of them is ever sent.
+   * Cancels the open report calls and discards the waiting reports. The session that produced them
+   * has ended, so none of them is ever sent.
    */
   synchronized void shutdown() {
     shutdown = true;
+    waiting.clear();
     var sessionEnded = new CancellationException("The worker session ended");
     open.forEach(call -> call.cancel(sessionEnded));
     executor.shutdownNow();

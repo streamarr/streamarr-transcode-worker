@@ -63,6 +63,8 @@ Background probes, keyframe packet scans and bitrate scan chunks run at nice 19,
 
 The worker ends every probe attempt, whatever its outcome, with one `ReportProbeAttempt` call that carries the attempt's probe report ([ADR 0062](https://github.com/streamarr/streamarr-adr/blob/main/adr/0062-a-worker-sends-each-probe-report-in-a-call-of-its-own.adoc)). The worker session carries no part of a probe report.
 
+The server states how many report calls it accepts from the worker at once when it accepts the worker session. The worker keeps no more report calls open and makes its other probe reports wait. Of the waiting reports, those of probes that the server canceled go first, then those of probes with playback priority, then the others, and first in, first out within each of the three. A cancel command for a probe attempt whose report still waits moves that report to the canceled probes' reports.
+
 The two upload timeouts also bound a report call. The worker sends a message of the report only when the call is ready for it, and waits at most `TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT` for each message. After the last message it waits at most `TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT` for the server's answer. A segment upload's acknowledgement timeout runs from its first message. A report call's runs from its last, so no bound covers a whole probe report, and a large report that keeps advancing never times out.
 
 The worker never sends a probe report twice. When a report call fails, the worker logs the failure with the probe attempt and discards the report. The worker session stays open, and the server runs the probe again.

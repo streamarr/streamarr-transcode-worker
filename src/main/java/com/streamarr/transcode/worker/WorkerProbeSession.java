@@ -5,6 +5,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeCancelReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
+import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.probe.FfprobeExecutor;
@@ -37,15 +38,27 @@ final class WorkerProbeSession implements AutoCloseable {
   private final AtomicReference<ProbeReportLimits> limits =
       new AtomicReference<>(ProbeReportLimits.NONE);
 
-  /** Takes the limits on a probe report that the server stated when it accepted the session. */
+  /** Takes the limits on probe reports that the server stated when it accepted the session. */
   void accepted(WorkerSessionAccepted accepted) {
     limits.set(ProbeReportLimits.of(accepted));
+    reports.limit(accepted.getProbeReportLimit());
   }
 
+  // A refused probe ends on the control stream's thread, which hands the report over and never
+  // waits for the server.
   void start(ProbeRequest request) {
     if (tryAdmit(request) instanceof Admission.Refused(var report)) {
-      complete(report);
+      summary.finished(fromProto(request.getProbeAttemptId()), report.getResult());
+      reports.submit(report, waitingOrderOf(request));
     }
+  }
+
+  private static ProbeReportQueue.Order waitingOrderOf(ProbeRequest request) {
+    if (request.getPriority() == ProbePriority.PROBE_PRIORITY_PLAYBACK) {
+      return ProbeReportQueue.Order.PLAYBACK;
+    }
+
+    return ProbeReportQueue.Order.OTHER;
   }
 
   private synchronized Admission tryAdmit(ProbeRequest request) {
@@ -76,12 +89,6 @@ final class WorkerProbeSession implements AutoCloseable {
     return new Admission.Started();
   }
 
-  // Hands the report over without waiting: a refused probe ends on the control stream's thread.
-  private void complete(ProbeAttemptReport report) {
-    summary.finished(fromProto(report.getResult().getProbeAttemptId()), report.getResult());
-    reports.submit(report);
-  }
-
   private sealed interface Admission {
     record Started() implements Admission {}
 
@@ -97,11 +104,19 @@ final class WorkerProbeSession implements AutoCloseable {
     cancelAttempt(attemptId, reason).ifPresent(capacities::probeTimedOut);
   }
 
-  // Returns the probe when the cancel ends it at the probe timeout.
+  // Returns the probe when the cancel ends it at the probe timeout. A cancel for a probe that has
+  // ended changes only where its report waits: the server ends the session when the report of a
+  // probe that it canceled is late.
   private synchronized Optional<ProbeCapacities.CountedProbe> cancelAttempt(
       UUID attemptId, ProbeCancelReason reason) {
     var attempt = attempts.get(attemptId);
     if (attempt == null) {
+      reports.sendFirst(attemptId);
+      return Optional.empty();
+    }
+
+    if (attempt.ended) {
+      attempt.cancelled = true;
       return Optional.empty();
     }
 
@@ -140,6 +155,8 @@ final class WorkerProbeSession implements AutoCloseable {
     private volatile boolean cancelled;
     // Guarded by WorkerProbeSession.this.
     private boolean timedOut;
+    // Guarded by WorkerProbeSession.this. The probe has ended and has yet to hand its report over.
+    private boolean ended;
 
     private void cancelAtProbeTimeout() {
       timedOut = true;
@@ -196,16 +213,23 @@ final class WorkerProbeSession implements AutoCloseable {
     }
 
     // The unit is free before the report is handed over, so the server's count never falls below
-    // the worker's.
+    // the worker's. The attempt stays known until its report waits with the sender, so that a
+    // cancel in between still moves the report to the canceled probes' reports.
     private void complete(ProbeAttemptReport report) {
+      var attemptId = fromProto(request.getProbeAttemptId());
       boolean endedAtProbeTimeout;
       synchronized (WorkerProbeSession.this) {
-        attempts.remove(fromProto(report.getResult().getProbeAttemptId()), this);
+        ended = true;
         endedAtProbeTimeout = timedOut;
       }
 
       releaseUnit(endedAtProbeTimeout);
-      WorkerProbeSession.this.complete(report);
+      summary.finished(attemptId, report.getResult());
+      synchronized (WorkerProbeSession.this) {
+        attempts.remove(attemptId, this);
+        reports.submit(
+            report, cancelled ? ProbeReportQueue.Order.CANCELED : waitingOrderOf(request));
+      }
     }
 
     private void releaseUnit(boolean endedAtProbeTimeout) {
