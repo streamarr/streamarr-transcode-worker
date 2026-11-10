@@ -91,15 +91,9 @@ final class KeyframePacketScan {
             keyframes,
             diagnostics);
     if (keyframes.isMissingTime()) {
-      return ProbeAttemptReport.resultOnly(
-          KeyframePositionsReport.withKeyframes(
-              probed.result(),
-              ProbeKeyframes.newBuilder()
-                  .setUnavailable(
-                      KeyframesUnavailable.newBuilder()
-                          .setReason(
-                              KeyframesUnavailableReason
-                                  .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))));
+      return unavailable(
+          probed,
+          KeyframesUnavailableReason.KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP);
     }
 
     // The server stores a packet scan's invalid-media failure as keyframes that are unavailable.
@@ -115,6 +109,11 @@ final class KeyframePacketScan {
       throw new PacketScanException("FFmpeg stopped reading the source before its end");
     }
 
+    if (keyframes.times().isEmpty()) {
+      return unavailable(
+          probed, KeyframesUnavailableReason.KEYFRAMES_UNAVAILABLE_REASON_NO_KEYFRAMES);
+    }
+
     return KeyframePositionsReport.builder()
         .probed(probed)
         .streamIndex(chosen.get().streamIndex())
@@ -123,6 +122,15 @@ final class KeyframePacketScan {
         .keyframes(keyframes.times())
         .build()
         .report();
+  }
+
+  private static ProbeAttemptReport unavailable(
+      ProbedSource probed, KeyframesUnavailableReason reason) {
+    return ProbeAttemptReport.resultOnly(
+        KeyframePositionsReport.withKeyframes(
+            probed.result(),
+            ProbeKeyframes.newBuilder()
+                .setUnavailable(KeyframesUnavailable.newBuilder().setReason(reason))));
   }
 
   private static ProbeAttemptReport failed(ProbedSource probed, ProbeFailure failure) {
