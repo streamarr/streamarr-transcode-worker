@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +47,7 @@ class TranscodeWorkerProbeReportTest {
 
   // The most bytes of a probe report that one message of its report call carries.
   private static final int MESSAGE_BYTES = 65_536;
+  private static final Set<Integer> PROBE_REPORT_SESSION_EVENT_NUMBERS = Set.of(6, 7, 9);
 
   private static final String ONE_VIDEO_STREAM =
       """
@@ -555,15 +557,13 @@ class TranscodeWorkerProbeReportTest {
   }
 
   // Each test names the probe attempts of its own reports, so the session's events are checked for
-  // every event that used to carry a part of a probe report.
+  // every event that used to carry a part of a probe report: a probe's result, a keyframe positions
+  // part and a stream measurement part. The contract reserves their fields (ADR 0062), so the
+  // numbers name them.
   private static List<EventCase> probeReportEventsOnTheSession(Connection connection) {
     return connection.events().stream()
         .map(EstablishWorkerSessionRequest::getEventCase)
-        .filter(
-            event ->
-                event == EventCase.PROBE_RESULT
-                    || event == EventCase.PROBE_KEYFRAME_POSITIONS_PART
-                    || event == EventCase.PROBE_STREAM_MEASUREMENT_PART)
+        .filter(event -> PROBE_REPORT_SESSION_EVENT_NUMBERS.contains(event.getNumber()))
         .toList();
   }
 
