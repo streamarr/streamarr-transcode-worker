@@ -61,8 +61,6 @@ import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
-import io.grpc.stub.ClientCallStreamObserver;
-import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -71,7 +69,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
@@ -94,7 +91,6 @@ import lombok.extern.slf4j.Slf4j;
 public final class TranscodeWorker implements AutoCloseable {
 
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
-  private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
   private static final Duration PROBE_SUMMARY_INTERVAL = Duration.ofMinutes(1);
   private static final Duration PROBE_CAPACITY_REFRESH_INTERVAL = Duration.ofSeconds(1);
   private static final Duration JOB_ATTEMPT_PROGRESS_INTERVAL = Duration.ofSeconds(1);
@@ -804,14 +800,16 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  private SegmentUpload newSegmentUpload() {
-    return new SegmentUpload(
+  private FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> newSegmentUpload() {
+    return new FlowControlledCall<>(
         configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
   }
 
   // Returns the server's refusal when it refused the call because the worker holds its limit.
   private Optional<ExecutionException> sendSegmentUnlessRefusedAtTheLimit(
-      VariantJob job, SegmentUpload upload, ProducedSegment segment)
+      VariantJob job,
+      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload,
+      ProducedSegment segment)
       throws InterruptedException, ExecutionException, TimeoutException {
     try {
       sendSegment(openUpload(job, upload), upload, segment);
@@ -834,7 +832,9 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private static void sendSegment(
-      SegmentUploadMetadata.Builder metadataBuilder, SegmentUpload upload, ProducedSegment segment)
+      SegmentUploadMetadata.Builder metadataBuilder,
+      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload,
+      ProducedSegment segment)
       throws InterruptedException, ExecutionException, TimeoutException {
     metadataBuilder
         .setSegmentName(segment.name())
@@ -865,7 +865,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // Opens the upload call while the attempt is still active in this session.
   private synchronized SegmentUploadMetadata.Builder openUpload(
-      VariantJob job, SegmentUpload upload) {
+      VariantJob job, FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload) {
     if (!activeAttempts.containsKey(fromProto(job.getJobAttemptId()))) {
       throw new WorkerJobException("Job attempt is no longer active");
     }
@@ -889,7 +889,9 @@ public final class TranscodeWorker implements AutoCloseable {
         .build();
   }
 
-  private static void sendContent(SegmentUpload upload, ProducedSegment segment)
+  private static void sendContent(
+      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload,
+      ProducedSegment segment)
       throws InterruptedException, TimeoutException {
     var pending = ByteString.EMPTY;
     for (var part : segment.content()) {
@@ -905,12 +907,13 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // Sends every full-sized data message and returns the remainder.
-  private static ByteString sendWholeDataMessages(SegmentUpload upload, ByteString content)
+  private static ByteString sendWholeDataMessages(
+      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload, ByteString content)
       throws InterruptedException, TimeoutException {
     var remaining = content;
-    while (remaining.size() >= UPLOAD_MESSAGE_BYTES) {
-      upload.send(dataMessage(remaining.substring(0, UPLOAD_MESSAGE_BYTES)));
-      remaining = remaining.substring(UPLOAD_MESSAGE_BYTES);
+    while (remaining.size() >= FlowControlledCall.MESSAGE_BYTES) {
+      upload.send(dataMessage(remaining.substring(0, FlowControlledCall.MESSAGE_BYTES)));
+      remaining = remaining.substring(FlowControlledCall.MESSAGE_BYTES);
     }
 
     return remaining;
@@ -1464,138 +1467,6 @@ public final class TranscodeWorker implements AutoCloseable {
       }
       endSession(sessionProbes);
       sessionDisconnected.complete(null);
-    }
-  }
-
-  // One segment's upload call, which sends a message only when the call is ready for it. It fails
-  // when the call is not ready within the readiness timeout, or when the server has not
-  // acknowledged the segment within the acknowledgement timeout of the first message sent. Every
-  // call method runs under this object's monitor, so a cancellation from the thread that stops the
-  // attempt never interleaves with a send.
-  private static final class SegmentUpload
-      implements ClientResponseObserver<UploadSegmentRequest, UploadSegmentResponse> {
-
-    private final CompletableFuture<UploadSegmentResponse> response = new CompletableFuture<>();
-    private final Duration readinessTimeout;
-    private final Duration acknowledgementTimeout;
-    private ClientCallStreamObserver<UploadSegmentRequest> call;
-
-    // Guarded by this monitor.
-    private OptionalLong acknowledgementDeadline = OptionalLong.empty();
-
-    private SegmentUpload(Duration readinessTimeout, Duration acknowledgementTimeout) {
-      this.readinessTimeout = readinessTimeout;
-      this.acknowledgementTimeout = acknowledgementTimeout;
-    }
-
-    @Override
-    public synchronized void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
-      this.call = call;
-      call.setOnReadyHandler(this::signalReadiness);
-    }
-
-    // Sends nothing once the server has answered or the upload was cancelled; that decides it.
-    private synchronized void send(UploadSegmentRequest message)
-        throws InterruptedException, TimeoutException {
-      var readinessDeadline = System.nanoTime() + readinessTimeout.toNanos();
-      while (!call.isReady() && !response.isDone()) {
-        TimeUnit.NANOSECONDS.timedWait(this, nanosUntilNextDeadline(readinessDeadline));
-      }
-
-      if (response.isDone()) {
-        return;
-      }
-
-      if (acknowledgementDeadline.isEmpty()) {
-        acknowledgementDeadline =
-            OptionalLong.of(System.nanoTime() + acknowledgementTimeout.toNanos());
-      }
-
-      call.onNext(message);
-    }
-
-    // Holds this monitor. The time left before the first of the readiness deadline and the
-    // acknowledgement deadline passes.
-    private long nanosUntilNextDeadline(long readinessDeadline) throws TimeoutException {
-      var now = System.nanoTime();
-      var untilReady = readinessDeadline - now;
-      if (untilReady <= 0) {
-        throw new TimeoutException(
-            "The upload was not ready for its next message within " + readinessTimeout);
-      }
-
-      return Math.min(untilReady, nanosUntilAcknowledgementDeadline(now));
-    }
-
-    // Holds this monitor.
-    private long nanosUntilAcknowledgementDeadline(long now) throws TimeoutException {
-      if (acknowledgementDeadline.isEmpty()) {
-        return Long.MAX_VALUE;
-      }
-
-      var untilAcknowledged = acknowledgementDeadline.getAsLong() - now;
-      if (untilAcknowledged <= 0) {
-        throw acknowledgementTimedOut();
-      }
-
-      return untilAcknowledged;
-    }
-
-    private TimeoutException acknowledgementTimedOut() {
-      return new TimeoutException(
-          "The server did not acknowledge the upload within "
-              + acknowledgementTimeout
-              + " of its first message");
-    }
-
-    private synchronized void signalReadiness() {
-      notifyAll();
-    }
-
-    private synchronized void finish() {
-      if (!response.isDone()) {
-        call.onCompleted();
-      }
-    }
-
-    private UploadSegmentResponse awaitAcknowledgement()
-        throws InterruptedException, ExecutionException, TimeoutException {
-      try {
-        return response.get(nanosUntilAcknowledgementDeadline(), TimeUnit.NANOSECONDS);
-      } catch (TimeoutException _) {
-        throw acknowledgementTimedOut();
-      }
-    }
-
-    private synchronized long nanosUntilAcknowledgementDeadline() throws TimeoutException {
-      return nanosUntilAcknowledgementDeadline(System.nanoTime());
-    }
-
-    // A stop before the call opens has no call to cancel; the producer then never sends on it.
-    private synchronized void cancel(Throwable failure) {
-      response.completeExceptionally(failure);
-      if (call != null) {
-        call.cancel("Segment upload failed", failure);
-      }
-
-      notifyAll();
-    }
-
-    @Override
-    public void onNext(UploadSegmentResponse value) {
-      response.complete(value);
-      signalReadiness();
-    }
-
-    @Override
-    public void onError(Throwable throwable) {
-      response.completeExceptionally(throwable);
-      signalReadiness();
-    }
-
-    @Override
-    public void onCompleted() {
-      // gRPC routes a client-streaming close without its single response through onError.
     }
   }
 
