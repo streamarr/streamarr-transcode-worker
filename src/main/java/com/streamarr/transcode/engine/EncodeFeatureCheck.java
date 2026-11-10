@@ -18,8 +18,7 @@ import java.util.Optional;
 final class EncodeFeatureCheck {
 
   private static final String LAVFI_SOURCE = "color=size=320x240:rate=24";
-  // The scale that a job's command runs before its format filters, which also brings the 64x64
-  // Dolby Vision test frame to the test's size.
+  // The scale that a job's command runs before its format filters.
   private static final String SCALE = "scale=-2:240,";
   private static final int TEST_HEVC_LEVEL = 30;
   private static final int TEST_AV1_LEVEL = 20;

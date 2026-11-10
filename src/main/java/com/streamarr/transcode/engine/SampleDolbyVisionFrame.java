@@ -17,8 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 final class SampleDolbyVisionFrame implements AutoCloseable {
 
-  // One 64x64 frame of Dolby Vision profile 5 under dvh1, with its RPU;
-  // src/test/sample-entry-fixtures/record-dolby-vision-5-fixture.sh records it.
+  // One 320x240 frame of Dolby Vision profile 5 under dvh1, with its RPU: NVDEC decodes no HEVC
+  // picture smaller than 144x144. src/test/sample-entry-fixtures/record-dolby-vision-5-fixture.sh
+  // records it.
   private static final String RESOURCE = "dolby-vision-5-test-frame.mp4";
   private static final FileAttribute<Set<PosixFilePermission>> OWNER_ONLY =
       PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"));
