@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.NonNull;
@@ -67,6 +68,11 @@ public class FfmpegCommandBuilder {
           .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
           .codecProfileForcing(CodecProfileForcing.NVENC)
           .build();
+  // hevc_nvenc's Main 10 recordings from 10-bit BT.709, PQ and HLG sources show the same keyframes
+  // (src/test/resources/nvenc). The reshape of Dolby Vision into PQ runs on the CPU before the
+  // encoder, which then takes the arguments of a PQ encode.
+  private static final EncoderTraits HEVC_NVENC =
+      NVENC.toBuilder().testedEncodeFeatures(Set.of(EncodeFeature.values())).build();
   // QSV and VAAPI take nv12 from system memory and refuse yuv420p.
   private static final String NV12 = "nv12";
   private static final EncoderTraits QSV =
@@ -96,6 +102,7 @@ public class FfmpegCommandBuilder {
                   .takesSvtAv1PresetNumber(true)
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
+                  .testedEncodeFeatures(Set.of(EncodeFeature.values()))
                   .codecProfileForcing(CodecProfileForcing.LIBSVTAV1)
                   .build()),
           Map.entry(
@@ -104,10 +111,11 @@ public class FfmpegCommandBuilder {
                   .keyframeVerified(true)
                   .takesPresetName(true)
                   .closesGopsByX265Parameters(true)
+                  .testedEncodeFeatures(Set.of(EncodeFeature.values()))
                   .codecProfileForcing(CodecProfileForcing.LIBX265)
                   .build()),
           Map.entry("h264_nvenc", NVENC),
-          Map.entry("hevc_nvenc", NVENC),
+          Map.entry("hevc_nvenc", HEVC_NVENC),
           Map.entry("av1_nvenc", FIXED_GOP),
           Map.entry("h264_qsv", QSV),
           Map.entry("hevc_qsv", QSV),
@@ -1654,6 +1662,15 @@ public class FfmpegCommandBuilder {
     return traitsOf(encoder).frameTypeOptions();
   }
 
+  /**
+   * The encode features that the worker runs its own test encode of with the encoder, and lists
+   * once the encoder passes. A hardware encoder joins for a feature only once its recordings show
+   * the keyframes that ADR 0037 asks of a keyframe-verified encoder in that output.
+   */
+  static Set<EncodeFeature> testedEncodeFeatures(String encoder) {
+    return traitsOf(encoder).testedEncodeFeatures();
+  }
+
   /** Whether the command forces the job's codec profile, tier and level on the encoder. */
   static boolean forcesCodecProfile(String encoder) {
     return traitsOf(encoder).codecProfileForcing() != CodecProfileForcing.NONE;
@@ -1679,7 +1696,7 @@ public class FfmpegCommandBuilder {
             STANDARD_OUTPUT));
   }
 
-  @Builder
+  @Builder(toBuilder = true)
   private record EncoderTraits(
       boolean keyframeVerified,
       boolean takesPresetName,
@@ -1693,6 +1710,7 @@ public class FfmpegCommandBuilder {
       @NonNull String eightBitPixelFormat,
       @NonNull String tenBitPixelFormat,
       @NonNull List<String> frameTypeOptions,
+      @NonNull Set<EncodeFeature> testedEncodeFeatures,
       @NonNull CodecProfileForcing codecProfileForcing) {}
 
   private static EncoderTraits.EncoderTraitsBuilder traits() {
@@ -1700,6 +1718,7 @@ public class FfmpegCommandBuilder {
         .eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT)
         .tenBitPixelFormat(PLANAR_TEN_BIT_PIXEL_FORMAT)
         .frameTypeOptions(List.of())
+        .testedEncodeFeatures(Set.of())
         .codecProfileForcing(CodecProfileForcing.NONE);
   }
 

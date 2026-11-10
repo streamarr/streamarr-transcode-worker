@@ -71,6 +71,8 @@ When a codec family has several usable encoders, the worker always picks them in
 
 Among equally verified hardware encoders, the API decides: NVENC, QSV, AMF, VideoToolbox, then VAAPI. A host therefore always resolves a codec family to the same backend, and a variant's replacement attempts keep the backend of its first job attempt.
 
+The worker also reports the outputs beyond 8-bit SDR that each encoder writes: 10-bit video, PQ, HLG, and Dolby Vision profile 5 or 10.0 reshaped into PQ. libx265, SVT-AV1 and hevc_nvenc run a one-frame test encode of each output at startup, and the worker reports an output only when that encode writes it. A host whose GPU encodes HEVC Main 10 therefore encodes HDR video on hevc_nvenc. The filters, with the Dolby Vision reshape, run on the CPU, and hevc_nvenc takes their frames. h264_nvenc encodes 8-bit SDR only, and the worker reports no such output for any other hardware encoder.
+
 ## Architecture
 
 The worker runs as a separate Java service. It connects to the server over gRPC, reads files from a shared media library, reads FFmpeg's fragmented MP4 output from a pipe, and uploads each HLS media segment back to the server. Workers can run alongside the server or on other machines.

@@ -9,15 +9,19 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The worker's own test encode of one encode feature with one encoder: one frame at 64x64 through
- * the filters and encoder arguments that a job's command uses, written as fragmented MP4. The
+ * The worker's own test encode of one encode feature with one encoder: one frame scaled to a height
+ * of 240 through the filters and encoder arguments that a job's command uses, written as fragmented
+ * MP4. NVENC refuses a frame smaller than 144x144, and its default bitrate needs HEVC level 3. The
  * encoder passes when its initialization segment declares 10-bit 4:2:0 and, for an HDR feature, the
  * BT.2020 colour description of its transfer.
  */
 final class EncodeFeatureCheck {
 
-  private static final String LAVFI_SOURCE = "color=size=64x64:rate=24";
-  private static final int TEST_HEVC_LEVEL = 10;
+  private static final String LAVFI_SOURCE = "color=size=320x240:rate=24";
+  // The scale that a job's command runs before its format filters, which also brings the 64x64
+  // Dolby Vision test frame to the test's size.
+  private static final String SCALE = "scale=-2:240,";
+  private static final int TEST_HEVC_LEVEL = 30;
   private static final int TEST_AV1_LEVEL = 20;
   private static final PictureFormat TEN_BIT_420 =
       new PictureFormat(10, ChromaSubsampling.CHROMA_420);
@@ -83,8 +87,14 @@ final class EncodeFeatureCheck {
     }
 
     arguments.addAll(
-        List.of("-frames:v", "1", "-an", "-vf", FfmpegCommandBuilder.videoFormat(encoder, encode)));
+        List.of(
+            "-frames:v",
+            "1",
+            "-an",
+            "-vf",
+            SCALE + FfmpegCommandBuilder.videoFormat(encoder, encode)));
     arguments.addAll(FfmpegCommandBuilder.encoderArguments(encoder, encode));
+    arguments.addAll(FfmpegCommandBuilder.frameTypeOptions(encoder));
     arguments.addAll(
         List.of(
             "-f",

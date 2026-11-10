@@ -155,6 +155,29 @@ class NvencRecordingsTest {
 
   @Test
   @DisplayName(
+      "Should hold the Main 10 extended recordings at every default-ladder rung of each encode"
+          + " feature's range when the worker tests an NVENC encoder for that feature")
+  void
+      shouldHoldTheMain10ExtendedRecordingsAtEveryDefaultLadderRungOfEachEncodeFeaturesRangeWhenTheWorkerTestsAnNvencEncoderForThatFeature() {
+    var required =
+        NVENC_ENCODERS.stream()
+            .flatMap(
+                encoder ->
+                    FfmpegCommandBuilder.testedEncodeFeatures(encoder).stream()
+                        .map(NvencRecordingsTest::recordedRangeOf)
+                        .distinct()
+                        .flatMap(
+                            range ->
+                                DEFAULT_LADDER_RUNGS.stream()
+                                    .map(rung -> encoder + "-" + rung + "-" + range)))
+            .toList();
+
+    assertThat(required).as("the tested NVENC encoders' rungs and ranges").hasSize(12);
+    assertHoldsTheExtendedRecordingsOf(required);
+  }
+
+  @Test
+  @DisplayName(
       "Should declare 10 bits and no sample with static HDR metadata in every Main 10 recording"
           + " when its source carries a mastering display and a content light level")
   void
@@ -182,6 +205,16 @@ class NvencRecordingsTest {
     }
 
     softly.assertAll();
+  }
+
+  // The range whose recordings show the encoder's keyframes for the feature. The reshape of Dolby
+  // Vision into PQ runs before the encoder, which takes the arguments of a PQ encode.
+  private static String recordedRangeOf(EncodeFeature feature) {
+    return switch (feature) {
+      case TEN_BIT -> "sdr10";
+      case PQ, DOLBY_VISION_TO_PQ -> "pq";
+      case HLG -> "hlg";
+    };
   }
 
   // Each prefix needs its extended recording from the start, its replacement pair and its
