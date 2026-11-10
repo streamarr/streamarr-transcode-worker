@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -182,7 +183,7 @@ class FfmpegCommandBuilderHdrEncodeTest {
     assertThat(
             Stream.of("h264_nvenc", "av1_nvenc", "hevc_qsv", "hevc_vaapi", "hevc_amf", "unknown")
                 .map(FfmpegCommandBuilder::testedEncodeFeatures))
-        .allSatisfy(features -> assertThat(features).isEmpty());
+        .containsOnly(Set.<EncodeFeature>of());
   }
 
   @Test

@@ -61,7 +61,8 @@ public class TranscodeCapabilityService {
   private final Map<String, Long> withdrawnHardwareEncoders = new HashMap<>();
 
   // The outputs beyond 8-bit 4:2:0 SDR whose own test encode each encoder passed, by encoder name.
-  private volatile Map<String, Set<EncodeFeature>> encodeFeatures = Map.of();
+  private final AtomicReference<Map<String, Set<EncodeFeature>>> encodeFeatures =
+      new AtomicReference<>(Map.of());
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
     this.ffmpegPath = ffmpegPath;
@@ -95,7 +96,7 @@ public class TranscodeCapabilityService {
             .build();
     detectedHardwareEncoders = hwEncoders;
     softwareEncoderFamilies = detectSoftwareEncoders();
-    encodeFeatures = detectEncodeFeatures(hwEncoders, softwareEncoderFamilies);
+    encodeFeatures.set(detectEncodeFeatures(hwEncoders, softwareEncoderFamilies));
     encoders.set(resolveEncoders(hwEncoders, softwareEncoderFamilies));
 
     log.info(
@@ -105,7 +106,7 @@ public class TranscodeCapabilityService {
         hwEncoders,
         accelerator,
         encoders.get().values(),
-        encodeFeatures);
+        encodeFeatures.get());
   }
 
   private void markUnavailable(String reason) {
@@ -201,10 +202,10 @@ public class TranscodeCapabilityService {
         return false;
       }
 
-      var features = new HashMap<>(encodeFeatures);
+      var features = new HashMap<>(encodeFeatures.get());
       offeredAgain.forEach(
           encoder -> features.put(encoder, recheckedFeatures.getOrDefault(encoder, Set.of())));
-      encodeFeatures = Collections.unmodifiableMap(features);
+      encodeFeatures.set(Collections.unmodifiableMap(features));
       resolveOfferedEncoders();
       return true;
     }
@@ -273,7 +274,7 @@ public class TranscodeCapabilityService {
     return WorkerVerifiedEncoder.builder()
         .backend(backend)
         .keyframeVerified(FfmpegCommandBuilder.isKeyframeVerified(backend.encoder()))
-        .encodeFeatures(encodeFeatures.getOrDefault(backend.encoder(), Set.of()))
+        .encodeFeatures(encodeFeatures.get().getOrDefault(backend.encoder(), Set.of()))
         .build();
   }
 
