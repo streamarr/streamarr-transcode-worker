@@ -14,6 +14,7 @@ import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.google.protobuf.Any;
+import com.google.protobuf.ByteString;
 import com.google.rpc.Code;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import com.streamarr.transcode.worker.WorkerRuntime;
@@ -206,7 +207,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     /** The number of messages the worker has sent on all its upload calls. */
     public int uploadMessageCount() {
-      return uploads.stream().mapToInt(upload -> upload.messages.size()).sum();
+      return uploads.stream().mapToInt(upload -> upload.messages().size()).sum();
     }
 
     /** The number of upload messages the worker sent while its call reported it was not ready. */
@@ -408,25 +409,27 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
   }
 
   /**
-   * A segment upload that records what the worker sent and acknowledges every byte. Like a gRPC
-   * call, a cancelled upload closes with {@code CANCELLED} and is never acknowledged. A refused
-   * upload closes with the refusal's status and trailers once the worker's first message, which
-   * names the segment, arrives.
+   * A client-streaming upload that records what the worker sent and acknowledges every byte. Like a
+   * gRPC call, a cancelled upload closes with {@code CANCELLED} and is never acknowledged. A
+   * refused upload closes with the refusal's status and trailers once the worker's first message,
+   * which names what the call uploads, arrives.
+   *
+   * @param <Q> the messages that the worker sends on the call
+   * @param <R> the server's single answer
    */
-  public static final class UploadCall
-      extends ClientCall<UploadSegmentRequest, UploadSegmentResponse> {
+  public abstract static class ScriptedUpload<Q, R> extends ClientCall<Q, R> {
 
     private final UploadReadiness readiness;
     private final OpenUploads openUploads;
     private final BooleanSupplier acknowledgementsWithheld;
-    private final List<UploadSegmentRequest> messages = new CopyOnWriteArrayList<>();
-    private volatile Listener<UploadSegmentResponse> responses;
+    private final List<Q> messages = new CopyOnWriteArrayList<>();
+    private volatile Listener<R> responses;
     private Optional<StatusRuntimeException> refusal = Optional.empty();
     private boolean closed;
     private boolean cancelled;
     private boolean halfClosed;
 
-    private UploadCall(
+    private ScriptedUpload(
         UploadReadiness readiness,
         OpenUploads openUploads,
         BooleanSupplier acknowledgementsWithheld) {
@@ -435,21 +438,22 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       this.acknowledgementsWithheld = acknowledgementsWithheld;
     }
 
-    private synchronized void refuseOnTheFirstMessage(StatusRuntimeException refusal) {
+    /** The bytes that a data message carries; empty for the message that names the upload. */
+    abstract Optional<ByteString> dataOf(Q message);
+
+    /** The server's answer to an upload of this many bytes. */
+    abstract R acknowledgementOf(long acceptedLengthBytes);
+
+    synchronized void refuseOnTheFirstMessage(StatusRuntimeException refusal) {
       this.refusal = Optional.of(refusal);
     }
 
-    /**
-     * Refuses the open upload because the worker holds its segment upload limit of calls, as when
-     * the server's refusal reaches the worker after it has sent the segment.
-     */
-    public void refuseAtTheWorkersLimit() {
-      var limitRefusal = workerLimitRefusal();
+    void refuseNow(StatusRuntimeException refusal) {
       synchronized (this) {
-        refusal = Optional.of(limitRefusal);
+        this.refusal = Optional.of(refusal);
       }
 
-      refuse(limitRefusal);
+      refuse(refusal);
     }
 
     /** Whether the server refused the upload. */
@@ -457,27 +461,30 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       return refusal.isPresent();
     }
 
-    public SegmentUploadMetadata metadata() {
-      return messages.getFirst().getMetadata();
+    /** Every message that the worker sent on the call, in order. */
+    public List<Q> messages() {
+      return List.copyOf(messages);
     }
 
     /** The length of each data message's content, in order. */
     public List<Integer> dataMessageLengths() {
       return messages.stream()
-          .filter(UploadSegmentRequest::hasData)
-          .map(message -> message.getData().size())
+          .map(this::dataOf)
+          .flatMap(Optional::stream)
+          .map(ByteString::size)
           .toList();
     }
 
     public byte[] content() {
       var content = new ByteArrayOutputStream();
       messages.stream()
-          .filter(UploadSegmentRequest::hasData)
-          .forEach(message -> content.writeBytes(message.getData().toByteArray()));
+          .map(this::dataOf)
+          .flatMap(Optional::stream)
+          .forEach(data -> content.writeBytes(data.toByteArray()));
       return content.toByteArray();
     }
 
-    private void signalReady() {
+    void signalReady() {
       var listener = responses;
       if (listener != null && readiness.isReady()) {
         listener.onReady();
@@ -485,7 +492,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     @Override
-    public void start(Listener<UploadSegmentResponse> listener, Metadata headers) {
+    public void start(Listener<R> listener, Metadata headers) {
       responses = listener;
       openUploads.opened();
     }
@@ -514,7 +521,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     @Override
-    public void sendMessage(UploadSegmentRequest message) {
+    public void sendMessage(Q message) {
       readiness.consume();
       messages.add(message);
       refusal().ifPresent(this::refuse);
@@ -524,7 +531,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       return cancelled;
     }
 
-    /** Whether the worker sent the whole segment and awaits the acknowledgement. */
+    /** Whether the worker sent the whole upload and awaits the acknowledgement. */
     public synchronized boolean awaitsAcknowledgement() {
       return halfClosed && !closed;
     }
@@ -542,7 +549,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       acknowledge();
     }
 
-    private void acknowledgeWhenAwaited() {
+    void acknowledgeWhenAwaited() {
       if (awaitsAcknowledgement()) {
         acknowledge();
       }
@@ -553,8 +560,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         return;
       }
 
-      responses.onMessage(
-          UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(content().length).build());
+      responses.onMessage(acknowledgementOf(content().length));
       responses.onClose(Status.OK, new Metadata());
     }
 
@@ -579,6 +585,40 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       closed = true;
       openUploads.closed();
       return true;
+    }
+  }
+
+  /** A segment upload, whose first message names the segment. */
+  public static final class UploadCall
+      extends ScriptedUpload<UploadSegmentRequest, UploadSegmentResponse> {
+
+    private UploadCall(
+        UploadReadiness readiness,
+        OpenUploads openUploads,
+        BooleanSupplier acknowledgementsWithheld) {
+      super(readiness, openUploads, acknowledgementsWithheld);
+    }
+
+    /**
+     * Refuses the open upload because the worker holds its segment upload limit of calls, as when
+     * the server's refusal reaches the worker after it has sent the segment.
+     */
+    public void refuseAtTheWorkersLimit() {
+      refuseNow(workerLimitRefusal());
+    }
+
+    public SegmentUploadMetadata metadata() {
+      return messages().getFirst().getMetadata();
+    }
+
+    @Override
+    Optional<ByteString> dataOf(UploadSegmentRequest message) {
+      return message.hasData() ? Optional.of(message.getData()) : Optional.empty();
+    }
+
+    @Override
+    UploadSegmentResponse acknowledgementOf(long acceptedLengthBytes) {
+      return UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(acceptedLengthBytes).build();
     }
   }
 }
