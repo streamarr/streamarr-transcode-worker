@@ -10,13 +10,17 @@
 # encoder gets, which the worker passes both NVENC encoders. One more recording leaves a forced
 # keyframe time out. Every recording takes p4, the NVENC preset of Automatic's `faster`; at 1080p the
 # extended-GOP recordings are repeated at every other NVENC preset of the preset scale (ADR 0044).
+# hevc_nvenc also records its extended-GOP encodes in Main 10 at every rung, from 10-bit BT.709, PQ
+# and HLG sources that keep their range.
 # nvenc-recordings.mjs then derives, from the recordings alone:
 #   - whether every forced keyframe is a sync sample
 #   - whether every forced keyframe is an IDR picture with no leading pictures (a closed GOP)
 #   - whether the GOP count restarts at a forced keyframe
 #   - the keyframes the encoder adds itself
 #   - whether a replacement attempt's initialization segment is byte-identical to the first attempt's
-#   - whether each initialization segment passes the codec, profile and level check (worker #25)
+#   - whether each initialization segment passes the codec, profile and level check (worker #25),
+#     with the bit depth and, for PQ and HLG, the BT.2020 colour description of its range
+#   - whether any sample carries static HDR metadata, which the worker deletes before NVENC
 #
 #   src/test/fmp4-recorder/record-nvenc.sh                     # record into src/test/resources/nvenc
 #   src/test/fmp4-recorder/record-nvenc.sh --print-commands    # print the planned FFmpeg commands; needs no Docker
@@ -33,7 +37,7 @@ SCRIPT_NAME=${0##*/}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPOSITORY="$(cd "$HERE/../../.." && pwd)"
 
-DEFAULT_IMAGE='streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:f198b7a3fe988f9a2f26b860cbe3ae9d6f3cb1cf288c0a90dbdb62c0f93a470f'
+DEFAULT_IMAGE='streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:bba71271a7d3be9a56d2f9566e666aff396a93c6f5aa1d526070405090925534'
 DEFAULT_TIME_LIMIT_S=1200
 GPU_RUN_ARGS=(--gpus all -e "NVIDIA_DRIVER_CAPABILITIES=compute,video,utility")
 # The analysis runs in this image, which holds the Node release in buildpacks/ffmpeg/.nvmrc, so the
@@ -71,14 +75,24 @@ LOOKAHEAD_FRAMES=20
 
 # The default ladder (QualityLadderService in streamarr-server) for a 1920x1080 source at
 # 23.976 fps: rung, height, bitrate, then the level and codec string of an H.264 High and an HEVC
-# Main encode. The H.264 levels are the server's (H264Level). The server encodes no HEVC yet, so the
-# HEVC levels are the smallest Main tier levels that fit, written as libx265 writes them.
-LADDER="1080p 1080 5000000 40 avc1.640028 40 hvc1.1.6.L120.90
-720p 720 3000000 31 avc1.64001F 31 hvc1.1.6.L93.90
-480p 480 1500000 30 avc1.64001E 30 hvc1.1.6.L90.90
-360p 360 800000 30 avc1.64001E 21 hvc1.1.6.L63.90"
+# Main encode, and the codec string of an HEVC Main 10 encode at the HEVC level. The H.264 levels
+# are the server's (H264Level). The HEVC levels are the smallest Main tier levels that fit, written
+# as libx265 writes them.
+LADDER="1080p 1080 5000000 40 avc1.640028 40 hvc1.1.6.L120.90 hvc1.2.4.L120.90
+720p 720 3000000 31 avc1.64001F 31 hvc1.1.6.L93.90 hvc1.2.4.L93.90
+480p 480 1500000 30 avc1.64001E 30 hvc1.1.6.L90.90 hvc1.2.4.L90.90
+360p 360 800000 30 avc1.64001E 21 hvc1.1.6.L63.90 hvc1.2.4.L63.90"
 ALL_ENCODERS="h264_nvenc hevc_nvenc"
 ALL_RUNGS="1080p 720p 480p 360p"
+# The 8-bit BT.709 range of every recording above, and the 10-bit ranges that the encoder below also
+# records in Main 10: BT.709, PQ and HLG, each from a source of that range.
+EIGHT_BIT_RANGE=sdr
+TEN_BIT_RANGES="sdr10 pq hlg"
+TEN_BIT_ENCODER=hevc_nvenc
+# The constructed HDR10 static metadata of the PQ source, as x265 takes it: a P3 D65 display of
+# 1000 cd/m2 and 0.005 cd/m2, MaxCLL 1000 and MaxFALL 400. The worker deletes it from the frames, so
+# no recording may carry it in a sample.
+PQ_SOURCE_STATIC_METADATA="master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50):max-cll=1000,400"
 
 usage() {
   cat <<EOF
@@ -202,19 +216,34 @@ level_name() {
   printf '%s.%s' "$(($1 / 10))" "$(($1 % 10))"
 }
 
-# plan_recording <encoder> <rung> <variant> [preset]: sets NAME, META (the job, one key=value per
-# line) and COMMAND (the worker's FFmpeg command for that job, with the quiet, non-interactive
-# logging that only the recording adds). The variants: first and replacement take the floored GOP;
-# extended-first, extended-replacement and extended-missed take the extended GOP, as the worker
-# does, and extended-missed also leaves SKIPPED_FORCED_TIME out of the forced keyframe times. The
-# preset defaults to AUTOMATIC_PRESET; a recording at another preset names it.
+# hdr_transfer <range>: FFmpeg's name of the transfer of a PQ or HLG range, else nothing.
+hdr_transfer() {
+  case "$1" in
+    pq) printf 'smpte2084' ;;
+    hlg) printf 'arib-std-b67' ;;
+  esac
+}
+
+# plan_recording <encoder> <rung> <variant> [preset] [range]: sets NAME, META (the job, one
+# key=value per line) and COMMAND (the worker's FFmpeg command for that job, with the quiet,
+# non-interactive logging that only the recording adds). The variants: first and replacement take
+# the floored GOP; extended-first, extended-replacement and extended-missed take the extended GOP,
+# as the worker does, and extended-missed also leaves SKIPPED_FORCED_TIME out of the forced keyframe
+# times. The preset defaults to AUTOMATIC_PRESET; a recording at another preset names it. The range
+# defaults to EIGHT_BIT_RANGE; a recording of a 10-bit range names it, reads the source of that
+# range and encodes Main 10.
 plan_recording() {
-  local encoder=$1 rung=$2 variant=$3 preset=${4:-$AUTOMATIC_PRESET}
+  local encoder=$1 rung=$2 variant=$3 preset=${4:-$AUTOMATIC_PRESET} range=${5:-$EIGHT_BIT_RANGE}
   local height bitrate level codec_string tag profile tier=() start=0 gop=$GOP_FLOORED recipe=floored
-  local skipped="" replaces="" seek=()
+  local skipped="" replaces="" seek=() bit_depth=8 source=/work/source.mp4 pixel_format=yuv420p
+  local transfer colour=() colour_conversion=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709
+  local frame_colour=""
   local NAME_PREFIX="$encoder-$rung-"
   if [[ $preset != "$AUTOMATIC_PRESET" ]]; then
     NAME_PREFIX="$encoder-$rung-$preset-"
+  fi
+  if [[ $range != "$EIGHT_BIT_RANGE" ]]; then
+    NAME_PREFIX="$encoder-$rung-$range-"
   fi
   height=$(rung_field "$rung" 2)
   bitrate=$(rung_field "$rung" 3)
@@ -222,6 +251,19 @@ plan_recording() {
     h264_nvenc) level=$(rung_field "$rung" 4); codec_string=$(rung_field "$rung" 5); tag=avc1; profile=high ;;
     hevc_nvenc) level=$(rung_field "$rung" 6); codec_string=$(rung_field "$rung" 7); tag=hvc1; profile=main; tier=(-tier:v main) ;;
   esac
+  if [[ $range != "$EIGHT_BIT_RANGE" ]]; then
+    codec_string=$(rung_field "$rung" 8); profile=main10; bit_depth=10; pixel_format=p010le
+    source=/work/source-$range.mp4
+  fi
+  transfer=$(hdr_transfer "$range")
+  if [[ -n "$transfer" ]]; then
+    # A PQ or HLG encode keeps its range in BT.2020, declares it on every frame and, as the worker
+    # does before NVENC, deletes the frames' static HDR metadata.
+    colour=(-color_primaries bt2020 -color_trc "$transfer" -colorspace bt2020nc -color_range tv)
+    colour_conversion=bt2020nc:out_range=tv:out_primaries=bt2020:out_transfer=$transfer
+    frame_colour=",setparams=color_primaries=bt2020:color_trc=$transfer:colorspace=bt2020nc:range=tv"
+    frame_colour+=",sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL"
+  fi
   case "$variant" in
     extended-*) gop=$GOP_EXTENDED; recipe=extended ;;
   esac
@@ -229,7 +271,7 @@ plan_recording() {
     *replacement) start=$REPLACEMENT_START; replaces="$NAME_PREFIX${variant%replacement}first" ;;
     extended-missed) skipped=$SKIPPED_FORCED_TIME ;;
   esac
-  local video_filter="scale=-2:$height:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=$FRAME_RATE:eof_action=pass"
+  local video_filter="scale=-2:$height:out_color_matrix=$colour_conversion,format=$pixel_format$frame_colour,fps=$FRAME_RATE:eof_action=pass"
   if ((start > 0)); then
     # The worker's encoded replacement decodes from its seek and trims after fps at the first frame
     # at or after its first segment's start.
@@ -242,6 +284,8 @@ plan_recording() {
   META="encoder=$encoder
 rung=$rung
 preset=$preset
+range=$range
+bitDepth=$bit_depth
 recipe=$recipe
 height=$height
 bitrate=$bitrate
@@ -255,10 +299,11 @@ gopFrames=$gop
 forcedKeyframeTimes=$times
 skippedForcedTime=$skipped
 replaces=$replaces"
-  COMMAND=(ffmpeg -hide_banner -nostdin -loglevel error -y ${seek[@]+"${seek[@]}"} -i /work/source.mp4
+  COMMAND=(ffmpeg -hide_banner -nostdin -loglevel error -y ${seek[@]+"${seek[@]}"} -i "$source"
     -map 0:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled
     -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000
     -c:v "$encoder" -preset "$preset" -tag:v "$tag" -profile:v "$profile" -level:v "$(level_name "$level")" ${tier[@]+"${tier[@]}"}
+    ${colour[@]+"${colour[@]}"}
     -vf "$video_filter"
     -b:v "$bitrate" -maxrate "$bitrate" -bufsize "$((bitrate * 2))"
     -r:v:0 "$FRAME_RATE" -forced-idr 1 -force_key_frames:0 "$times" -g:v:0 "$gop" -keyint_min:v:0 "$gop"
@@ -271,19 +316,32 @@ replaces=$replaces"
 VARIANTS="first replacement extended-first extended-replacement extended-missed"
 EXTENDED_VARIANTS="extended-first extended-replacement extended-missed"
 
+# records_ten_bit: whether the run records the encoder that records the 10-bit ranges.
+records_ten_bit() {
+  [[ " $ENCODERS " == *" $TEN_BIT_ENCODER "* ]]
+}
+
 # for_each_recording <function>: calls the function after plan_recording for every recording.
 for_each_recording() {
-  local encoder rung variant preset
+  local encoder rung variant preset range
   for encoder in $ENCODERS; do
     for rung in $RUNGS; do
       for variant in $VARIANTS; do
         plan_recording "$encoder" "$rung" "$variant"
         "$1"
       done
-      [[ $rung == "$PRESET_RUNG" ]] || continue
-      for preset in $OTHER_PRESETS; do
+      if [[ $rung == "$PRESET_RUNG" ]]; then
+        for preset in $OTHER_PRESETS; do
+          for variant in $EXTENDED_VARIANTS; do
+            plan_recording "$encoder" "$rung" "$variant" "$preset"
+            "$1"
+          done
+        done
+      fi
+      [[ $encoder == "$TEN_BIT_ENCODER" ]] || continue
+      for range in $TEN_BIT_RANGES; do
         for variant in $EXTENDED_VARIANTS; do
-          plan_recording "$encoder" "$rung" "$variant" "$preset"
+          plan_recording "$encoder" "$rung" "$variant" "$AUTOMATIC_PRESET" "$range"
           "$1"
         done
       done
@@ -490,6 +548,11 @@ for encoder in $ENCODERS; do
     gpu_failed "a one-frame $encoder encode" "$(cat "$WORK/one-frame")"
   fi
 done
+if records_ten_bit && ! capture one-frame docker "${DOCKER_RUN[@]}" --entrypoint /cnb/lifecycle/launcher "$IMAGE" \
+  ffmpeg -nostdin -hide_banner -v error -f lavfi -i color=size=320x240:rate=24 -frames:v 1 -vf format=p010le \
+  -c:v "$TEN_BIT_ENCODER" -profile:v main10 -bf "$B_FRAMES" -rc-lookahead "$LOOKAHEAD_FRAMES" -f null -; then
+  gpu_failed "a one-frame Main 10 $TEN_BIT_ENCODER encode" "$(cat "$WORK/one-frame")"
+fi
 
 capture node-image docker image inspect "$NODE_IMAGE" || capture node-image docker pull "$NODE_IMAGE" ||
   skip "cannot pull $NODE_IMAGE"
@@ -507,6 +570,11 @@ write_recording() {
 }
 for_each_recording write_recording
 
+TEN_BIT_SOURCES=0
+if records_ten_bit; then
+  TEN_BIT_SOURCES=1
+fi
+
 cat >"$WORK/record.sh" <<CONTAINER
 set -euo pipefail
 cd /work
@@ -520,6 +588,21 @@ ffmpeg -hide_banner -nostdin -loglevel error -y \\
   -f lavfi -i smptehdbars=size=1920x1080:rate=$FRAME_RATE:duration=$SOURCE_SECONDS \\
   -filter_complex "[0:v][1:v]overlay=enable='gte(t,3.5)*lt(t,4.5)+gte(t,27.5)*lt(t,28.5)',format=yuv420p[v]" -map "[v]" \\
   -c:v libx264 -preset veryfast -crf 18 -g 48 source.mp4
+# The 10-bit sources hold the same picture as libx265 Main 10, each with the colour description of
+# its range. The PQ source also carries constructed HDR10 static metadata on its keyframes.
+ten_bit_source() {
+  ffmpeg -hide_banner -nostdin -loglevel error -y \\
+    -f lavfi -i testsrc2=size=1920x1080:rate=$FRAME_RATE:duration=$SOURCE_SECONDS \\
+    -f lavfi -i smptehdbars=size=1920x1080:rate=$FRAME_RATE:duration=$SOURCE_SECONDS \\
+    -filter_complex "[0:v][1:v]overlay=enable='gte(t,3.5)*lt(t,4.5)+gte(t,27.5)*lt(t,28.5)',format=yuv420p10le[v]" -map "[v]" \\
+    -c:v libx265 -preset ultrafast -tag:v hvc1 \\
+    -x265-params "keyint=48:no-open-gop=1:log-level=error:\$2" "source-\$1.mp4"
+}
+if [ $TEN_BIT_SOURCES = 1 ]; then
+  ten_bit_source sdr10 "colorprim=bt709:transfer=bt709:colormatrix=bt709"
+  ten_bit_source pq "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:$PQ_SOURCE_STATIC_METADATA"
+  ten_bit_source hlg "colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc"
+fi
 duration=\$(ffprobe -v error -show_entries format=duration -of csv=p=0 source.mp4)
 millis=\$(awk -v seconds="\$duration" 'BEGIN { printf "%d", seconds * 1000 }')
 count=\$(((millis + $PERIOD * 1000 - 1) / ($PERIOD * 1000)))

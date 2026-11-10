@@ -3,7 +3,8 @@
 // results file they leave offline: no Docker, no FFmpeg, no GPU.
 //
 // For each recording it keeps the facts its own bytes decide: every video sample's presentation time
-// and sync flag, the picture type that starts each keyframe, and the initialization segment. From
+// and sync flag, the picture type that starts each keyframe, the HEVC samples that carry static HDR
+// metadata, and the initialization segment. From
 // those facts alone it derives the verdicts that the ADR 0037 amendment asks of an encoder before it
 // joins the keyframe-verified list (streamarr/streamarr-transcode-worker#56), and the codec string
 // that the check of streamarr/streamarr-transcode-worker#25 compares with the job's.
@@ -24,6 +25,74 @@ const DEFAULT_RESULTS = fileURLToPath(new URL('../resources/nvenc', import.meta.
 // An IDR picture: H.264 NAL unit type 5, HEVC 19 (IDR_W_RADL) or 20 (IDR_N_LP).
 const IDR_NAL_UNIT_TYPES = { avc1: new Set([5]), hvc1: new Set([19, 20]) };
 
+// HEVC prefix and suffix SEI NAL units (ITU-T H.265 table 7-1), and the payload types of the
+// mastering display colour volume and the content light level (D.2.1).
+const HEVC_SEI_NAL_UNIT_TYPES = new Set([39, 40]);
+const STATIC_HDR_METADATA_PAYLOAD_TYPES = new Set([137, 144]);
+
+/** A NAL unit's payload after its two header bytes, without emulation prevention bytes. */
+function rawPayload(nalUnit) {
+  const bytes = [];
+  for (let at = 2; at < nalUnit.length; at++) {
+    if (nalUnit[at] === 3 && at >= 4 && nalUnit[at - 1] === 0 && nalUnit[at - 2] === 0) {
+      continue;
+    }
+    bytes.push(nalUnit[at]);
+  }
+  return bytes;
+}
+
+/** The payload type of each message of an SEI NAL unit (ITU-T H.265 7.3.5). */
+export function seiPayloadTypes(nalUnit) {
+  const payload = rawPayload(nalUnit);
+  const types = [];
+  let at = 0;
+  // The last byte holds only the RBSP trailing bits.
+  while (at < payload.length - 1) {
+    let type = 0;
+    while (payload[at] === 0xff) {
+      type += payload[at++];
+    }
+    type += payload[at++];
+    let size = 0;
+    while (payload[at] === 0xff) {
+      size += payload[at++];
+    }
+    size += payload[at++];
+    types.push(type);
+    at += size;
+  }
+  return types;
+}
+
+/** The NAL units of one length-prefixed sample. */
+function nalUnitsOf(stream, sample, nalLengthSize) {
+  const units = [];
+  const end = sample.offset + sample.size;
+  let position = sample.offset;
+  while (position + nalLengthSize <= end) {
+    const length = stream.data.readUIntBE(position, nalLengthSize);
+    units.push(stream.data.subarray(position + nalLengthSize, Math.min(end, position + nalLengthSize + length)));
+    position += nalLengthSize + length;
+  }
+  return units;
+}
+
+function carriesStaticHdrMetadata(nalUnit) {
+  return (
+    HEVC_SEI_NAL_UNIT_TYPES.has((nalUnit[0] >> 1) & 0x3f) &&
+    seiPayloadTypes(nalUnit).some((type) => STATIC_HDR_METADATA_PAYLOAD_TYPES.has(type))
+  );
+}
+
+/** How many HEVC samples carry a mastering display or content light level message; null for another codec. */
+function staticHdrMetadataSamples(stream, track, samples) {
+  if (track.sampleEntry !== 'hvc1') {
+    return null;
+  }
+  return samples.filter((sample) => nalUnitsOf(stream, sample, track.nalLengthSize).some(carriesStaticHdrMetadata)).length;
+}
+
 /** The facts one recording's bytes decide, compact enough to commit. */
 export function recordingFacts(stream) {
   const track = videoTrackOf(stream);
@@ -38,6 +107,7 @@ export function recordingFacts(stream) {
       presentationTime: Number(keyframe.presentationTime),
       nalUnitType: keyframe.nalUnitType ?? null,
     })),
+    staticHdrMetadataSamples: staticHdrMetadataSamples(stream, track, samples),
   };
 }
 
@@ -171,7 +241,21 @@ function handlerOf(data, mdia) {
   return data.toString('latin1', hdlr[2] + 8, hdlr[2] + 12);
 }
 
-/** The first video track's sample entry type and the bytes of its decoder configuration record. */
+/** The nclx colour description of a sample entry's colr box (ISO/IEC 14496-12 12.1.5), else null. */
+function colourDescriptionOf(data, entry) {
+  const colr = childBox(data, [entry[2] + VISUAL_SAMPLE_ENTRY_BYTES, entry[3]], 'colr');
+  if (colr === null || colr[3] - colr[2] < 11 || data.toString('latin1', colr[2], colr[2] + 4) !== 'nclx') {
+    return null;
+  }
+  return {
+    primaries: data.readUInt16BE(colr[2] + 4),
+    transfer: data.readUInt16BE(colr[2] + 6),
+    matrix: data.readUInt16BE(colr[2] + 8),
+    fullRange: (data[colr[2] + 10] & 0x80) !== 0,
+  };
+}
+
+/** The first video track's sample entry type, the bytes of its decoder configuration record and its colour description. */
 function videoConfiguration(data) {
   const moov = childBox(data, [0, data.length], 'moov');
   for (const found of boxes(data, moov[2], moov[3])) {
@@ -183,7 +267,11 @@ function videoConfiguration(data) {
     const [entry] = boxes(data, stsd[2] + 8, stsd[3]);
     const recordType = CONFIGURATION_RECORDS[entry[0]];
     const record = recordType === undefined ? null : childBox(data, [entry[2] + VISUAL_SAMPLE_ENTRY_BYTES, entry[3]], recordType);
-    return { sampleEntry: entry[0], record: record === null ? null : data.subarray(record[2], record[3]) };
+    return {
+      sampleEntry: entry[0],
+      record: record === null ? null : data.subarray(record[2], record[3]),
+      colourDescription: colourDescriptionOf(data, entry),
+    };
   }
   throw new Error('the initialization segment declares no video track');
 }
@@ -266,33 +354,49 @@ function hevc(sampleEntry, record) {
 /**
  * The digests of the initialization segment as FFmpeg wrote it and as the worker delivers it, and
  * what the output check of streamarr/streamarr-transcode-worker#25 reads from it, the way
- * CodecConfigurationReader reads it: the codec string, the picture format and whether the record
- * holds the parameter sets that its sample entry promises.
+ * CodecConfigurationReader reads it: the codec string, the picture format, whether the record
+ * holds the parameter sets that its sample entry promises, and the colour description of its colr
+ * box.
  */
 export function initializationSegmentFacts(bytes) {
-  const { sampleEntry, record } = videoConfiguration(bytes);
+  const { sampleEntry, record, colourDescription } = videoConfiguration(bytes);
   const digests = { sha256: sha256(bytes), deliveredSha256: sha256(deliveredInitializationSegment(bytes)) };
   switch (record === null ? null : sampleEntry) {
     case 'avc1':
-      return { ...digests, ...avc(sampleEntry, record) };
+      return { ...digests, ...avc(sampleEntry, record), colourDescription };
     case 'hvc1':
-      return { ...digests, ...hevc(sampleEntry, record) };
+      return { ...digests, ...hevc(sampleEntry, record), colourDescription };
     default:
-      return { ...digests, codecString: sampleEntry, pictureFormat: null, holdsParameterSets: record !== null };
+      return { ...digests, codecString: sampleEntry, pictureFormat: null, holdsParameterSets: record !== null, colourDescription };
   }
 }
 
-/** Whether the initialization segment passes the output check against the job's codec string. */
-export function outputCheck(initializationSegment, expectedCodecString) {
-  const { codecString, pictureFormat, holdsParameterSets } = initializationSegment;
+// The limited-range BT.2020 colour description that a PQ or HLG encode declares (ITU-T H.273):
+// primaries 9, the range's transfer and the non-constant luminance matrix 9.
+const HDR_COLOUR_DESCRIPTIONS = {
+  pq: { primaries: 9, transfer: 16, matrix: 9, fullRange: false },
+  hlg: { primaries: 9, transfer: 18, matrix: 9, fullRange: false },
+};
+
+/**
+ * Whether the initialization segment passes the output check against the job: its codec string, its
+ * bit depth in 4:2:0, its parameter sets and, for a PQ or HLG job, the colour description of its
+ * range. Any other job's colour description is not compared, as the worker compares none.
+ */
+export function outputCheck(initializationSegment, { expectedCodecString, bitDepth, range }) {
+  const { codecString, pictureFormat, holdsParameterSets, colourDescription } = initializationSegment;
+  const expectedColourDescription = HDR_COLOUR_DESCRIPTIONS[range] ?? null;
   return {
     expectedCodecString,
     codecString,
+    expectedBitDepth: bitDepth,
+    expectedColourDescription,
     passes:
       codecString === expectedCodecString &&
-      pictureFormat?.bitDepth === 8 &&
+      pictureFormat?.bitDepth === bitDepth &&
       pictureFormat?.chroma === '4:2:0' &&
-      holdsParameterSets,
+      holdsParameterSets &&
+      (expectedColourDescription === null || formatJson(colourDescription) === formatJson(expectedColourDescription)),
   };
 }
 
@@ -315,7 +419,7 @@ export function initializationSegmentPairs(recordings) {
 export function derivedResults(recording) {
   return {
     verdicts: keyframeVerdicts(recording.facts, recording.plan),
-    outputCheck: outputCheck(recording.initializationSegment, recording.plan.expectedCodecString),
+    outputCheck: outputCheck(recording.initializationSegment, recording.plan),
   };
 }
 
@@ -340,6 +444,8 @@ export function planOf(meta) {
     encoder: values.encoder,
     rung: values.rung,
     preset: values.preset,
+    range: values.range,
+    bitDepth: Number(values.bitDepth),
     recipe: values.recipe,
     startSequenceNumber: Number(values.startSequenceNumber),
     gopFrames: Number(values.gopFrames),
@@ -391,7 +497,7 @@ export function compactJson(document) {
 /** One line per recording: the verdicts a person reads first. */
 export function summary(document) {
   const pairs = new Map(document.initializationSegmentPairs.map((pair) => [pair.replacement, pair.identical]));
-  return document.recordings.map(({ name, verdicts, outputCheck: check }) =>
+  return document.recordings.map(({ name, facts, verdicts, outputCheck: check }) =>
     [
       name.padEnd(40),
       `sync=${verdicts.everyForcedKeyframeIsASyncSample}`,
@@ -401,6 +507,7 @@ export function summary(document) {
       `gop-restart-closed-gop=${verdicts.gopRestart?.nextKeyframeStartsClosedGop ?? '-'}`,
       `init-identical=${pairs.get(name) ?? '-'}`,
       `output-check=${check.passes} (${check.codecString})`,
+      `static-hdr-samples=${facts.staticHdrMetadataSamples ?? '-'}`,
     ].join(' '),
   );
 }

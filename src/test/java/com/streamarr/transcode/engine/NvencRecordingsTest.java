@@ -153,6 +153,37 @@ class NvencRecordingsTest {
     assertHoldsTheExtendedRecordingsOf(required);
   }
 
+  @Test
+  @DisplayName(
+      "Should declare 10 bits and no sample with static HDR metadata in every Main 10 recording"
+          + " when its source carries a mastering display and a content light level")
+  void
+      shouldDeclareTenBitsAndNoSampleWithStaticHdrMetadataInEveryMain10RecordingWhenItsSourceCarriesAMasteringDisplayAndAContentLightLevel() {
+    var tenBit = new ArrayList<JsonNode>();
+    for (var recording : committedRecordings().get("recordings")) {
+      if (recording.get("plan").get("bitDepth").asInt() == 10) {
+        tenBit.add(recording);
+      }
+    }
+
+    assertThat(tenBit).as("the Main 10 recordings").isNotEmpty();
+    var softly = new SoftAssertions();
+    for (var recording : tenBit) {
+      var name = recording.get("name").asString();
+      softly
+          .assertThat(
+              recording.get("initializationSegment").get("pictureFormat").get("bitDepth").asInt())
+          .as("the bit depth that %s declares", name)
+          .isEqualTo(10);
+      softly
+          .assertThat(recording.get("facts").get("staticHdrMetadataSamples").asInt())
+          .as("the samples of %s that carry static HDR metadata", name)
+          .isZero();
+    }
+
+    softly.assertAll();
+  }
+
   // Each prefix needs its extended recording from the start, its replacement pair and its
   // missed-keyframe recording's GOP restart.
   private static void assertHoldsTheExtendedRecordingsOf(List<String> prefixes) {
@@ -192,7 +223,10 @@ class NvencRecordingsTest {
             RESULTS.resolve(recording.get("initializationSegment").get("file").asString()));
     var decision = encodeDecidedFor(recording.get("plan"));
     try {
-      VideoOutputCheck.requireMatch(decision, new InitializationSegment(bytes));
+      // The producer checks the initialization segment that it delivers, after its rewrite.
+      VideoOutputCheck.requireMatch(
+          decision,
+          InitializationSegmentRewrite.rewrite(decision, new InitializationSegment(bytes)));
       return true;
     } catch (FragmentedMp4Exception _) {
       return false;
@@ -200,18 +234,14 @@ class NvencRecordingsTest {
   }
 
   private static VideoDecision.Encode encodeDecidedFor(JsonNode plan) {
-    var hevc = plan.get("encoder").asString().startsWith("hevc");
     var tier = Optional.<VideoCodecTier>empty();
     if (!plan.get("tier").isNull()) {
       tier =
           Optional.of(VideoCodecTier.valueOf(plan.get("tier").asString().toUpperCase(Locale.ROOT)));
     }
 
-    return VideoDecision.Encode.builder()
-        .sourceCodecFamily(Optional.of(CodecFamily.H264))
-        .sourceDynamicRange(VideoDynamicRange.sdr())
-        .outputDynamicRange(VideoDynamicRange.sdr())
-        .codecProfile(hevc ? VideoCodecProfile.HEVC_MAIN : VideoCodecProfile.H264_HIGH)
+    return NvencRecordedEncodes.encodeOf(
+            plan.get("encoder").asString(), plan.get("range").asString())
         .tier(tier)
         .level(plan.get("level").asInt())
         .codecString(plan.get("expectedCodecString").asString())
