@@ -5,6 +5,7 @@ import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
@@ -47,7 +48,7 @@ final class ContainerIndexProbe {
       throws IOException, ExecutionException, InterruptedException {
     var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path("streams"));
     if (chosen.isEmpty()) {
-      return ProbeAttemptReport.resultOnly(
+      return ProbeReports.resultOnly(
           probed.result().toBuilder()
               .clearMedia()
               .setFailure(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM)
@@ -196,7 +197,7 @@ final class ContainerIndexProbe {
 
   private static ProbeAttemptReport packetScanRequired(
       ProbedSource probed, KeyframePacketScanReason reason) {
-    return ProbeAttemptReport.resultOnly(
+    return ProbeReports.resultOnly(
         KeyframePositionsReport.withKeyframes(
             probed.result(), ProbeKeyframes.newBuilder().setPacketScanRequired(reason)));
   }

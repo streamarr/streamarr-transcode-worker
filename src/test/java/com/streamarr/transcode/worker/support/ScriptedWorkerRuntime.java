@@ -5,16 +5,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReportMetadata;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadLimitReached;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
+import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.google.protobuf.Any;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.rpc.Code;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import com.streamarr.transcode.worker.WorkerRuntime;
@@ -28,29 +34,34 @@ import io.grpc.StatusRuntimeException;
 import io.grpc.protobuf.StatusProto;
 import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
-  private final int segmentUploadLimit;
+  private final WorkerSessionAccepted limits;
   private Connection connection;
   private QueuedProbeExecutor probes;
 
-  /** A runtime whose server accepts the worker session without a segment upload limit. */
+  /** A runtime whose server accepts the worker session and states no limit. */
   public ScriptedWorkerRuntime() {
-    this(0);
+    this(WorkerSessionAccepted.getDefaultInstance());
   }
 
-  private ScriptedWorkerRuntime(int segmentUploadLimit) {
-    this.segmentUploadLimit = segmentUploadLimit;
+  private ScriptedWorkerRuntime(WorkerSessionAccepted limits) {
+    this.limits = limits;
   }
 
   /**
@@ -58,14 +69,27 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
    * no limit.
    */
   public static ScriptedWorkerRuntime withSegmentUploadLimit(int segmentUploadLimit) {
-    return new ScriptedWorkerRuntime(segmentUploadLimit);
+    return accepting(WorkerSessionAccepted.newBuilder().setSegmentUploadLimit(segmentUploadLimit));
+  }
+
+  /**
+   * A runtime whose server states these limits when it accepts the worker session; a limit left
+   * unset states no limit.
+   */
+  public static ScriptedWorkerRuntime accepting(WorkerSessionAccepted.Builder limits) {
+    return new ScriptedWorkerRuntime(limits.build());
   }
 
   @Override
   public ManagedChannel openChannel(
       TranscodeWorkerConfiguration configuration, InetSocketAddress address) {
-    connection = new Connection(segmentUploadLimit);
+    connection = new Connection(limits);
     return connection;
+  }
+
+  @Override
+  public ExecutorService newProbeReportScope() {
+    return connection().reportThreads;
   }
 
   @Override
@@ -82,6 +106,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
   public QueuedProbeExecutor probes() {
     assertThat(probes).as("the worker has opened its probe task scope").isNotNull();
     return probes;
+  }
+
+  private static StatusRuntimeException reportRefusal() {
+    return Status.FAILED_PRECONDITION
+        .withDescription("The probe attempt takes no report")
+        .asRuntimeException();
   }
 
   private static StatusRuntimeException workerLimitRefusal() {
@@ -106,12 +136,24 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final OpenUploads openUploads = new OpenUploads();
     private final ConcurrentLinkedQueue<StatusRuntimeException> refusals =
         new ConcurrentLinkedQueue<>();
+    private final List<ReportCall> reportCalls = new ArrayList<>();
+    private final UploadReadiness reportReadiness = new UploadReadiness();
+    private final OpenUploads openReportCalls = new OpenUploads();
+    private final ReportThreads reportThreads = new ReportThreads();
     private volatile boolean refusingAtTheWorkersLimit;
     private volatile boolean acknowledgementsWithheld;
+    private volatile boolean reportAnswersWithheld;
+    private volatile boolean refusingNextReport;
     private boolean shutdown;
 
-    private Connection(int segmentUploadLimit) {
-      call = new SessionCall(segmentUploadLimit);
+    private Connection(WorkerSessionAccepted limits) {
+      call = new SessionCall(limits);
+    }
+
+    /** The id of the worker session that the scripted server accepted. */
+    public Uuid workerSessionId() {
+      assertThat(call.workerSessionId).as("the server accepted the worker session").isCompleted();
+      return call.workerSessionId.resultNow();
     }
 
     /**
@@ -215,11 +257,93 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       return readiness.violations();
     }
 
+    /**
+     * The result of every probe report that the worker has sent whole, in the order in which the
+     * worker opened the report calls, once the worker's report threads have nothing left to send.
+     */
     public List<ProbeAttemptResult> results() {
-      return call.events.stream()
-          .filter(EstablishWorkerSessionRequest::hasProbeResult)
-          .map(EstablishWorkerSessionRequest::getProbeResult)
+      return reports().stream().map(ProbeAttemptReport::getResult).toList();
+    }
+
+    /**
+     * Every probe report that the worker has sent whole, in the order in which the worker opened
+     * the report calls, once the worker's report threads have nothing left to send. A report whose
+     * call still waits, for readiness or for a withheld answer, keeps this method waiting.
+     */
+    public List<ProbeAttemptReport> reports() {
+      reportThreads.awaitIdle();
+      return reportCalls().stream()
+          .filter(ReportCall::wasSentWhole)
+          .map(ReportCall::report)
           .toList();
+    }
+
+    /** Every report call that the worker has opened so far, in the order it opened them. */
+    public List<ReportCall> reportCalls() {
+      synchronized (reportCalls) {
+        return List.copyOf(reportCalls);
+      }
+    }
+
+    /** Waits until the worker has opened this many report calls, and returns them in order. */
+    public List<ReportCall> awaitReportCalls(int count) throws InterruptedException {
+      synchronized (reportCalls) {
+        while (reportCalls.size() < count) {
+          reportCalls.wait();
+        }
+
+        return List.copyOf(reportCalls);
+      }
+    }
+
+    /** Waits until every report that the worker has begun to send has ended. */
+    public void awaitReportThreads() {
+      reportThreads.awaitIdle();
+    }
+
+    /** Whether the worker has shut down the threads that send this session's reports. */
+    public boolean hasJoinedReportThreads() {
+      return reportThreads.isTerminated();
+    }
+
+    /**
+     * From now on a report call reports that it is ready for one more message only after each
+     * {@link #grantReportMessage()}.
+     */
+    public void withholdReportReadiness() {
+      reportReadiness.withhold();
+    }
+
+    /** Lets the worker send one more message on a report call. */
+    public void grantReportMessage() {
+      reportReadiness.grant();
+      reportCalls().forEach(ReportCall::signalReady);
+    }
+
+    /** From now on a report call that the worker half-closes is not answered. */
+    public void withholdReportAnswers() {
+      reportAnswersWithheld = true;
+    }
+
+    /** Stops withholding answers and answers every report call that awaits one. */
+    public void releaseReportAnswers() {
+      reportAnswersWithheld = false;
+      reportCalls().forEach(ReportCall::acknowledgeWhenAwaited);
+    }
+
+    /** The next report call that the worker opens is refused once its first message arrives. */
+    public void refuseNextReport() {
+      refusingNextReport = true;
+    }
+
+    /** The most report calls open at once: started, and neither answered, refused nor cancelled. */
+    public int mostReportCallsOpenAtOnce() {
+      return openReportCalls.most();
+    }
+
+    /** The number of report messages the worker sent while its call reported it was not ready. */
+    public int reportMessagesSentWhileNotReady() {
+      return reportReadiness.violations();
     }
 
     public void deliver(EstablishWorkerSessionResponse response) {
@@ -248,8 +372,27 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         return typed(upload);
       }
 
+      if (method.equals(TranscodeWorkerServiceGrpc.getReportProbeAttemptMethod())) {
+        return typed(newReportCall());
+      }
+
       assertThat(method).isEqualTo(TranscodeWorkerServiceGrpc.getEstablishWorkerSessionMethod());
       return typed(call);
+    }
+
+    private ReportCall newReportCall() {
+      var report = new ReportCall(reportReadiness, openReportCalls, () -> reportAnswersWithheld);
+      if (refusingNextReport) {
+        refusingNextReport = false;
+        report.refuseOnTheFirstMessage(reportRefusal());
+      }
+
+      synchronized (reportCalls) {
+        reportCalls.add(report);
+        reportCalls.notifyAll();
+      }
+
+      return report;
     }
 
     private Optional<StatusRuntimeException> nextRefusal() {
@@ -304,12 +447,13 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
     private final ConcurrentLinkedQueue<EstablishWorkerSessionRequest> events =
         new ConcurrentLinkedQueue<>();
-    private final int segmentUploadLimit;
+    private final CompletableFuture<Uuid> workerSessionId = new CompletableFuture<>();
+    private final WorkerSessionAccepted limits;
     private Listener<EstablishWorkerSessionResponse> responses;
     private volatile boolean refusing;
 
-    private SessionCall(int segmentUploadLimit) {
-      this.segmentUploadLimit = segmentUploadLimit;
+    private SessionCall(WorkerSessionAccepted limits) {
+      this.limits = limits;
     }
 
     @Override
@@ -326,13 +470,10 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       events.add(message);
       if (message.hasRegistration()) {
         registration.complete(message.getRegistration());
+        var accepted = limits.toBuilder().setWorkerSessionId(toProto(UUID.randomUUID())).build();
+        workerSessionId.complete(accepted.getWorkerSessionId());
         responses.onMessage(
-            EstablishWorkerSessionResponse.newBuilder()
-                .setSessionAccepted(
-                    WorkerSessionAccepted.newBuilder()
-                        .setWorkerSessionId(toProto(UUID.randomUUID()))
-                        .setSegmentUploadLimit(segmentUploadLimit))
-                .build());
+            EstablishWorkerSessionResponse.newBuilder().setSessionAccepted(accepted).build());
       }
     }
 
@@ -349,6 +490,78 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public void halfClose() {
       // Server completion is controlled independently from the client's half-close.
+    }
+  }
+
+  // The threads that send the worker's probe reports: one virtual thread for each task, counted so
+  // that a test can wait until the worker has nothing left to send.
+  private static final class ReportThreads extends AbstractExecutorService {
+
+    private final ExecutorService running = Executors.newVirtualThreadPerTaskExecutor();
+    private int unfinished;
+
+    @Override
+    public void execute(Runnable command) {
+      started();
+      try {
+        running.execute(
+            () -> {
+              try {
+                command.run();
+              } finally {
+                finished();
+              }
+            });
+      } catch (RejectedExecutionException rejection) {
+        finished();
+        throw rejection;
+      }
+    }
+
+    private synchronized void started() {
+      unfinished++;
+    }
+
+    private synchronized void finished() {
+      unfinished--;
+      notifyAll();
+    }
+
+    // The test's own timeout interrupts a wait for a report that never ends.
+    private synchronized void awaitIdle() {
+      try {
+        while (unfinished > 0) {
+          wait();
+        }
+      } catch (InterruptedException interruption) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError("Interrupted while a probe report was still being sent");
+      }
+    }
+
+    @Override
+    public void shutdown() {
+      running.shutdown();
+    }
+
+    @Override
+    public List<Runnable> shutdownNow() {
+      return running.shutdownNow();
+    }
+
+    @Override
+    public boolean isShutdown() {
+      return running.isShutdown();
+    }
+
+    @Override
+    public boolean isTerminated() {
+      return running.isTerminated();
+    }
+
+    @Override
+    public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+      return running.awaitTermination(timeout, unit);
     }
   }
 
@@ -425,6 +638,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final List<Q> messages = new CopyOnWriteArrayList<>();
     private volatile Listener<R> responses;
     private Optional<StatusRuntimeException> refusal = Optional.empty();
+    private final CompletableFuture<Void> sentWhole = new CompletableFuture<>();
     private boolean closed;
     private boolean cancelled;
     private boolean halfClosed;
@@ -464,6 +678,17 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** Every message that the worker sent on the call, in order. */
     public List<Q> messages() {
       return List.copyOf(messages);
+    }
+
+    /** Waits until the worker has sent this many messages, and returns every message so far. */
+    public List<Q> awaitMessages(int count) throws InterruptedException {
+      synchronized (messages) {
+        while (messages.size() < count) {
+          messages.wait();
+        }
+
+        return List.copyOf(messages);
+      }
     }
 
     /** The length of each data message's content, in order. */
@@ -523,7 +748,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public void sendMessage(Q message) {
       readiness.consume();
-      messages.add(message);
+      synchronized (messages) {
+        messages.add(message);
+        messages.notifyAll();
+      }
+
       refusal().ifPresent(this::refuse);
     }
 
@@ -536,12 +765,23 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       return halfClosed && !closed;
     }
 
+    /** Whether the worker sent the whole upload: every message, and then its half-close. */
+    public synchronized boolean wasSentWhole() {
+      return halfClosed;
+    }
+
+    /** Waits until the worker has sent the whole upload. */
+    public void awaitSentWhole() throws InterruptedException, ExecutionException {
+      sentWhole.get();
+    }
+
     @Override
     public void halfClose() {
       synchronized (this) {
         halfClosed = true;
       }
 
+      sentWhole.complete(null);
       if (acknowledgementsWithheld.getAsBoolean()) {
         return;
       }
@@ -556,11 +796,15 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     private void acknowledge() {
+      answer(acknowledgementOf(content().length));
+    }
+
+    void answer(R answer) {
       if (!tryClose()) {
         return;
       }
 
-      responses.onMessage(acknowledgementOf(content().length));
+      responses.onMessage(answer);
       responses.onClose(Status.OK, new Metadata());
     }
 
@@ -619,6 +863,55 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     UploadSegmentResponse acknowledgementOf(long acceptedLengthBytes) {
       return UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(acceptedLengthBytes).build();
+    }
+  }
+
+  /**
+   * A report call, whose first message names the probe attempt and states the length of its encoded
+   * probe report.
+   */
+  public static final class ReportCall
+      extends ScriptedUpload<ReportProbeAttemptRequest, ReportProbeAttemptResponse> {
+
+    private ReportCall(
+        UploadReadiness readiness, OpenUploads openCalls, BooleanSupplier answersWithheld) {
+      super(readiness, openCalls, answersWithheld);
+    }
+
+    public ProbeAttemptReportMetadata metadata() {
+      return messages().getFirst().getMetadata();
+    }
+
+    /** The probe report that the call's data messages carry. */
+    public ProbeAttemptReport report() {
+      try {
+        return ProbeAttemptReport.parseFrom(content());
+      } catch (InvalidProtocolBufferException invalid) {
+        throw new AssertionError("The report call's bytes are no probe report", invalid);
+      }
+    }
+
+    /** Answers the call, which awaits its answer, with this accepted length. */
+    public void answerWithAcceptedLength(long acceptedLengthBytes) {
+      answer(acknowledgementOf(acceptedLengthBytes));
+    }
+
+    /** Refuses the open call, as when the server no longer expects the attempt's report. */
+    public void refuse() {
+      refuseNow(reportRefusal());
+    }
+
+    @Override
+    Optional<ByteString> dataOf(ReportProbeAttemptRequest message) {
+      return message.hasData() ? Optional.of(message.getData()) : Optional.empty();
+    }
+
+    @Override
+    ReportProbeAttemptResponse acknowledgementOf(long acceptedLengthBytes) {
+      return ReportProbeAttemptResponse.newBuilder()
+          .setProbeAttemptId(metadata().getProbeAttemptId())
+          .setAcceptedLengthBytes(acceptedLengthBytes)
+          .build();
     }
   }
 }

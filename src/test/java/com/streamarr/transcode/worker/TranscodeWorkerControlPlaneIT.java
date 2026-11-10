@@ -33,6 +33,8 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
@@ -63,6 +65,7 @@ import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.ControlPlaneServer;
+import com.streamarr.transcode.worker.support.ReceivedProbeReports;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
@@ -1083,6 +1086,7 @@ class TranscodeWorkerControlPlaneIT {
     private final boolean closeBeforeRegistration;
     private final CountDownLatch registered = new CountDownLatch(1);
     private final AtomicReference<WorkerRegistration> registration = new AtomicReference<>();
+    private final ReceivedProbeReports probeReports = new ReceivedProbeReports();
     // The service's monitor guards these fields. Each wait for a worker message waits on it.
     private final List<EstablishWorkerSessionRequest> events = new ArrayList<>();
     private int eventsTaken;
@@ -1154,6 +1158,12 @@ class TranscodeWorkerControlPlaneIT {
           responseObserver.onCompleted();
         }
       };
+    }
+
+    @Override
+    public StreamObserver<ReportProbeAttemptRequest> reportProbeAttempt(
+        StreamObserver<ReportProbeAttemptResponse> responseObserver) {
+      return probeReports.serve(responseObserver);
     }
 
     @Override

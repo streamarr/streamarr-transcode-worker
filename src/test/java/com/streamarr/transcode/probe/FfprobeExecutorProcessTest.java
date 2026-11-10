@@ -57,7 +57,7 @@ class FfprobeExecutorProcessTest {
     assertThat(
             executor
                 .probe(temporaryDirectory.resolve("movie.mkv"), request())
-                .result()
+                .getResult()
                 .getFailure())
         .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
@@ -75,7 +75,7 @@ class FfprobeExecutorProcessTest {
         """);
 
     var result =
-        executorFor(binary).probe(temporaryDirectory.resolve("movie.mkv"), request()).result();
+        executorFor(binary).probe(temporaryDirectory.resolve("movie.mkv"), request()).getResult();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreamsList()).hasSize(1);
@@ -176,7 +176,7 @@ class FfprobeExecutorProcessTest {
         Thread.ofVirtual()
             .start(
                 () -> {
-                  var result = probe.executor().probe(probe.source(), probe.request()).result();
+                  var result = probe.executor().probe(probe.source(), probe.request()).getResult();
                   completion.complete(
                       new ProbeCompletion(
                           result,
@@ -303,7 +303,7 @@ class FfprobeExecutorProcessTest {
               return printsTooMuch;
             });
 
-    var result = executor.probe(temporaryDirectory.resolve("movie.mkv"), request()).result();
+    var result = executor.probe(temporaryDirectory.resolve("movie.mkv"), request()).getResult();
 
     assertThat(stoppedReads)
         .isNotEmpty()
@@ -341,7 +341,7 @@ class FfprobeExecutorProcessTest {
           "frames":[{"stream_index":0}]}'
         """);
 
-    var result = executorFor(binary).probe(source, request()).result();
+    var result = executorFor(binary).probe(source, request()).getResult();
 
     assertThat(result.getMedia().getStreams(0).getCodec()).isEqualTo("h264");
     var runs = new ArrayList<List<String>>();

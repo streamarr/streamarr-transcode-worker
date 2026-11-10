@@ -14,8 +14,11 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptProgress;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReportMetadata;
 import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
@@ -58,7 +61,6 @@ import com.streamarr.transcode.engine.TranscodeRequest;
 import com.streamarr.transcode.engine.UnadvertisedCodecFamilyException;
 import com.streamarr.transcode.probe.DownmixLevels;
 import com.streamarr.transcode.probe.FfprobeExecutor;
-import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
 import io.grpc.stub.StreamObserver;
@@ -230,7 +232,13 @@ public final class TranscodeWorker implements AutoCloseable {
         WorkerProbeSession.builder()
             .ffprobe(ffprobe)
             .sources(sources)
-            .reports(report -> sendProbeResult(sessionRequests.get(), report))
+            .reports(
+                ProbeReportSender.builder()
+                    .opener(call -> openProbeReport(sessionRequests.get(), call))
+                    .executor(runtime.newProbeReportScope())
+                    .readinessTimeout(configuration.uploadReadinessTimeout())
+                    .acknowledgementTimeout(configuration.uploadAcknowledgementTimeout())
+                    .build())
             .executor(runtime.newProbeScope())
             .capacities(probeCapacities)
             .summary(probeSummary)
@@ -379,29 +387,19 @@ public final class TranscodeWorker implements AutoCloseable {
         .build();
   }
 
-  private synchronized void sendProbeResult(
-      StreamObserver<EstablishWorkerSessionRequest> sessionRequests, ProbeAttemptReport report) {
-    if (requests == null || requests != sessionRequests) {
-      return;
+  // Opens the report call while the session that produced the report is still the accepted one.
+  private synchronized Optional<ProbeAttemptReportMetadata.Builder> openProbeReport(
+      StreamObserver<EstablishWorkerSessionRequest> sessionRequests,
+      FlowControlledCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call) {
+    if (requests == null || requests != sessionRequests || workerSession == null) {
+      return Optional.empty();
     }
 
-    report
-        .keyframePositionsParts()
-        .forEach(
-            part ->
-                send(
-                    EstablishWorkerSessionRequest.newBuilder()
-                        .setProbeKeyframePositionsPart(part)
-                        .build()));
-    report
-        .streamMeasurementParts()
-        .forEach(
-            part ->
-                send(
-                    EstablishWorkerSessionRequest.newBuilder()
-                        .setProbeStreamMeasurementPart(part)
-                        .build()));
-    send(EstablishWorkerSessionRequest.newBuilder().setProbeResult(report.result()).build());
+    TranscodeWorkerServiceGrpc.newStub(channel).reportProbeAttempt(call);
+    return Optional.of(
+        ProbeAttemptReportMetadata.newBuilder()
+            .setWorkerSessionId(workerSession.getWorkerSessionId())
+            .setWorker(identity()));
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
@@ -801,7 +799,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> newSegmentUpload() {
-    return new FlowControlledCall<>(
+    return FlowControlledCall.acknowledgedFromItsFirstMessage(
         configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
   }
 
@@ -1392,6 +1390,7 @@ public final class TranscodeWorker implements AutoCloseable {
       if (response.hasSessionAccepted()) {
         workerSession = response.getSessionAccepted();
         uploadLimit.set(new SegmentUploadLimit(workerSession.getSegmentUploadLimit(), clock));
+        sessionProbes.accepted(workerSession);
         sessionAccepted = true;
         accepted.complete(workerSession);
         return;

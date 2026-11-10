@@ -15,7 +15,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
-import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.FrameRateRuleInputs;
@@ -34,10 +33,12 @@ import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
+import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.google.protobuf.Duration;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.probe.ProbeCommand;
+import com.streamarr.transcode.probe.ProbeReports;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
@@ -63,8 +64,8 @@ import tools.jackson.databind.ObjectMapper;
 @Timeout(value = 1, unit = TimeUnit.MINUTES)
 class TranscodeWorkerProbeTest {
 
-  // worker_session.proto: the largest session message the server accepts.
-  private static final int SESSION_MESSAGE_LIMIT_BYTES = 131_072;
+  // A length limit as the server states one when it accepts the worker session.
+  private static final int REPORT_LENGTH_LIMIT_BYTES = 131_072;
 
   // A source whose container has no index, such as MPEG-TS, needs a packet scan for its keyframes.
   private static final ProbeKeyframes PACKET_SCAN_REQUIRED_WITHOUT_INDEX =
@@ -169,10 +170,10 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
-      "Should send the keyframe positions, then the stream measurements, before the probe result"
-          + " when the worker reads a container index")
+      "Should report the keyframe positions and the stream measurement with the probe result when"
+          + " the worker reads a container index")
   void
-      shouldSendKeyframePositionsThenStreamMeasurementsBeforeProbeResultWhenWorkerReadsContainerIndex()
+      shouldReportKeyframePositionsAndStreamMeasurementWithProbeResultWhenWorkerReadsContainerIndex()
           throws Exception {
     var fixture = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
     assertThat(fixture).isNotNull();
@@ -205,34 +206,36 @@ class TranscodeWorkerProbeTest {
       start(runtime.connection(), request);
       runtime.probes().drain();
 
-      assertThat(runtime.connection().events())
-          .filteredOn(event -> !event.hasRegistration())
-          .satisfiesExactly(
-              part ->
-                  assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
-                      .containsExactly(0L, 8_704L, 16_896L, 10_240L),
-              measurement -> {
-                var part = measurement.getProbeStreamMeasurementPart();
-                assertThat(part.getKeyframeIntervalBytesList()).hasSize(4);
-                assertThat(part.getKeyframeIntervalPacketCountsList()).hasSize(4);
-              },
-              result ->
-                  assertThat(
-                          result
-                              .getProbeResult()
-                              .getMedia()
-                              .getKeyframes()
-                              .getPositions()
-                              .getKeyframeCount())
-                      .isEqualTo(4));
+      assertThat(runtime.connection().reports())
+          .singleElement()
+          .satisfies(
+              report -> {
+                assertThat(report.getKeyframePresentationTimeDeltasList())
+                    .containsExactly(0L, 8_704L, 16_896L, 10_240L);
+                assertThat(report.getStreamMeasurementIntervalsList())
+                    .singleElement()
+                    .satisfies(
+                        intervals -> {
+                          assertThat(intervals.getKeyframeIntervalBytesList()).hasSize(4);
+                          assertThat(intervals.getKeyframeIntervalPacketCountsList()).hasSize(4);
+                        });
+                assertThat(
+                        report
+                            .getResult()
+                            .getMedia()
+                            .getKeyframes()
+                            .getPositions()
+                            .getKeyframeCount())
+                    .isEqualTo(4);
+              });
     }
   }
 
   @Test
   @DisplayName(
-      "Should send the scanned keyframe positions before the probe result when the server requests"
+      "Should report the scanned keyframe positions with the probe result when the server requests"
           + " a packet scan")
-  void shouldSendScannedKeyframePositionsBeforeProbeResultWhenServerRequestsPacketScan()
+  void shouldReportScannedKeyframePositionsWithProbeResultWhenServerRequestsPacketScan()
       throws Exception {
     Files.writeString(tempDir.resolve("movie.ts"), "media");
     var runtime = new ScriptedWorkerRuntime();
@@ -266,33 +269,33 @@ class TranscodeWorkerProbeTest {
       start(runtime.connection(), request);
       runtime.probes().drain();
 
-      assertThat(runtime.connection().events())
-          .filteredOn(event -> !event.hasRegistration())
-          .satisfiesExactly(
-              part ->
-                  assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
-                      .containsExactly(0L, 180_000L),
-              result ->
-                  assertThat(result.getProbeResult().getMedia().getKeyframes().getPositions())
-                      .satisfies(
-                          positions -> {
-                            assertThat(positions.getKeyframeCount()).isEqualTo(2);
-                            assertThat(positions.getSource())
-                                .isEqualTo(
-                                    KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
-                          }));
+      assertThat(runtime.connection().reports())
+          .singleElement()
+          .satisfies(
+              report -> {
+                assertThat(report.getKeyframePresentationTimeDeltasList())
+                    .containsExactly(0L, 180_000L);
+                assertThat(report.getResult().getMedia().getKeyframes().getPositions())
+                    .satisfies(
+                        positions -> {
+                          assertThat(positions.getKeyframeCount()).isEqualTo(2);
+                          assertThat(positions.getSource())
+                              .isEqualTo(
+                                  KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
+                        });
+              });
     }
   }
 
   @ParameterizedTest
   @ValueSource(ints = {-1, 0})
   @DisplayName(
-      "Should send the probe result when its session message fits within the server's limit")
-  void shouldSendTheProbeResultWhenItsSessionMessageFitsWithinTheServersLimit(int bytesFromLimit)
-      throws Exception {
+      "Should send the probe report when its encoding fits within the length limit that the"
+          + " server stated")
+  void shouldSendTheProbeReportWhenItsEncodingFitsWithinTheLengthLimitThatTheServerStated(
+      int bytesFromLimit) throws Exception {
     var request = requestBuilder().build();
-    var language =
-        languageFillingSessionMessage(request, SESSION_MESSAGE_LIMIT_BYTES + bytesFromLimit);
+    var language = languageFillingReport(request, REPORT_LENGTH_LIMIT_BYTES + bytesFromLimit);
 
     assertThat(probeResults(request, ffprobeOutput(1, language)))
         .containsExactly(resultWithOneVideoStream(request, language).build());
@@ -300,12 +303,12 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
-      "Should report the result as too large when its session message exceeds the server's limit"
-          + " by one byte")
-  void shouldReportTheResultAsTooLargeWhenItsSessionMessageExceedsTheServersLimitByOneByte()
+      "Should report the probe as too large when its report is one byte longer than the length"
+          + " limit that the server stated")
+  void shouldReportTheProbeAsTooLargeWhenItsReportIsOneByteLongerThanTheStatedLengthLimit()
       throws Exception {
     var request = requestBuilder().build();
-    var language = languageFillingSessionMessage(request, SESSION_MESSAGE_LIMIT_BYTES + 1);
+    var language = languageFillingReport(request, REPORT_LENGTH_LIMIT_BYTES + 1);
 
     assertThat(probeResults(request, ffprobeOutput(1, language)))
         .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
@@ -313,9 +316,9 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
-      "Should report the result as too large when the file has more streams than one session"
-          + " message can carry")
-  void shouldReportTheResultAsTooLargeWhenTheFileHasMoreStreamsThanOneSessionMessageCanCarry()
+      "Should report the probe as too large when the file has more streams than a report within"
+          + " the stated length limit can carry")
+  void shouldReportTheProbeAsTooLargeWhenTheFileHasMoreStreamsThanAReportWithinTheLimitCarries()
       throws Exception {
     var request = requestBuilder().build();
 
@@ -325,20 +328,44 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
-      "Should send no keyframe positions part when the probe result is too large for one session"
-          + " message")
-  void shouldSendNoKeyframePositionsPartWhenTheProbeResultIsTooLargeForOneSessionMessage()
+      "Should send the probe report whatever its length when the server stated no length limit")
+  void shouldSendTheProbeReportWhateverItsLengthWhenTheServerStatedNoLengthLimit()
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), ffprobeOutput(20_000, ""));
+    var runtime = new ScriptedWorkerRuntime();
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().reports())
+          .singleElement()
+          .satisfies(
+              report -> {
+                assertThat(report.getResult().getMedia().getStreamsCount()).isEqualTo(20_000);
+                assertThat(report.getSerializedSize()).isGreaterThan(REPORT_LENGTH_LIMIT_BYTES);
+              });
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should send a report that holds only the failure when a report with keyframe positions is"
+          + " longer than the length limit that the server stated")
+  void shouldSendAReportThatHoldsOnlyTheFailureWhenAReportWithKeyframePositionsIsTooLong()
       throws Exception {
     var fixture = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
     assertThat(fixture).isNotNull();
     Files.copy(Path.of(fixture.toURI()), tempDir.resolve("movie.mp4"));
-    var runtime = new ScriptedWorkerRuntime();
+    var runtime = acceptingReportsWithinTheLengthLimit();
     var request =
         requestBuilder()
             .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
             .build();
-    var language = "a".repeat(SESSION_MESSAGE_LIMIT_BYTES);
+    var language = "a".repeat(REPORT_LENGTH_LIMIT_BYTES);
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
@@ -363,17 +390,24 @@ class TranscodeWorkerProbeTest {
       start(runtime.connection(), request);
       runtime.probes().drain();
 
-      assertThat(runtime.connection().events())
-          .filteredOn(event -> !event.hasRegistration())
-          .extracting(EstablishWorkerSessionRequest::getProbeResult)
-          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
+      assertThat(runtime.connection().reports())
+          .containsExactly(
+              ProbeReports.resultOnly(
+                  failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE)));
     }
   }
 
+  private static ScriptedWorkerRuntime acceptingReportsWithinTheLengthLimit() {
+    return ScriptedWorkerRuntime.accepting(
+        WorkerSessionAccepted.newBuilder()
+            .setProbeReportLengthLimitBytes(REPORT_LENGTH_LIMIT_BYTES));
+  }
+
+  // The results that a worker sends when the server stated the length limit.
   private List<ProbeAttemptResult> probeResults(ProbeRequest request, String ffprobeOutput)
       throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), ffprobeOutput);
-    var runtime = new ScriptedWorkerRuntime();
+    var runtime = acceptingReportsWithinTheLengthLimit();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
@@ -427,16 +461,14 @@ class TranscodeWorkerProbeTest {
                 .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX));
   }
 
-  // The language tag that makes the session message carrying the result take exactly the given
-  // number of bytes.
-  private static String languageFillingSessionMessage(ProbeRequest request, int bytes) {
+  // The language tag that makes the probe report holding the result take exactly the given number
+  // of bytes.
+  private static String languageFillingReport(ProbeRequest request, int bytes) {
     var length = 0;
     for (var attempt = 0; attempt < 3; attempt++) {
       var language = "a".repeat(length);
       var size =
-          EstablishWorkerSessionRequest.newBuilder()
-              .setProbeResult(resultWithOneVideoStream(request, language))
-              .build()
+          ProbeReports.resultOnly(resultWithOneVideoStream(request, language).build())
               .getSerializedSize();
       if (size == bytes) {
         return language;
@@ -445,7 +477,7 @@ class TranscodeWorkerProbeTest {
       length += bytes - size;
     }
 
-    throw new AssertionError("No language tag fills a session message of " + bytes + " bytes");
+    throw new AssertionError("No language tag fills a probe report of " + bytes + " bytes");
   }
 
   @Test

@@ -2,21 +2,20 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
-import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
-import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeCancelReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.probe.FfprobeExecutor;
-import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.probe.ProbeKind;
+import com.streamarr.transcode.probe.ProbeReports;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.NonNull;
@@ -27,16 +26,21 @@ import lombok.extern.slf4j.Slf4j;
 @Builder(access = AccessLevel.PACKAGE)
 final class WorkerProbeSession implements AutoCloseable {
 
-  // worker_session.proto: the server ends the session on a larger message.
-  private static final int MAXIMUM_SESSION_MESSAGE_BYTES = 131_072;
-
   @NonNull private final FfprobeExecutor ffprobe;
   @NonNull private final WorkerMediaSourceResolver sources;
-  @NonNull private final Consumer<ProbeAttemptReport> reports;
+  @NonNull private final ProbeReportSender reports;
   @NonNull private final ExecutorService executor;
   @NonNull private final ProbeSummary summary;
   @NonNull private final ProbeCapacities capacities;
   private final Map<UUID, ProbeAttempt> attempts = new HashMap<>();
+  // No limit until the server states its limits, which it does before it starts any probe.
+  private final AtomicReference<ProbeReportLimits> limits =
+      new AtomicReference<>(ProbeReportLimits.NONE);
+
+  /** Takes the limits on a probe report that the server stated when it accepted the session. */
+  void accepted(WorkerSessionAccepted accepted) {
+    limits.set(ProbeReportLimits.of(accepted));
+  }
 
   void start(ProbeRequest request) {
     if (tryAdmit(request) instanceof Admission.Refused(var report)) {
@@ -61,7 +65,8 @@ final class WorkerProbeSession implements AutoCloseable {
     var counted = capacities.tryAcquire(kind);
     if (counted.isEmpty()) {
       log.debug("Refusing probe {}: the {} capacity has no free unit", attemptId, kind);
-      return new Admission.Refused(failed(request, ProbeFailure.PROBE_FAILURE_NO_FREE_CAPACITY));
+      return new Admission.Refused(
+          ProbeReports.failed(request, ProbeFailure.PROBE_FAILURE_NO_FREE_CAPACITY));
     }
 
     var attempt = new ProbeAttempt(request, counted.get());
@@ -71,18 +76,10 @@ final class WorkerProbeSession implements AutoCloseable {
     return new Admission.Started();
   }
 
+  // Hands the report over without waiting: a refused probe ends on the control stream's thread.
   private void complete(ProbeAttemptReport report) {
-    summary.finished(fromProto(report.result().getProbeAttemptId()), report.result());
-    reports.accept(report);
-  }
-
-  private static ProbeAttemptReport failed(ProbeRequest request, ProbeFailure failure) {
-    return ProbeAttemptReport.resultOnly(
-        ProbeAttemptResult.newBuilder()
-            .setProbeAttemptId(request.getProbeAttemptId())
-            .setProbeVersion(request.getProbeVersion())
-            .setFailure(failure)
-            .build());
+    summary.finished(fromProto(report.getResult().getProbeAttemptId()), report.getResult());
+    reports.submit(report);
   }
 
   private sealed interface Admission {
@@ -117,15 +114,21 @@ final class WorkerProbeSession implements AutoCloseable {
     return Optional.empty();
   }
 
+  // Never waits, so the worker ends a session under its monitor. A report of the ended session is
+  // never sent: its open call is cancelled, and a probe that ends from now on hands over nothing.
   synchronized void shutdown() {
     attempts.values().forEach(ProbeAttempt::cancel);
     executor.shutdownNow();
+    reports.shutdown();
   }
 
+  // Waits for the probe threads and then the report threads, which open their calls under the
+  // worker monitor; the worker therefore closes a session's probes only after releasing it.
   @Override
   public void close() {
     shutdown();
     executor.close();
+    reports.close();
   }
 
   @RequiredArgsConstructor
@@ -163,23 +166,7 @@ final class WorkerProbeSession implements AutoCloseable {
     }
 
     private ProbeAttemptReport execute() {
-      var report = probe();
-      var sessionMessageBytes =
-          EstablishWorkerSessionRequest.newBuilder()
-              .setProbeResult(report.result())
-              .build()
-              .getSerializedSize();
-      if (sessionMessageBytes <= MAXIMUM_SESSION_MESSAGE_BYTES) {
-        return report;
-      }
-
-      log.warn(
-          "Probe {} result takes {} bytes in its session message, more than the {} bytes the"
-              + " server accepts",
-          fromProto(request.getProbeAttemptId()),
-          sessionMessageBytes,
-          MAXIMUM_SESSION_MESSAGE_BYTES);
-      return failed(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
+      return limits.get().apply(request, probe());
     }
 
     private ProbeAttemptReport probe() {
@@ -205,15 +192,15 @@ final class WorkerProbeSession implements AutoCloseable {
     }
 
     private ProbeAttemptReport failed(ProbeFailure failure) {
-      return WorkerProbeSession.failed(request, failure);
+      return ProbeReports.failed(request, failure);
     }
 
-    // The unit is free before the result goes out, so the server's count never falls below the
-    // worker's.
+    // The unit is free before the report is handed over, so the server's count never falls below
+    // the worker's.
     private void complete(ProbeAttemptReport report) {
       boolean endedAtProbeTimeout;
       synchronized (WorkerProbeSession.this) {
-        attempts.remove(fromProto(report.result().getProbeAttemptId()), this);
+        attempts.remove(fromProto(report.getResult().getProbeAttemptId()), this);
         endedAtProbeTimeout = timedOut;
       }
 

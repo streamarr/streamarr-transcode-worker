@@ -38,13 +38,15 @@ import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
 import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
 import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
@@ -78,6 +80,7 @@ import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.FfprobePackets;
 import com.streamarr.transcode.worker.support.FfprobePackets.Packet;
+import com.streamarr.transcode.worker.support.ReceivedProbeReports;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import com.streamarr.transcode.worker.support.TeeingProcessLauncher;
 import com.streamarr.transcode.worker.support.X264Options;
@@ -437,7 +440,7 @@ class WorkerMediaSmokeTest {
             "mimetype=font/ttf"),
         source);
 
-    var result = probeExecutor().probe(source, keyframeRequest()).result();
+    var result = probeExecutor().probe(source, keyframeRequest()).getResult();
 
     // Constrained Baseline at level 1.0.
     assertThat(result.getMedia().getStreams(0).getCodecString()).isEqualTo("avc1.42C00A");
@@ -507,7 +510,7 @@ class WorkerMediaSmokeTest {
             "srt"),
         source);
 
-    var streams = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+    var streams = probeExecutor().probe(source, keyframeRequest()).getResult().getMedia();
 
     var flac = streams.getStreams(1);
     assertThat(flac.getChannelLayout()).isEqualTo("quad");
@@ -734,7 +737,7 @@ class WorkerMediaSmokeTest {
                 "ultrafast"));
     arguments.addAll(audioArguments);
     runFfmpeg(arguments, source);
-    return probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+    return probeExecutor().probe(source, keyframeRequest()).getResult().getMedia();
   }
 
   private static Set<String> audioDispositionsOf(ProbeStreamInfo stream) {
@@ -759,7 +762,7 @@ class WorkerMediaSmokeTest {
     var source = root.resolve(sourceCase.fileName());
     runFfmpeg(videoSourceArguments(sourceCase.codec(), sourceCase.muxerArguments()), source);
 
-    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+    var media = probeExecutor().probe(source, keyframeRequest()).getResult().getMedia();
 
     assertThat(media.getStreams(0).getSampleEntry()).isEqualTo(sourceCase.sampleEntry());
     assertThat(media.getContainer().getMajorBrand()).isEqualTo(sourceCase.majorBrand());
@@ -834,7 +837,7 @@ class WorkerMediaSmokeTest {
         List.of("-i", quickTime.toString(), "-c", "copy", "-movflags", "use_metadata_tags"),
         source);
 
-    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+    var media = probeExecutor().probe(source, keyframeRequest()).getResult().getMedia();
 
     assertThat(media.getContainer().getMajorBrand()).isEqualTo("isom");
   }
@@ -852,7 +855,7 @@ class WorkerMediaSmokeTest {
     var source = root.resolve("two-brands.mp4");
     Files.write(source, withBoxBeforeMovieBox(Files.readAllBytes(written), quickTimeFileType()));
 
-    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+    var media = probeExecutor().probe(source, keyframeRequest()).getResult().getMedia();
 
     assertThat(media.getContainer().getMajorBrand()).isEqualTo("qt  ");
     assertThat(formatTag(source, "major_brand")).isEqualTo("qt  ");
@@ -920,7 +923,8 @@ class WorkerMediaSmokeTest {
         withSampleEntry(
             Files.readAllBytes(writtenSource), written, renamed, renamed + "-source.mp4");
 
-    var video = probeExecutor().probe(source, keyframeRequest()).result().getMedia().getStreams(0);
+    var video =
+        probeExecutor().probe(source, keyframeRequest()).getResult().getMedia().getStreams(0);
 
     assertThat(video.getSampleEntry()).isEqualTo(renamed);
     assertThat(video.getCodecString()).startsWith(codecStringPrefix);
@@ -939,7 +943,7 @@ class WorkerMediaSmokeTest {
     var source = root.resolve("remuxed." + container);
     runFfmpeg(List.of("-i", mp4.toString(), "-c", "copy"), source);
 
-    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+    var media = probeExecutor().probe(source, keyframeRequest()).getResult().getMedia();
 
     assertThat(media.getStreams(0).hasSampleEntry()).isFalse();
     assertThat(media.getContainer().hasMajorBrand()).isFalse();
@@ -989,10 +993,10 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, keyframeRequest());
 
-    var positions = report.result().getMedia().getKeyframes().getPositions();
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
     var packetKeyframes = packetKeyframes(source, positions);
     assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size());
-    assertThat(keyframeTimes(report.keyframePositionsParts())).isEqualTo(packetKeyframes);
+    assertThat(keyframeTimes(report)).isEqualTo(packetKeyframes);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1035,15 +1039,13 @@ class WorkerMediaSmokeTest {
     var index = ffprobe.probe(source, keyframeRequest());
     var scan = ffprobe.probe(source, packetScanRequest());
 
-    var indexPositions = index.result().getMedia().getKeyframes().getPositions();
-    var scanPositions = scan.result().getMedia().getKeyframes().getPositions();
+    var indexPositions = index.getResult().getMedia().getKeyframes().getPositions();
+    var scanPositions = scan.getResult().getMedia().getKeyframes().getPositions();
     assertThat(scanPositions.getSource())
         .isEqualTo(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
     assertThat(scanPositions.toBuilder().setSource(indexPositions.getSource()).build())
         .isEqualTo(indexPositions);
-    assertThat(keyframeTimes(scan.keyframePositionsParts()))
-        .isNotEmpty()
-        .isEqualTo(keyframeTimes(index.keyframePositionsParts()));
+    assertThat(keyframeTimes(scan)).isNotEmpty().isEqualTo(keyframeTimes(index));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1065,10 +1067,10 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
-    var positions = report.result().getMedia().getKeyframes().getPositions();
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
     var packetKeyframes = packetKeyframes(source, positions);
     assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size()).isPositive();
-    assertThat(keyframeTimes(report.keyframePositionsParts())).isEqualTo(packetKeyframes);
+    assertThat(keyframeTimes(report)).isEqualTo(packetKeyframes);
   }
 
   @Test
@@ -1083,7 +1085,7 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setUnavailable(
@@ -1092,7 +1094,7 @@ class WorkerMediaSmokeTest {
                             KeyframesUnavailableReason
                                 .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))
                 .build());
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @Test
@@ -1117,8 +1119,9 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @Test
@@ -1142,7 +1145,9 @@ class WorkerMediaSmokeTest {
     var probe =
         Thread.ofVirtual()
             .start(
-                () -> result.complete(probeExecutor().probe(source, packetScanRequest()).result()));
+                () ->
+                    result.complete(
+                        probeExecutor().probe(source, packetScanRequest()).getResult()));
 
     try {
       var scan = scanReady.get(30, TimeUnit.SECONDS);
@@ -1227,7 +1232,7 @@ class WorkerMediaSmokeTest {
   void shouldUploadTheChosenVideoStreamWhenCoverArtAndAudioPrecedeIt(TranscodeMode mode)
       throws Exception {
     var source = sourceWithCoverArtBeforeVideo();
-    var probe = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    var probe = probeExecutor().probe(source, requestBuilder().build()).getResult().getMedia();
     assertThat(probe.getChosenVideoStreamIndex()).isEqualTo(2);
     assertThat(probe.getStreamsList())
         .extracting(ProbeStreamInfo::getCodec)
@@ -1260,7 +1265,7 @@ class WorkerMediaSmokeTest {
   @DisplayName("Should upload the second audio track when the job names it")
   void shouldUploadTheSecondAudioTrackWhenTheJobNamesIt(TranscodeMode mode) throws Exception {
     var source = sourceWithTwoAudioTracks();
-    var probe = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    var probe = probeExecutor().probe(source, requestBuilder().build()).getResult().getMedia();
     assertThat(probe.getStreamsList())
         .extracting(ProbeStreamInfo::getCodec, ProbeStreamInfo::getSampleRateHz)
         .containsExactly(tuple("h264", 0), tuple("aac", 48_000), tuple("ac3", 44_100));
@@ -1374,7 +1379,7 @@ class WorkerMediaSmokeTest {
             "-metadata:s:t:1",
             "mimetype=image/png"),
         source);
-    var streams = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    var streams = probeExecutor().probe(source, requestBuilder().build()).getResult().getMedia();
     assertThat(streams.getStreamsList())
         .extracting(ProbeStreamInfo::getCodecType)
         .containsExactly("video", "audio", "audio", "subtitle", "attachment", "video");
@@ -9641,7 +9646,7 @@ class WorkerMediaSmokeTest {
   }
 
   private static ProbeAttemptResult keyframeProbe(Path source) {
-    return probeExecutor().probe(source, keyframeRequest()).result();
+    return probeExecutor().probe(source, keyframeRequest()).getResult();
   }
 
   private static FfprobeExecutor probeExecutor() {
@@ -9788,16 +9793,14 @@ class WorkerMediaSmokeTest {
     };
   }
 
-  private static List<KeyframeTime> keyframeTimes(List<ProbeKeyframePositionsPart> parts) {
+  private static List<KeyframeTime> keyframeTimes(ProbeAttemptReport report) {
     var times = new ArrayList<KeyframeTime>();
     long presentation = 0;
     long decode = 0;
-    for (var part : parts) {
-      for (var i = 0; i < part.getPresentationTimeDeltasCount(); i++) {
-        presentation += part.getPresentationTimeDeltas(i);
-        decode += part.getDecodeTimeDeltas(i);
-        times.add(new KeyframeTime(presentation, decode));
-      }
+    for (var i = 0; i < report.getKeyframePresentationTimeDeltasCount(); i++) {
+      presentation += report.getKeyframePresentationTimeDeltas(i);
+      decode += report.getKeyframeDecodeTimeDeltas(i);
+      times.add(new KeyframeTime(presentation, decode));
     }
 
     return times;
@@ -9869,7 +9872,7 @@ class WorkerMediaSmokeTest {
   private static List<ProbeStreamInfo> streams(Path media) {
     return probeExecutor()
         .probe(media, requestBuilder().build())
-        .result()
+        .getResult()
         .getMedia()
         .getStreamsList();
   }
@@ -9963,6 +9966,7 @@ class WorkerMediaSmokeTest {
       extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase implements AutoCloseable {
 
     private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
+    private final ReceivedProbeReports probeReports = new ReceivedProbeReports();
     private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
     private final AtomicLong completedAt = new AtomicLong();
     private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
@@ -10032,6 +10036,12 @@ class WorkerMediaSmokeTest {
           responseObserver.onCompleted();
         }
       };
+    }
+
+    @Override
+    public StreamObserver<ReportProbeAttemptRequest> reportProbeAttempt(
+        StreamObserver<ReportProbeAttemptResponse> responseObserver) {
+      return probeReports.serve(responseObserver);
     }
 
     @Override

@@ -59,6 +59,14 @@ The background probe capacity grows by 1 when a probe ends while at least half o
 
 Background probes, keyframe packet scans and bitrate scan chunks run at nice 19, and playback probes at the worker's own priority. While probes run, the worker logs a summary each minute, with each capacity and the brakes since the previous summary. [Developer Setup](docs/dev-setup.md#configuration) lists every setting.
 
+## Probe Reports
+
+The worker ends every probe attempt, whatever its outcome, with one `ReportProbeAttempt` call that carries the attempt's probe report ([ADR 0062](https://github.com/streamarr/streamarr-adr/blob/main/adr/0062-a-worker-sends-each-probe-report-in-a-call-of-its-own.adoc)). The worker session carries no part of a probe report.
+
+The two upload timeouts also bound a report call. The worker sends a message of the report only when the call is ready for it, and waits at most `TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT` for each message. After the last message it waits at most `TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT` for the server's answer. A segment upload's acknowledgement timeout runs from its first message. A report call's runs from its last, so no bound covers a whole probe report, and a large report that keeps advancing never times out.
+
+The worker never sends a probe report twice. When a report call fails, the worker logs the failure with the probe attempt and discards the report. The worker session stays open, and the server runs the probe again.
+
 ## Encoders
 
 At startup the worker gives each codec family one encoder backend and reports it when it registers. Every job of that codec family runs that backend. The worker tries each hardware encoder that FFmpeg lists with a one-frame test encode. A hardware encoder becomes usable only if it passes that encode and the worker knows how to force the job's codec profile, tier and level on it. The software encoder (libx264, libx265 or libsvtav1) becomes usable if it passes the same encode.

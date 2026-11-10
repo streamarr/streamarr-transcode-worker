@@ -7,6 +7,8 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
@@ -40,6 +42,8 @@ public final class WorkerApplicationControlPlane
   private final ConcurrentLinkedQueue<WorkerRegistration> registrations =
       new ConcurrentLinkedQueue<>();
   private final CompletableFuture<ProbeAttemptResult> result = new CompletableFuture<>();
+  private final ReceivedProbeReports probeReports =
+      new ReceivedProbeReports(report -> result.complete(report.getResult()));
   private StreamObserver<EstablishWorkerSessionResponse> responses;
 
   /** Listens on {@code port}, or on an ephemeral port when it is zero. */
@@ -132,10 +136,6 @@ public final class WorkerApplicationControlPlane
           registration.complete(value.getRegistration());
           return;
         }
-
-        if (value.hasProbeResult()) {
-          result.complete(value.getProbeResult());
-        }
       }
 
       @Override
@@ -148,6 +148,12 @@ public final class WorkerApplicationControlPlane
         responses.onCompleted();
       }
     };
+  }
+
+  @Override
+  public StreamObserver<ReportProbeAttemptRequest> reportProbeAttempt(
+      StreamObserver<ReportProbeAttemptResponse> responseObserver) {
+    return probeReports.serve(responseObserver);
   }
 
   @Override

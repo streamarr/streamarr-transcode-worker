@@ -35,4 +35,9 @@ final class GrpcWorkerRuntime implements WorkerRuntime {
   public ExecutorService newProbeScope() {
     return Executors.newVirtualThreadPerTaskExecutor();
   }
+
+  @Override
+  public ExecutorService newProbeReportScope() {
+    return Executors.newVirtualThreadPerTaskExecutor();
+  }
 }

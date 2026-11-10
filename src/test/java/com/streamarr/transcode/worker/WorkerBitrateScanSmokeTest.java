@@ -244,10 +244,10 @@ class WorkerBitrateScanSmokeTest {
 
     var afterTheAudio = FFPROBE.probe(file, request(positions.chunk(13, 25)));
 
-    assertThat(afterTheAudio.result().getBitrateScanChunk().getResultCase())
-        .as("%s", afterTheAudio.result())
+    assertThat(afterTheAudio.getResult().getBitrateScanChunk().getResultCase())
+        .as("%s", afterTheAudio.getResult())
         .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
-    assertThat(intervalCounts(afterTheAudio.streamMeasurementParts()))
+    assertThat(intervalCounts(afterTheAudio.getStreamMeasurementIntervalsList()))
         .isEqualTo(intervals(wholeFile, 13, 25));
   }
 
@@ -388,10 +388,10 @@ class WorkerBitrateScanSmokeTest {
     for (var i = 0; i < chunkStarts.size(); i++) {
       var end = i + 1 < chunkStarts.size() ? chunkStarts.get(i + 1) : positions.keyframes().size();
       var report = FFPROBE.probe(file, request(positions.chunk(chunkStarts.get(i), end)));
-      assertThat(report.result().getBitrateScanChunk().getResultCase())
-          .as("chunk %d: %s", i, report.result())
+      assertThat(report.getResult().getBitrateScanChunk().getResultCase())
+          .as("chunk %d: %s", i, report.getResult())
           .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
-      chunks.add(intervalCounts(report.streamMeasurementParts()));
+      chunks.add(intervalCounts(report.getStreamMeasurementIntervalsList()));
     }
 
     return joined(chunks);
@@ -412,11 +412,11 @@ class WorkerBitrateScanSmokeTest {
     var middle = FFPROBE.probe(file, request(positions.chunk(6, 13)));
     var last = FFPROBE.probe(file, request(positions.chunk(13, positions.keyframes().size())));
 
-    assertThat(first.result().getBitrateScanChunk().getResultCase())
+    assertThat(first.getResult().getBitrateScanChunk().getResultCase())
         .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
-    assertThat(List.of(middle.result().getFailure(), last.result().getFailure()))
+    assertThat(List.of(middle.getResult().getFailure(), last.getResult().getFailure()))
         .containsOnly(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
-    assertThat(middle.streamMeasurementParts()).isEmpty();
+    assertThat(middle.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   @Test
@@ -445,14 +445,14 @@ class WorkerBitrateScanSmokeTest {
 
     var report = FFPROBE.probe(file, request(positions.chunk(0, positions.keyframes().size())));
 
-    assertThat(report.result().getBitrateScanChunk())
+    assertThat(report.getResult().getBitrateScanChunk())
         .isEqualTo(
             BitrateScanChunkResult.newBuilder()
                 .setCopyChangesPackets(
                     BitrateScanCopyChangesPackets.newBuilder()
                         .setStreamIndex(positions.streamIndex()))
                 .build());
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   private static Positions positions(Path file) {

@@ -3,6 +3,7 @@ package com.streamarr.transcode.probe;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
@@ -126,7 +127,7 @@ final class KeyframePacketScan {
 
   private static ProbeAttemptReport unavailable(
       ProbedSource probed, KeyframesUnavailableReason reason) {
-    return ProbeAttemptReport.resultOnly(
+    return ProbeReports.resultOnly(
         KeyframePositionsReport.withKeyframes(
             probed.result(),
             ProbeKeyframes.newBuilder()
@@ -134,7 +135,7 @@ final class KeyframePacketScan {
   }
 
   private static ProbeAttemptReport failed(ProbedSource probed, ProbeFailure failure) {
-    return ProbeAttemptReport.resultOnly(
+    return ProbeReports.resultOnly(
         probed.result().toBuilder().clearMedia().setFailure(failure).build());
   }
 

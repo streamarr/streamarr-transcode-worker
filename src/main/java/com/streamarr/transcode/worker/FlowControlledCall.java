@@ -12,8 +12,10 @@ import java.util.concurrent.TimeoutException;
 /**
  * One upload call, which sends a message only when the call is ready for it. It fails when the call
  * is not ready within the readiness timeout, or when the server has not acknowledged the upload
- * within the acknowledgement timeout of the first message sent. Every call method runs under this
- * object's monitor, so a cancellation from another thread never interleaves with a send.
+ * within the acknowledgement timeout. That timeout runs either from the first message sent, which
+ * bounds the whole upload, or from the last, which leaves an upload that keeps advancing unbounded.
+ * Every call method runs under this object's monitor, so a cancellation from another thread never
+ * interleaves with a send.
  *
  * @param <Q> the messages that the worker sends on the call
  * @param <R> the server's single answer
@@ -26,14 +28,34 @@ final class FlowControlledCall<Q, R> implements ClientResponseObserver<Q, R> {
   private final CompletableFuture<R> response = new CompletableFuture<>();
   private final Duration readinessTimeout;
   private final Duration acknowledgementTimeout;
+  private final boolean acknowledgedFromFirstMessage;
   private ClientCallStreamObserver<Q> call;
 
   // Guarded by this monitor.
   private OptionalLong acknowledgementDeadline = OptionalLong.empty();
 
-  FlowControlledCall(Duration readinessTimeout, Duration acknowledgementTimeout) {
+  private FlowControlledCall(
+      Duration readinessTimeout,
+      Duration acknowledgementTimeout,
+      boolean acknowledgedFromFirstMessage) {
     this.readinessTimeout = readinessTimeout;
     this.acknowledgementTimeout = acknowledgementTimeout;
+    this.acknowledgedFromFirstMessage = acknowledgedFromFirstMessage;
+  }
+
+  /** A call that the server must acknowledge within the timeout of the first message sent. */
+  static <Q, R> FlowControlledCall<Q, R> acknowledgedFromItsFirstMessage(
+      Duration readinessTimeout, Duration acknowledgementTimeout) {
+    return new FlowControlledCall<>(readinessTimeout, acknowledgementTimeout, true);
+  }
+
+  /**
+   * A call that the server must acknowledge within the timeout of the last message sent, so that no
+   * bound covers the whole call.
+   */
+  static <Q, R> FlowControlledCall<Q, R> acknowledgedAfterItsLastMessage(
+      Duration readinessTimeout, Duration acknowledgementTimeout) {
+    return new FlowControlledCall<>(readinessTimeout, acknowledgementTimeout, false);
   }
 
   @Override
@@ -53,12 +75,19 @@ final class FlowControlledCall<Q, R> implements ClientResponseObserver<Q, R> {
       return;
     }
 
+    if (acknowledgedFromFirstMessage) {
+      startAcknowledgementDeadline();
+    }
+
+    call.onNext(message);
+  }
+
+  // Holds this monitor. The deadline starts once and then stands.
+  private void startAcknowledgementDeadline() {
     if (acknowledgementDeadline.isEmpty()) {
       acknowledgementDeadline =
           OptionalLong.of(System.nanoTime() + acknowledgementTimeout.toNanos());
     }
-
-    call.onNext(message);
   }
 
   // Holds this monitor. The time left before the first of the readiness deadline and the
@@ -92,7 +121,9 @@ final class FlowControlledCall<Q, R> implements ClientResponseObserver<Q, R> {
     return new TimeoutException(
         "The server did not acknowledge the upload within "
             + acknowledgementTimeout
-            + " of its first message");
+            + " of its "
+            + (acknowledgedFromFirstMessage ? "first" : "last")
+            + " message");
   }
 
   private synchronized void signalReadiness() {
@@ -100,9 +131,12 @@ final class FlowControlledCall<Q, R> implements ClientResponseObserver<Q, R> {
   }
 
   synchronized void finish() {
-    if (!response.isDone()) {
-      call.onCompleted();
+    if (response.isDone()) {
+      return;
     }
+
+    startAcknowledgementDeadline();
+    call.onCompleted();
   }
 
   R awaitAcknowledgement() throws InterruptedException, ExecutionException, TimeoutException {
@@ -117,11 +151,11 @@ final class FlowControlledCall<Q, R> implements ClientResponseObserver<Q, R> {
     return nanosUntilAcknowledgementDeadline(System.nanoTime());
   }
 
-  // A stop before the call opens has no call to cancel; the producer then never sends on it.
+  // A cancellation before the call opens has no call to cancel; nothing is then sent on it.
   synchronized void cancel(Throwable failure) {
     response.completeExceptionally(failure);
     if (call != null) {
-      call.cancel("Segment upload failed", failure);
+      call.cancel("Upload failed", failure);
     }
 
     notifyAll();

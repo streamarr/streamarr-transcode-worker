@@ -174,15 +174,12 @@ class FfprobeExecutorBitrateScanTest {
 
     // The first chunk counts the audio before its first keyframe in its first interval; the
     // second keyframe ends it.
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1000L + 200, 1001L + 201), List.of(2L, 2L))),
             Map.entry(
                 1, counts(List.of(10L + 11 + 12 + 13 + 14, 15L + 16 + 17 + 18), List.of(5L, 4L))));
-    assertThat(report.streamMeasurementParts())
-        .allSatisfy(
-            part -> assertThat(part.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId()));
-    assertThat(report.result().getBitrateScanChunk())
+    assertThat(report.getResult().getBitrateScanChunk())
         .isEqualTo(
             BitrateScanChunkResult.newBuilder()
                 .setMeasured(
@@ -211,7 +208,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(2, 4)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1002L + 202, 1003L + 203), List.of(2L, 2L))),
             Map.entry(1, counts(List.of(19L + 20 + 21 + 22, 23L + 24), List.of(4L, 2L))));
@@ -257,7 +254,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(2, 3)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1204L), List.of(2L))),
             Map.entry(1, counts(List.of(90L), List.of(2L))));
@@ -282,7 +279,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1000L + 200, 1001L + 201), List.of(2L, 2L))),
             Map.entry(1, counts(List.of(10L, 11L), List.of(1L, 1L))));
@@ -303,7 +300,7 @@ class FfprobeExecutorBitrateScanTest {
     var report = ffprobe.executor().probe(SOURCE, request(chunk));
 
     // The same counts as the chunk that lists the video first, in the chunk's order.
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(
                 1, counts(List.of(10L + 11 + 12 + 13 + 14, 15L + 16 + 17 + 18), List.of(5L, 4L))),
@@ -338,7 +335,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1001L), List.of(1L))),
             Map.entry(1, counts(List.of(10L), List.of(1L))));
@@ -378,7 +375,7 @@ class FfprobeExecutorBitrateScanTest {
 
     // The chunk's audio runs from 48,000 up to 96,000 on the zero-based timeline: 72,001 up to
     // 120,001 on the demuxer's.
-    assertThat(report.result().getBitrateScanChunk().getMeasured().getStreams(1))
+    assertThat(report.getResult().getBitrateScanChunk().getMeasured().getStreams(1))
         .isEqualTo(
             stream(1)
                 .setTimeBaseDenominator(48_000)
@@ -400,8 +397,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 3)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   @Test
@@ -413,7 +410,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(2, 4)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
   }
 
   @Test
@@ -433,7 +430,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(2, 4)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
   }
 
   @Test
@@ -449,10 +446,10 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getBitrateScanChunk().getResultCase())
-        .as("%s", report.result())
+    assertThat(report.getResult().getBitrateScanChunk().getResultCase())
+        .as("%s", report.getResult())
         .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1000L + 200, 1001L + 201), List.of(2L, 2L))),
             Map.entry(
@@ -470,8 +467,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   @Test
@@ -495,7 +492,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1001L), List.of(1L))),
             Map.entry(1, counts(List.of(10L), List.of(1L))));
@@ -538,8 +535,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   @Test
@@ -583,7 +580,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1001L), List.of(1L))),
             Map.entry(1, counts(List.of(10L + 9), List.of(2L))));
@@ -605,7 +602,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   @Test
@@ -619,7 +617,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(2, 4)));
 
-    assertThat(report.result().getBitrateScanChunk().hasMeasured()).isTrue();
+    assertThat(report.getResult().getBitrateScanChunk().hasMeasured()).isTrue();
   }
 
   static Stream<Arguments> copiesThatChangePackets() {
@@ -714,13 +712,13 @@ class FfprobeExecutorBitrateScanTest {
       String description, ScriptedSource.ScriptedSourceBuilder source, int streamIndex) {
     var report = source.build().executor().probe(SOURCE, request(POSITIONS.chunk(0, 4)));
 
-    assertThat(report.result().getBitrateScanChunk())
+    assertThat(report.getResult().getBitrateScanChunk())
         .isEqualTo(
             BitrateScanChunkResult.newBuilder()
                 .setCopyChangesPackets(
                     BitrateScanCopyChangesPackets.newBuilder().setStreamIndex(streamIndex))
                 .build());
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   static Stream<Arguments> unreadableFirstAacPackets() {
@@ -746,8 +744,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 4)));
 
-    assertThat(report.result().getFailure()).isEqualTo(failure);
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getFailure()).isEqualTo(failure);
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
     assertThat(ffprobe.listingStarts()).isEmpty();
   }
 
@@ -786,7 +784,7 @@ class FfprobeExecutorBitrateScanTest {
                 SOURCE,
                 request(POSITIONS.chunk(0, 1).clearEndPresentationTime().clearEndDecodeTime()));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(200L), List.of(2L)));
   }
 
@@ -808,8 +806,9 @@ class FfprobeExecutorBitrateScanTest {
     var report =
         ffprobe.executor().probe(Path.of("/media/missing.mp4"), request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
-    assertThat(report.result().hasBitrateScanChunk()).isFalse();
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().hasBitrateScanChunk()).isFalse();
   }
 
   @Test
@@ -828,7 +827,7 @@ class FfprobeExecutorBitrateScanTest {
                         .chunk(0, 2)
                         .setMeasurementVersion(FfprobeExecutor.MEASUREMENT_VERSION + 1)));
 
-    assertThat(report.result().getFailure())
+    assertThat(report.getResult().getFailure())
         .isEqualTo(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION);
   }
 
@@ -880,7 +879,8 @@ class FfprobeExecutorBitrateScanTest {
     var report =
         ffprobe.executor().probe(SOURCE, request(malformation.apply(POSITIONS.chunk(0, 2))));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
     assertThat(ffprobe.listingStarts()).isEmpty();
   }
 
@@ -908,7 +908,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(chunk));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
   }
 
   static Stream<Arguments> keyframeTimesBetweenTicks() {
@@ -943,7 +943,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(change.apply(chunk)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
     assertThat(ffprobe.listingStarts()).isEmpty();
   }
 
@@ -966,7 +966,8 @@ class FfprobeExecutorBitrateScanTest {
                 SOURCE,
                 request(POSITIONS.chunk(0, 1).clearEndPresentationTime().clearEndDecodeTime()));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -978,7 +979,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 4)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
   }
 
   static Stream<Arguments> packetsWithoutTime() {
@@ -1007,7 +1008,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 4)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   static Stream<Arguments> unreadableListingLines() {
@@ -1035,9 +1037,9 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getBitrateScanChunk().getMeasured().getStreams(1))
+    assertThat(report.getResult().getBitrateScanChunk().getMeasured().getStreams(1))
         .isEqualTo(stream(1).build());
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(0L, 0L), List.of(0L, 0L)));
   }
 
@@ -1073,7 +1075,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1001L), List.of(1L))),
             Map.entry(1, counts(List.of(10L), List.of(1L))));
@@ -1117,7 +1119,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(30L + 60), List.of(2L)));
     assertThat(ffprobe.listingStarts()).containsExactly("10.500000", FROM_FILE_START);
   }
@@ -1133,7 +1135,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(0, counts(List.of(1000L + 200, 1001L + 201), List.of(2L, 2L)));
   }
 
@@ -1173,7 +1175,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1001L), List.of(1L))),
             Map.entry(1, counts(List.of(10L), List.of(1L))));
@@ -1200,7 +1202,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(10L, 11L), List.of(1L, 1L)));
   }
 
@@ -1239,7 +1241,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(10L), List.of(1L)));
     assertThat(ffprobe.listingStarts()).containsExactly("190.500000", "80.500000", FROM_FILE_START);
   }
@@ -1266,7 +1268,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1000L, 1001L + 201), List.of(1L, 2L))),
             Map.entry(1, counts(List.of(10L, 11L + 12), List.of(1L, 2L))));
@@ -1286,7 +1288,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getBitrateScanChunk().hasMeasured()).isTrue();
+    assertThat(report.getResult().getBitrateScanChunk().hasMeasured()).isTrue();
     assertThat(ffprobe.commands())
         .noneMatch(command -> command.arguments().contains("packet=data"));
   }
@@ -1300,7 +1302,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getBitrateScanChunk().hasMeasured()).isTrue();
+    assertThat(report.getResult().getBitrateScanChunk().hasMeasured()).isTrue();
   }
 
   static Stream<Arguments> aacFirstPacketsWithoutAdtsFrame() {
@@ -1340,7 +1342,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1001L), List.of(1L))),
             Map.entry(1, counts(List.of(10L), List.of(1L))));
@@ -1361,7 +1363,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   static Stream<Arguments> unreadableStreams() {
@@ -1387,7 +1390,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
 
-    assertThat(report.result().getFailure()).isEqualTo(failure);
+    assertThat(report.getResult().getFailure()).isEqualTo(failure);
     assertThat(ffprobe.listingStarts()).isEmpty();
   }
 
@@ -1400,7 +1403,8 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(2, 4)));
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   @Test
@@ -1443,7 +1447,7 @@ class FfprobeExecutorBitrateScanTest {
     var report =
         ffprobe.executor().probe(audioEnd.file(), request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsExactly(
             Map.entry(0, counts(List.of(1001L), List.of(1L))),
             Map.entry(1, counts(List.of(0L), List.of(0L))));
@@ -1543,7 +1547,7 @@ class FfprobeExecutorBitrateScanTest {
     var report =
         ffprobe.executor().probe(audioEnd.file(), request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(10L), List.of(1L)));
     assertThat(ffprobe.listingStarts()).containsExactly("10.500000", FROM_FILE_START);
   }
@@ -1765,7 +1769,7 @@ class FfprobeExecutorBitrateScanTest {
 
     var report = ffprobe.executor().probe(audioEnd.file(), request(POSITIONS.chunk(0, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(10L, 0L), List.of(1L, 0L)));
   }
 
@@ -1791,7 +1795,7 @@ class FfprobeExecutorBitrateScanTest {
     var report =
         ffprobe.executor().probe(audioEnd.file(), request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
 
-    assertThat(intervalCounts(report.streamMeasurementParts()))
+    assertThat(intervalCounts(report.getStreamMeasurementIntervalsList()))
         .containsEntry(1, counts(List.of(10L), List.of(1L)));
     assertThat(ffprobe.commands())
         .noneMatch(command -> command.arguments().contains(FIRST_PACKET_TIME_ENTRIES));

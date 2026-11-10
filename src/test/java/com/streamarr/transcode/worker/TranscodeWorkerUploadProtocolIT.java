@@ -20,6 +20,8 @@ import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadLimitReached;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.SubtitleDecision;
@@ -44,6 +46,7 @@ import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.ControlPlaneServer;
+import com.streamarr.transcode.worker.support.ReceivedProbeReports;
 import io.grpc.protobuf.StatusProto;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
@@ -313,6 +316,7 @@ class TranscodeWorkerUploadProtocolIT {
       extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase {
 
     private final UploadResponseBehavior uploadResponseBehavior;
+    private final ReceivedProbeReports probeReports = new ReceivedProbeReports();
     private final AtomicReference<StreamObserver<EstablishWorkerSessionResponse>> control =
         new AtomicReference<>();
     private final CompletableFuture<WorkerIdentity> registration = new CompletableFuture<>();
@@ -391,6 +395,12 @@ class TranscodeWorkerUploadProtocolIT {
           responseObserver.onCompleted();
         }
       };
+    }
+
+    @Override
+    public StreamObserver<ReportProbeAttemptRequest> reportProbeAttempt(
+        StreamObserver<ReportProbeAttemptResponse> responseObserver) {
+      return probeReports.serve(responseObserver);
     }
 
     @Override

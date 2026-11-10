@@ -3,8 +3,8 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import java.io.IOException;
@@ -20,8 +20,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.ObjectMapper;
 
-// worker_session.proto: each list of ProbeKeyframePositionsPart holds at most 1,048,576 entries in
-// an attempt.
+// The worker reports at most 1,048,576 keyframe positions for one probe attempt.
 @Tag("UnitTest")
 @Timeout(120)
 @DisplayName("Keyframe Positions Attempt Bound Tests")
@@ -67,9 +66,10 @@ class KeyframePositionsAttemptBoundTest {
     assertThat(sentKeyframePositions(report))
         .as(
             "keyframe positions across the attempt's parts (result: failure %s, keyframes %s)",
-            report.result().getFailure(), report.result().getMedia().getKeyframes())
+            report.getResult().getFailure(), report.getResult().getMedia().getKeyframes())
         .isLessThanOrEqualTo(MAXIMUM_KEYFRAMES_PER_ATTEMPT);
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
   }
 
   @Test
@@ -110,15 +110,14 @@ class KeyframePositionsAttemptBoundTest {
     assertThat(sentKeyframePositions(report))
         .as(
             "keyframe positions across the attempt's parts (result: failure %s, keyframes %s)",
-            report.result().getFailure(), report.result().getMedia().getKeyframes())
+            report.getResult().getFailure(), report.getResult().getMedia().getKeyframes())
         .isLessThanOrEqualTo(MAXIMUM_KEYFRAMES_PER_ATTEMPT);
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
   }
 
   private static long sentKeyframePositions(ProbeAttemptReport report) {
-    return report.keyframePositionsParts().stream()
-        .mapToLong(ProbeKeyframePositionsPart::getDecodeTimeDeltasCount)
-        .sum();
+    return report.getKeyframeDecodeTimeDeltasCount();
   }
 
   private static FfprobeExecutor executor(Function<ProbeCommand, Process> answers) {
