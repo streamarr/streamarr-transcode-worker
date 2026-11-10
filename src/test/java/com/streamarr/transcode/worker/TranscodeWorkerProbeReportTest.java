@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
@@ -493,6 +494,63 @@ class TranscodeWorkerProbeReportTest {
 
       assertThat(call.wasCancelled()).isTrue();
       assertThat(connection.hasJoinedReportThreads()).isTrue();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should open no report call when the worker session ends before the report's thread opens"
+          + " the call")
+  void shouldOpenNoReportCallWhenTheWorkerSessionEndsBeforeTheReportsThreadOpensTheCall()
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.holdReportThreads();
+      start(connection, requestBuilder().build());
+      runtime.probes().drain();
+
+      connection.fail("connection lost");
+      connection.releaseReportThreads();
+      connection.awaitReportThreads();
+
+      assertThat(connection.reportCalls()).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should send no report of a closed worker session on its replacement when the report's"
+          + " thread opens the call after the server accepted the replacement")
+  void shouldSendNoReportOfAClosedWorkerSessionOnItsReplacementWhenItsThreadOpensTheCallLater()
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build();
+        var tasks = Executors.newVirtualThreadPerTaskExecutor()) {
+      worker.start("localhost", 1);
+      var old = runtime.connection();
+      old.holdReportThreads();
+      try {
+        start(old, requestBuilder().build());
+        runtime.probes().drain();
+        // The close waits for the report thread without the worker monitor, which the replacement
+        // session and the held thread both need.
+        var closing = CompletableFuture.runAsync(worker::close, tasks);
+        old.awaitJoiningReportThreads(closing);
+
+        worker.start("localhost", 1);
+        var replacement = runtime.connection();
+        old.releaseReportThreads();
+        closing.get();
+
+        assertThat(old.reportCalls()).isEmpty();
+        assertThat(replacement.reportCalls()).isEmpty();
+      } finally {
+        old.releaseReportThreads();
+      }
     }
   }
 

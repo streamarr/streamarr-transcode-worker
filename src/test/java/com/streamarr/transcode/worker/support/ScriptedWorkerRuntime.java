@@ -307,6 +307,27 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     /**
+     * From now on a report thread stops before its first statement, as a thread that has started
+     * and has yet to run, until {@link #releaseReportThreads()}.
+     */
+    public void holdReportThreads() {
+      reportThreads.hold();
+    }
+
+    public void releaseReportThreads() {
+      reportThreads.release();
+    }
+
+    /** Waits until the worker's close waits for this session's report threads to end. */
+    public void awaitJoiningReportThreads(CompletableFuture<?> workerClose)
+        throws InterruptedException, ExecutionException {
+      CompletableFuture.anyOf(reportThreads.joining, workerClose).get();
+      assertThat(reportThreads.joining)
+          .as("the worker waited for its report threads before its close ended")
+          .isDone();
+    }
+
+    /**
      * From now on a report call reports that it is ready for one more message only after each
      * {@link #grantReportMessage()}.
      */
@@ -498,7 +519,9 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
   private static final class ReportThreads extends AbstractExecutorService {
 
     private final ExecutorService running = Executors.newVirtualThreadPerTaskExecutor();
+    private final CompletableFuture<Void> joining = new CompletableFuture<>();
     private int unfinished;
+    private boolean held;
 
     @Override
     public void execute(Runnable command) {
@@ -507,6 +530,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         running.execute(
             () -> {
               try {
+                awaitReleased();
                 command.run();
               } finally {
                 finished();
@@ -515,6 +539,31 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       } catch (RejectedExecutionException rejection) {
         finished();
         throw rejection;
+      }
+    }
+
+    private synchronized void hold() {
+      held = true;
+    }
+
+    private synchronized void release() {
+      held = false;
+      notifyAll();
+    }
+
+    // An interrupt during the hold stays pending, as it does for a thread that has yet to run.
+    private synchronized void awaitReleased() {
+      var interrupted = false;
+      while (held) {
+        try {
+          wait();
+        } catch (InterruptedException _) {
+          interrupted = true;
+        }
+      }
+
+      if (interrupted) {
+        Thread.currentThread().interrupt();
       }
     }
 
@@ -561,6 +610,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     @Override
     public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+      joining.complete(null);
       return running.awaitTermination(timeout, unit);
     }
   }
