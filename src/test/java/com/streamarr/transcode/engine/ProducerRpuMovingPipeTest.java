@@ -253,18 +253,8 @@ class ProducerRpuMovingPipeTest {
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
     var encode = encodingFfmpeg().pauseAfter(0).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
-    var launcher =
-        ScriptedProcessLauncher.forCommands(
-            (command, _) -> {
-              if (!isCopying(command)) {
-                return encode;
-              }
-
-              writeTimingAndAwaitHangUp(command, RpuMovingCopies.copiedTiming());
-              return copy;
-            });
     var pauses = new ProducerPauses();
-    var producer = producer(launcher).pauses(pauses).start();
+    var producer = producerOf(copy, encode).pauses(pauses).start();
     assertThat(encode.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     assertThat(producer.holdBackFfmpeg()).isTrue();
 
@@ -902,16 +892,18 @@ class ProducerRpuMovingPipeTest {
     return producer(copyingWith(copy, RpuMovingCopies.copiedTiming()), encode);
   }
 
+  // The scripted launcher stops both stand-ins when the producer pauses or holds its FFmpeg.
   private Producer.ProducerBuilder producer(CopyingFfmpeg copying, ScriptedProcess encode) {
     return producer(
-        (command, jobAttemptId) -> {
-          if (!isCopying(command)) {
-            return encode;
-          }
+        ScriptedProcessLauncher.forCommands(
+            (command, _) -> {
+              if (!isCopying(command)) {
+                return encode;
+              }
 
-          writeTimingAndAwaitHangUp(command, copying.framecrc());
-          return copying.process();
-        });
+              writeTimingAndAwaitHangUp(command, copying.framecrc());
+              return copying.process();
+            }));
   }
 
   private static CopyingFfmpeg copyingWith(ScriptedProcess process, String framecrc) {
