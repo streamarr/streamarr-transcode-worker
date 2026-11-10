@@ -145,20 +145,59 @@ class HardwareEncoderFaultTest {
         .contains(HardwareEncoderFault.FAILED);
   }
 
+  // FFmpeg's hwcontext_cuda.c and nvdec.c report an allocation that the GPU's memory cannot hold.
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "[AVHWFramesContext @ 0x5613bea01a80] cu->cuMemAlloc(&data, size) failed ->"
+            + " CUDA_ERROR_OUT_OF_MEMORY: out of memory",
+        "[hevc @ 0x5613bfba1b40] cuvidCreateDecoder(&decoder->decoder, params) failed ->"
+            + " CUDA_ERROR_OUT_OF_MEMORY: out of memory\n[vist#0:0/hevc @ 0x5613be9f0a40] Error"
+            + " submitting packet to decoder: Generic error in an external library"
+      })
+  @DisplayName(
+      "Should read a device out of memory when the GPU's memory cannot hold the frames of the"
+          + " job, so that the worker keeps offering the encoder to other jobs")
+  void shouldReadADeviceOutOfMemoryWhenTheGpusMemoryCannotHoldTheFramesOfTheJob(
+      String errorOutput) {
+    assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput)))
+        .contains(HardwareEncoderFault.DEVICE_OUT_OF_MEMORY);
+  }
+
   @Test
   @DisplayName(
-      "Should read a failed encoder when CUDA reports an error beside the GPU filters' refusal of"
-          + " frames from system memory")
-  void shouldReadAFailedEncoderWhenCudaReportsAnErrorBesideTheGpuFiltersRefusal() {
+      "Should read a failed encoder when CUDA reports another error beside the GPU's memory"
+          + " running out")
+  void shouldReadAFailedEncoderWhenCudaReportsAnotherErrorBesideTheGpusMemoryRunningOut() {
     var errorOutput =
         """
-        [AVHWDeviceContext @ 0x5581] cu->cuInit(0) failed -> CUDA_ERROR_NO_DEVICE: no \
-        CUDA-capable device is detected
-        """
-            + DECODER_REFUSAL;
+        [AVHWFramesContext @ 0x5613bea01a80] cu->cuMemAlloc(&data, size) failed -> \
+        CUDA_ERROR_OUT_OF_MEMORY: out of memory
+        [Parsed_tonemap_cuda_1 @ 0x5613beacf940] cu->cuLaunchKernel(s->cu_func, 0, 0, 0, args) \
+        failed -> CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered
+        """;
 
     assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput)))
         .contains(HardwareEncoderFault.FAILED);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read a decoder refusal when the job holds its last frame and the filter graph of"
+          + " both inputs gets frames from system memory")
+  void shouldReadADecoderRefusalWhenTheFilterGraphOfBothInputsGetsFramesFromSystemMemory() {
+    var errorOutput =
+        """
+        bgra64le yvyu422 ya16be ya16le gbrap gbrap16be gbrap16le 0rgb rgb0 0bgr bgr0
+            dst: cuda
+        [fc#1 @ 0x55e1cc2a6800] Error reinitializing filters!
+        [fc#1 @ 0x55e1cc2a6800] Task finished with error code: -38 (Function not implemented)
+        [vost#0:0/hevc_nvenc @ 0x55e1cc2b0d00] [enc:hevc_nvenc @ 0x55e1cc2b1140] Could not open \
+        encoder before EOF
+        Conversion failed!""";
+
+    assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput)))
+        .contains(HardwareEncoderFault.DECODER_REFUSED);
   }
 
   @Test
