@@ -168,6 +168,9 @@ class WorkerMediaSmokeTest {
   private static final int SLOT_SECONDS = 3;
   // The 3 s slots where the segments of the source with keyframes 10 s apart start.
   private static final List<Integer> TEN_SECOND_KEYFRAME_SEGMENT_STARTS = List.of(0, 3, 6, 10);
+  // The server lists a plain grid's segment starts in whole seconds.
+  private static final Fraction WHOLE_SECONDS =
+      Fraction.newBuilder().setNumerator(1).setDenominator(1).build();
   private static final int REPLACEMENT_START_SEQUENCE_NUMBER = 2;
   // The seekable sources' 6 s period in their 48 kHz audio timescale.
   private static final long SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS = 6L * 48_000;
@@ -6026,7 +6029,10 @@ class WorkerMediaSmokeTest {
       throws Exception {
     var source = videoEndsLongBeforeAudioSource();
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
-    job.getExecutionBuilder().setMediaSegmentCount(2).addAllSegmentStartSlots(List.of(0, 1));
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, 6L))
+        .setSegmentStartTimeBase(WHOLE_SECONDS);
 
     try (var pipe =
         new PacedSourcePipe(root.resolve("source-pipe"), THRICE_THE_SOURCES_BYTE_RATE)) {
@@ -6974,7 +6980,8 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .addAllSegmentStartTicks(tenSecondKeyframeSegmentStartSeconds())
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(
             TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
@@ -7018,7 +7025,8 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .addAllSegmentStartTicks(tenSecondKeyframeSegmentStartSeconds())
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(
             TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
@@ -7600,7 +7608,8 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS);
+        .addAllSegmentStartTicks(tenSecondKeyframeSegmentStartSeconds())
+        .setSegmentStartTimeBase(WHOLE_SECONDS);
     return job;
   }
 
@@ -8130,6 +8139,13 @@ class WorkerMediaSmokeTest {
     public int compareTo(BigFraction other) {
       return numerator.multiply(other.denominator).compareTo(other.numerator.multiply(denominator));
     }
+  }
+
+  // Where each segment's first slot starts, in whole seconds.
+  private static List<Long> tenSecondKeyframeSegmentStartSeconds() {
+    return TEN_SECOND_KEYFRAME_SEGMENT_STARTS.stream()
+        .map(slot -> (long) slot * SLOT_SECONDS)
+        .toList();
   }
 
   // Segment N's listed interval in ticks of the timescale; segment 0 keeps the AAC priming frame
