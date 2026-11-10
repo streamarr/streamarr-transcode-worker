@@ -980,9 +980,9 @@ public final class TranscodeWorker implements AutoCloseable {
     reportHardwareEncoderFailure(attempt, hardwareFault.get());
   }
 
-  // A refusal at the session limit keeps the encoder offered. A failed encoder is withdrawn first,
-  // so the server already knows the encoders that the worker offers when it places the fallback
-  // (ADR 0044).
+  // A refusal at the session limit, or of the job's source by the hardware decoder, keeps the
+  // encoder offered. A failed encoder is withdrawn first, so the server already knows the encoders
+  // that the worker offers when it places the fallback (ADR 0044).
   private void reportHardwareEncoderFailure(ActiveAttempt attempt, HardwareEncoderFault fault) {
     var encoder = attempt.encoder().orElseThrow();
     log.warn(

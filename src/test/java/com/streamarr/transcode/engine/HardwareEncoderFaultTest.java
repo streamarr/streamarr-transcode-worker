@@ -20,6 +20,28 @@ class HardwareEncoderFaultTest {
           .hardware(true)
           .build();
 
+  private static final EncoderBackend HEVC_NVENC =
+      EncoderBackend.builder()
+          .codecFamily(CodecFamily.HEVC)
+          .encoder("hevc_nvenc")
+          .hardware(true)
+          .build();
+  private static final String DECODER_REFUSAL =
+      """
+      p412be p412le gbrap14be gbrap14le ayuv uyva vyu444 v30xle y216le xv48be xv48le
+          dst: cuda
+      [vf#0:0 @ 0x5613beacf940] Error reinitializing filters!
+      [vf#0:0 @ 0x5613beacf940] Task finished with error code: -38 (Function not implemented)
+      [vf#0:0 @ 0x5613beacf940] Terminating thread with return code -38 (Function not implemented)
+      [vost#0:0/hevc_nvenc @ 0x5613beaf3780] [enc:hevc_nvenc @ 0x5613beaf3a40] Could not open \
+      encoder before EOF
+      [vost#0:0/hevc_nvenc @ 0x5613beaf3780] Task finished with error code: -22 (Invalid argument)
+      [vost#0:0/hevc_nvenc @ 0x5613beaf3780] Terminating thread with return code -22 (Invalid \
+      argument)
+      [out#0/mp4 @ 0x5613beaddf40] Nothing was written into output file, because at least one of \
+      its streams received no packets.
+      Conversion failed!""";
+
   @ParameterizedTest
   @ValueSource(
       strings = {
@@ -92,6 +114,49 @@ class HardwareEncoderFaultTest {
   void shouldReadAFailedEncoderWhenNvencOrCudaReportsAnyOtherError(String errorOutput) {
     assertThat(HardwareEncoderFault.of(H264_NVENC, exitedWith(errorOutput)))
         .contains(HardwareEncoderFault.FAILED);
+  }
+
+  // The end of the worker's error output when NVDEC refused a 64x64 HEVC picture ("Video width 64
+  // not within range from 144 to 8192") under the pinned FFmpeg 8.1.3: FFmpeg decoded in software,
+  // and scale_cuda, which takes only CUDA frames, refused the frames.
+  @Test
+  @DisplayName(
+      "Should read a decoder refusal when the hardware decoder refuses the source and the GPU"
+          + " filters get frames from system memory")
+  void shouldReadADecoderRefusalWhenTheHardwareDecoderRefusesTheSource() {
+    assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(DECODER_REFUSAL)))
+        .contains(HardwareEncoderFault.DECODER_REFUSED);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read a failed encoder when CUDA reports an error beside the GPU filters' refusal of"
+          + " frames from system memory")
+  void shouldReadAFailedEncoderWhenCudaReportsAnErrorBesideTheGpuFiltersRefusal() {
+    var errorOutput =
+        """
+        [AVHWDeviceContext @ 0x5581] cu->cuInit(0) failed -> CUDA_ERROR_NO_DEVICE: no \
+        CUDA-capable device is detected
+        """
+            + DECODER_REFUSAL;
+
+    assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput)))
+        .contains(HardwareEncoderFault.FAILED);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read no hardware fault when filters that take frames from system memory cannot be"
+          + " configured")
+  void shouldReadNoHardwareFaultWhenFiltersThatTakeFramesFromSystemMemoryCannotBeConfigured() {
+    var errorOutput =
+        """
+            src: cuda
+            dst: yuv420p yuv422p yuv444p
+        [vf#0:0 @ 0x5613beacf940] Error reinitializing filters!
+        Conversion failed!""";
+
+    assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput))).isEmpty();
   }
 
   @Test

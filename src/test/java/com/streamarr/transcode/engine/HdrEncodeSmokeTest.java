@@ -38,7 +38,9 @@ import org.junit.jupiter.api.io.TempDir;
  * plumbing, not its colours. Each job asks for the software encoder, which carries the encode
  * features also on a host whose codec family resolves to a hardware encoder. The hevc_nvenc tests
  * run only on a host whose HEVC encoder is hevc_nvenc with the encode feature they need, at a
- * height of 240, because NVENC refuses a frame smaller than 144x144.
+ * height of 240, because NVENC refuses a frame smaller than 144x144. NVDEC refuses such a picture
+ * too, so the hevc_nvenc tests of the reshape read a 256x144 profile 5 source, which libx265
+ * encodes from the fixture's pictures with their RPUs.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")
@@ -387,9 +389,10 @@ class HdrEncodeSmokeTest {
       throws Exception {
     assumeHevcNvencLists(EncodeFeature.DOLBY_VISION_TO_PQ);
     var encode = onHevcNvenc(profile5EncodeBuilder()).build();
+    var source = profile5SourceThatNvdecDecodes();
 
-    var fromStart = encoded(profile5Source(), encode, 0);
-    var fromSegment2 = encoded(profile5Source(), encode, 2);
+    var fromStart = encoded(source, encode, 0);
+    var fromSegment2 = encoded(source, encode, 2);
 
     assertThat(fromSegment2.contentOf("init.mp4")).isEqualTo(fromStart.contentOf("init.mp4"));
     assertStaticHdrMetadataBoxes(fromSegment2, List.of(FALLBACK_MDCV), List.of(FALLBACK_CLLI));
@@ -397,6 +400,58 @@ class HdrEncodeSmokeTest {
         .contains(
             "profile=Main 10", "color_transfer=smpte2084", "min_luminance=1/10000", "max_content=0")
         .doesNotContain("Dolby Vision", "DOVI");
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver HDR10 without Dolby Vision when hevc_nvenc reshapes on the GPU a profile 5"
+          + " source whose RPUs the worker moves first")
+  void shouldDeliverHdr10WhenHevcNvencReshapesOnTheGpuASourceWhoseRpusTheWorkerMoves()
+      throws Exception {
+    assumeHevcNvencReshapesOnTheGpu();
+    var encode =
+        onHevcNvenc(profile5EncodeBuilder())
+            .sourceDynamicRange(profile5(VideoDynamicRange.DolbyVisionRpuPlacement.UNSPECIFIED))
+            .build();
+
+    var delivered = encoded(profile5SourceThatNvdecDecodes(), encode, 0);
+
+    assertThat(probed(delivered.acceptedBytes()))
+        .contains("profile=Main 10", "pix_fmt=yuv420p10le", "color_transfer=smpte2084")
+        .doesNotContain("Dolby Vision", "DOVI");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a decoder refusal when hevc_nvenc reshapes on the GPU and NVDEC"
+          + " refuses the 64x64 picture of the source")
+  void shouldFailTheAttemptAsADecoderRefusalWhenNvdecRefusesThePictureOfTheSource()
+      throws Exception {
+    assumeHevcNvencReshapesOnTheGpu();
+    var engine = engine();
+    var request = request(profile5Source(), onHevcNvenc(profile5EncodeBuilder()).build(), 0);
+    var backend = engine.encoderBackendOf(request).orElseThrow();
+
+    var producer =
+        engine.startProducer(request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .satisfies(
+            outcome ->
+                assertThat(HardwareEncoderFault.of(backend, outcome))
+                    .contains(HardwareEncoderFault.DECODER_REFUSED));
+  }
+
+  private static void assumeHevcNvencReshapesOnTheGpu() {
+    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
+    capabilities.detectCapabilities();
+    assumeTrue(
+        capabilities
+            .resolveEncoder("hevc")
+            .filter(backend -> capabilities.reshapesDolbyVisionOnTheGpu(backend.encoder()))
+            .isPresent(),
+        "this host's HEVC encoder does not reshape Dolby Vision on the GPU");
   }
 
   // The tests of a hardware encoder need the host's GPU, so they run only where the worker would
@@ -426,17 +481,17 @@ class HdrEncodeSmokeTest {
   }
 
   private static VideoDecision.Encode.EncodeBuilder profile5EncodeBuilder() {
-    var profile5 =
-        new VideoDynamicRange(
-            VideoDynamicRange.CompatibleBase.NONE,
-            VideoDynamicRange.Presence.ABSENT,
-            new VideoDynamicRange.DolbyVision.Present(
-                Optional.empty(),
-                VideoDynamicRange.Presence.PRESENT,
-                VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
     return hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ))
-        .sourceDynamicRange(profile5)
+        .sourceDynamicRange(profile5(VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE))
         .staticHdrMetadata(Optional.of(FALLBACK_METADATA));
+  }
+
+  private static VideoDynamicRange profile5(VideoDynamicRange.DolbyVisionRpuPlacement placement) {
+    return new VideoDynamicRange(
+        VideoDynamicRange.CompatibleBase.NONE,
+        VideoDynamicRange.Presence.ABSENT,
+        new VideoDynamicRange.DolbyVision.Present(
+            Optional.empty(), VideoDynamicRange.Presence.PRESENT, placement));
   }
 
   private static VideoDecision.Encode.EncodeBuilder hevcEncode(VideoDynamicRange output) {
@@ -498,6 +553,45 @@ class HdrEncodeSmokeTest {
         Objects.requireNonNull(
                 HdrEncodeSmokeTest.class.getResource("/sample-entries/dolby-vision-5-dvh1.mp4"))
             .toURI());
+  }
+
+  // The fixture's pictures at 256x144 with their RPUs, which libx265 writes after each picture's
+  // slices. FFmpeg's libx265 declares the IPT-C2 matrix for Dolby Vision, which a profile 5 stream
+  // usually leaves unspecified and the scale filter refuses, so the stream declares none.
+  private static Path profile5SourceThatNvdecDecodes() throws Exception {
+    var source = root.resolve("dolby-vision-5-256x144.mp4");
+    if (Files.exists(source)) {
+      return source;
+    }
+
+    runToCompletion(
+        List.of(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            profile5Source().toString(),
+            "-vf",
+            "scale=256:144",
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-dolbyvision",
+            "1",
+            "-strict",
+            "unofficial",
+            "-x265-params",
+            "keyint=24:min-keyint=24:scenecut=0:bframes=0:log-level=error"
+                + ":vbv-maxrate=1000:vbv-bufsize=1000",
+            "-bsf:v",
+            "hevc_metadata=matrix_coefficients=2",
+            "-tag:v",
+            "dvh1",
+            source.toString()));
+    return source;
   }
 
   // The attempt's deliveries, after the producer accepted its output against the job.
