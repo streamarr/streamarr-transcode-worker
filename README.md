@@ -71,7 +71,15 @@ When a codec family has several usable encoders, the worker always picks them in
 
 Among equally verified hardware encoders, the API decides: NVENC, QSV, AMF, VideoToolbox, then VAAPI. A host therefore always resolves a codec family to the same backend, and a variant's replacement attempts keep the backend of its first job attempt.
 
-The worker also reports the outputs beyond 8-bit SDR that each encoder writes: 10-bit video, PQ, HLG, and Dolby Vision profile 5 or 10.0 reshaped into PQ. libx265, SVT-AV1 and hevc_nvenc run a one-frame test encode of each output at startup, and the worker reports an output only when that encode writes it. A host whose GPU encodes HEVC Main 10 therefore encodes HDR video on hevc_nvenc. The filters, with the Dolby Vision reshape, run on the CPU, and hevc_nvenc takes their frames. h264_nvenc encodes 8-bit SDR only, and the worker reports no such output for any other hardware encoder.
+The worker also reports the outputs beyond 8-bit SDR that each encoder writes: 10-bit video, PQ, HLG, and Dolby Vision profile 5 or 10.0 reshaped into PQ. libx265, SVT-AV1 and hevc_nvenc run a one-frame test encode of each output at startup, and the worker reports an output only when that encode writes it. A host whose GPU encodes HEVC Main 10 therefore encodes HDR video on hevc_nvenc. The filters run on the CPU, and hevc_nvenc takes their frames. h264_nvenc encodes 8-bit SDR only, and the worker reports no such output for any other hardware encoder.
+
+A Dolby Vision profile 5 source that hevc_nvenc encodes to PQ is the one job that decodes in hardware. NVDEC decodes the source, and the GPU scales it and reshapes it with its RPUs (`scale_cuda` and `tonemap_cuda`), so the frames stay on the GPU until hevc_nvenc. A one-frame test encode of that chain runs at startup, after the CPU reshape's own test encode passed. When it fails, the job decodes and reshapes on the CPU, as every other job does. The GPU picture is not bit-equal to the CPU picture. These jobs also keep the CPU filters:
+
+- an interlaced source, whose deinterlacer takes frames from system memory
+- a profile 10.0 source, which is AV1
+- any job on the software encoder
+
+NVDEC refuses a picture outside the sizes it decodes, such as one smaller than 144x144. FFmpeg then decodes in software, the GPU filters fail the job attempt, and the worker reports a hardware encoder failure for that job alone and keeps offering hevc_nvenc. The server places that job on the software encoder, as it does when the driver refuses an encode session. When the GPU chain fails for any other NVENC or CUDA error, the worker stops offering hevc_nvenc until every test encode passes again ([ADR 0044](https://github.com/streamarr/streamarr-adr/blob/main/adr/0044-encoder-headroom-and-the-preset-scale.adoc)), and the stream continues on libx265 with the CPU reshape.
 
 ## Architecture
 
