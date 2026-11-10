@@ -1,6 +1,7 @@
 package com.streamarr.transcode.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -1074,15 +1075,20 @@ class FfmpegAutomationWorkflowTest {
   void shouldWithholdWorkerImagesWhenToolingVerificationFails() throws IOException {
     var jobs = map(yaml(".github/workflows/ci.yml").get("jobs"));
     var build = map(jobs.get("build"));
-    var gate =
-        stepNamed(
-            listOfMaps(build.get("steps")), "Require successful verification and smoke tests");
+    var steps = listOfMaps(build.get("steps"));
 
     assertThat(map(jobs.get("image")))
         .containsEntry("needs", List.of("verify", "tooling", "smoke"));
-    assertThat(build).containsEntry("needs", List.of("verify", "tooling", "smoke", "image"));
-    assertThat(map(gate.get("env"))).containsEntry("TOOLING_RESULT", "${{ needs.tooling.result }}");
-    assertThat(gate.get("run").toString()).contains("test \"$TOOLING_RESULT\" = success");
+    assertThat(build)
+        .containsEntry("needs", List.of("verify", "tooling", "smoke", "image"))
+        .containsEntry("if", "${{ always() }}")
+        .containsEntry("timeout-minutes", 5);
+    // A checkout in an always() job can hang, so the shared action is the only step.
+    assertThat(steps).hasSize(1);
+    assertThat(steps.getFirst().get("uses").toString())
+        .matches("streamarr/streamarr-workflows/.github/actions/require-jobs@[a-f0-9]{40}");
+    assertThat(map(steps.getFirst().get("with")))
+        .containsOnly(entry("jobs", "${{ toJSON(needs) }}"));
   }
 
   @Test
