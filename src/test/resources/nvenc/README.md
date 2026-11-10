@@ -45,7 +45,7 @@ frames from the GPU: NVDEC decodes the source, and `scale_cuda` and `tonemap_cud
 CUDA frames. They show the same verdicts at every rung, PQ's colour description and no static HDR
 metadata in a sample. They show the keyframes and the signalling, not the colours: the source's
 RPUs come from dovi_tool's generator. `HdrEncodeSmokeTest` runs both reshapes into `hevc_nvenc` on
-an NVIDIA GPU host.
+an NVIDIA GPU host: the GPU reshape, and the CPU reshape of a job that also deinterlaces.
 
 ## Recording
 

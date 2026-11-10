@@ -404,6 +404,29 @@ class HdrEncodeSmokeTest {
 
   @Test
   @DisplayName(
+      "Should deliver HDR10 without Dolby Vision when hevc_nvenc encodes a profile 5 source that"
+          + " the CPU filters deinterlace and reshape")
+  void shouldDeliverHdr10WhenHevcNvencEncodesAProfile5SourceThatTheCpuFiltersReshape()
+      throws Exception {
+    assumeHevcNvencLists(EncodeFeature.DOLBY_VISION_TO_PQ);
+    var encode =
+        onHevcNvenc(profile5EncodeBuilder())
+            .deinterlace(
+                Optional.of(
+                    new Deinterlace(
+                        Deinterlace.FirstField.TOP, Deinterlace.Output.ONE_FRAME_PER_FRAME)))
+            .build();
+
+    var delivered = encoded(profile5SourceThatNvdecDecodes(), encode, 0);
+
+    assertStaticHdrMetadataBoxes(delivered, List.of(FALLBACK_MDCV), List.of(FALLBACK_CLLI));
+    assertThat(probed(delivered.acceptedBytes()))
+        .contains("profile=Main 10", "pix_fmt=yuv420p10le", "color_transfer=smpte2084")
+        .doesNotContain("Dolby Vision", "DOVI");
+  }
+
+  @Test
+  @DisplayName(
       "Should deliver HDR10 without Dolby Vision when hevc_nvenc reshapes on the GPU a profile 5"
           + " source whose RPUs the worker moves first")
   void shouldDeliverHdr10WhenHevcNvencReshapesOnTheGpuASourceWhoseRpusTheWorkerMoves()
