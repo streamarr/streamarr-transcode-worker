@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -416,6 +417,55 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     assertThat(featuresByEncoder(service))
         .containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, DOLBY_VISION_TO_PQ))
         .doesNotContainKey("libx265");
+  }
+
+  @Test
+  @DisplayName(
+      "Should offer hevc_nvenc again without an encode feature when that feature's test encode"
+          + " with it fails at the recheck after it passed at startup")
+  void shouldOfferHevcNvencAgainWithoutAnEncodeFeatureWhenItsTestEncodeFailsAtTheRecheck() {
+    var main10Fails = new AtomicBoolean();
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                main10Fails.get() && test.encoder().equals("hevc_nvenc")
+                    ? TestEncodeOutput.of(new byte[0])
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+    var offeredAtStartup = featuresByEncoder(service);
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+    main10Fails.set(true);
+
+    var offeredAgain = service.recheckWithdrawnEncoders();
+
+    assertThat(offeredAtStartup)
+        .containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, HLG, DOLBY_VISION_TO_PQ));
+    assertThat(offeredAgain).isTrue();
+    assertThat(featuresByEncoder(service)).containsEntry("hevc_nvenc", Set.of());
+  }
+
+  @Test
+  @DisplayName(
+      "Should offer hevc_nvenc again with an encode feature when that feature's test encode with"
+          + " it passes at the recheck after it failed at startup")
+  void shouldOfferHevcNvencAgainWithAnEncodeFeatureWhenItsTestEncodePassesAtTheRecheck() {
+    var hlgFails = new AtomicBoolean(true);
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                hlgFails.get() && test.encoder().equals("hevc_nvenc") && test.feature() == HLG
+                    ? TestEncodeOutput.of(new byte[0])
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+    hlgFails.set(false);
+
+    service.recheckWithdrawnEncoders();
+
+    assertThat(featuresByEncoder(service))
+        .containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, HLG, DOLBY_VISION_TO_PQ));
   }
 
   @Test

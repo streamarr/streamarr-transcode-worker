@@ -61,7 +61,7 @@ public class TranscodeCapabilityService {
   private final Map<String, Long> withdrawnHardwareEncoders = new HashMap<>();
 
   // The outputs beyond 8-bit 4:2:0 SDR whose own test encode each encoder passed, by encoder name.
-  private Map<String, Set<EncodeFeature>> encodeFeatures = Map.of();
+  private volatile Map<String, Set<EncodeFeature>> encodeFeatures = Map.of();
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
     this.ffmpegPath = ffmpegPath;
@@ -172,8 +172,10 @@ public class TranscodeCapabilityService {
   }
 
   /**
-   * Runs the test encode of every withdrawn hardware encoder and offers again each one that passes.
-   * Returns whether the offered encoders changed.
+   * Runs the test encode of every withdrawn hardware encoder and offers again each one that passes,
+   * with the encode features whose own test encodes it passes now: a feature that it listed before
+   * its withdrawal is not offered again on the strength of the 8-bit test encode alone. Returns
+   * whether the offered encoders changed.
    */
   public boolean recheckWithdrawnEncoders() {
     Map<String, Long> withdrawn;
@@ -183,18 +185,35 @@ public class TranscodeCapabilityService {
 
     var passed =
         withdrawn.entrySet().stream().filter(entry -> canEncodeCpuFrames(entry.getKey())).toList();
+    var recheckedFeatures =
+        detectEncodeFeatures(
+            passed.stream()
+                .map(Map.Entry::getKey)
+                .flatMap(TranscodeCapabilityService::hardwareBackendsOf)
+                .toList());
     synchronized (this) {
       var offeredAgain =
           passed.stream()
               .filter(entry -> withdrawnHardwareEncoders.remove(entry.getKey(), entry.getValue()))
-              .count();
-      if (offeredAgain == 0) {
+              .map(Map.Entry::getKey)
+              .toList();
+      if (offeredAgain.isEmpty()) {
         return false;
       }
 
+      var features = new HashMap<>(encodeFeatures);
+      offeredAgain.forEach(
+          encoder -> features.put(encoder, recheckedFeatures.getOrDefault(encoder, Set.of())));
+      encodeFeatures = Collections.unmodifiableMap(features);
       resolveOfferedEncoders();
       return true;
     }
+  }
+
+  private static Stream<EncoderBackend> hardwareBackendsOf(String encoder) {
+    return Arrays.stream(CodecFamily.values())
+        .filter(family -> family.isHardwareEncoderOfThisFamily(encoder))
+        .map(family -> hardwareBackend(family, encoder));
   }
 
   private void resolveOfferedEncoders() {
@@ -422,9 +441,16 @@ public class TranscodeCapabilityService {
   // failure during a stream can withdraw (ADR 0044).
   private Map<String, Set<EncodeFeature>> detectEncodeFeatures(
       Set<String> hardwareEncoders, Set<CodecFamily> softwareFamilies) {
-    var testedBackends =
+    return detectEncodeFeatures(
         Arrays.stream(CodecFamily.values())
             .flatMap(family -> usableBackends(family, hardwareEncoders, softwareFamilies))
+            .toList());
+  }
+
+  // The encode features of each backend that the command builder names feature tests for.
+  private Map<String, Set<EncodeFeature>> detectEncodeFeatures(List<EncoderBackend> backends) {
+    var testedBackends =
+        backends.stream()
             .filter(
                 backend -> !FfmpegCommandBuilder.testedEncodeFeatures(backend.encoder()).isEmpty())
             .toList();
