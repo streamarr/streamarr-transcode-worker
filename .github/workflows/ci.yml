@@ -176,21 +176,15 @@ jobs:
 
   build:
     name: build
-    if: always()
+    if: ${{ always() }}
     needs: [verify, tooling, smoke, image]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Require successful verification and smoke tests
-        env:
-          VERIFY_RESULT: ${{ needs.verify.result }}
-          TOOLING_RESULT: ${{ needs.tooling.result }}
-          SMOKE_RESULT: ${{ needs.smoke.result }}
-          IMAGE_RESULT: ${{ needs.image.result }}
-        run: |
-          test "$VERIFY_RESULT" = success
-          test "$TOOLING_RESULT" = success
-          test "$SMOKE_RESULT" = success
-          test "$IMAGE_RESULT" = success
+      - name: Require successful verification, smoke tests and images
+        uses: streamarr/streamarr-workflows/.github/actions/require-jobs@76cd4dd76bce93283d0ccb7ba08429248b6f18f1
+        with:
+          jobs: ${{ toJSON(needs) }}
 
   publish:
     name: Publish verified multi-architecture image
