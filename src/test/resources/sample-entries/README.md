@@ -45,4 +45,6 @@ package index supplies x265, so a later run can get a newer x265.
 Its base layer holds the test pattern's samples, which mean nothing as IPT, so that test checks
 the reshape's plumbing and the delivered HDR10 signalling, not colours.
 `record-dolby-vision-5-fixture.sh` regenerates only that file, with the same images as
-`record-fixtures.sh`, and leaves `versions.txt` alone.
+`record-fixtures.sh`, and leaves `versions.txt` alone. It also records the worker's own test frame
+of the Dolby Vision reshape, `src/main/resources/com/streamarr/transcode/engine/dolby-vision-5-test-frame.mp4`:
+one 320x240 frame of the same recipe, because NVDEC decodes no HEVC picture smaller than 144x144.

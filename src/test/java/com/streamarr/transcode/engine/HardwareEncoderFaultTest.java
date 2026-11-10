@@ -128,6 +128,23 @@ class HardwareEncoderFaultTest {
         .contains(HardwareEncoderFault.DECODER_REFUSED);
   }
 
+  // FFmpeg's nvdec.c and its CUDA filters report a failed CUDA call with the call and its status.
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "[hevc @ 0x5613bfba1b40] decoder->cvdl->cuvidDecodePicture(decoder->decoder,"
+            + " &ctx->pic_params) failed -> CUDA_ERROR_UNKNOWN: unknown error",
+        "[Parsed_tonemap_cuda_1 @ 0x5613beacf940] cu->cuLaunchKernel(s->cu_func, 0, 0, 0, args)"
+            + " failed -> CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered"
+      })
+  @DisplayName(
+      "Should read a failed encoder when NVDEC or a CUDA filter fails during the GPU reshape, so"
+          + " that the stream continues on the software encoder")
+  void shouldReadAFailedEncoderWhenNvdecOrACudaFilterFailsDuringTheGpuReshape(String errorOutput) {
+    assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput)))
+        .contains(HardwareEncoderFault.FAILED);
+  }
+
   @Test
   @DisplayName(
       "Should read a failed encoder when CUDA reports an error beside the GPU filters' refusal of"
