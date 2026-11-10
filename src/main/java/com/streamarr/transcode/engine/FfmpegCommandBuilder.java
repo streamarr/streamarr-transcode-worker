@@ -52,6 +52,18 @@ public class FfmpegCommandBuilder {
 
   // The hardware encoders take 10-bit 4:2:0 video as biplanar p010.
   private static final String P010 = "p010le";
+
+  /**
+   * The input options that decode the video with NVDEC into CUDA frames, which stay on the GPU
+   * through the filters to NVENC. When NVDEC refuses the source, FFmpeg decodes in software, and
+   * the GPU filters, which take only CUDA frames, fail the attempt (ADR 0044).
+   */
+  static final List<String> GPU_DECODE_OPTIONS =
+      List.of("-hwaccel", "cuda", "-hwaccel_output_format", "cuda");
+
+  // tonemap_cuda reshapes each CUDA frame with its RPU, as tonemapx does in system memory.
+  private static final String GPU_DOLBY_VISION_TO_PQ_RESHAPE_FILTER =
+      "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP =
       traits().fixedGop(true).tenBitPixelFormat(P010).build();
@@ -69,11 +81,13 @@ public class FfmpegCommandBuilder {
           .codecProfileForcing(CodecProfileForcing.NVENC)
           .build();
   // hevc_nvenc's Main 10 recordings from 10-bit BT.709, PQ and HLG sources show the same keyframes
-  // (src/test/resources/nvenc). The reshape of Dolby Vision into PQ runs on the CPU before the
-  // encoder, which then takes the arguments of a PQ encode. The features are named one by one, so
-  // a later feature joins only with recordings of its own.
+  // (src/test/resources/nvenc). The reshape of Dolby Vision into PQ runs before the encoder, which
+  // then takes the arguments of a PQ encode: on the GPU where the worker's test encode of that
+  // chain passes, and otherwise on the CPU. The features are named one by one, so a later feature
+  // joins only with recordings of its own.
   private static final EncoderTraits HEVC_NVENC =
       NVENC.toBuilder()
+          .testsGpuDolbyVisionReshape(true)
           .testedEncodeFeatures(
               Set.of(
                   EncodeFeature.TEN_BIT,
@@ -467,11 +481,13 @@ public class FfmpegCommandBuilder {
     var decision = request.transcodeDecision();
     cmd.addAll(List.of(ffmpegPath, "-y"));
     if (input == EncoderInput.SOURCE) {
+      cmd.addAll(gpuDecodeOptions(job));
       addSourceInputsAndStreamSelection(cmd, request);
       return;
     }
 
     var source = input.sourceInputIndex();
+    cmd.addAll(gpuDecodeOptions(job));
     cmd.addAll(
         List.of(
             "-analyzeduration",
@@ -487,6 +503,28 @@ public class FfmpegCommandBuilder {
     addSourceInput(cmd, request);
     cmd.addAll(List.of("-map", "0:v:0"));
     addAudioStreamSelection(cmd, decision.audioDecision(), source);
+  }
+
+  // The options apply to the input that follows them, the one whose video the encode decodes. A
+  // second input of the source feeds only the audio.
+  private static List<String> gpuDecodeOptions(TranscodeJob job) {
+    if (!reshapesDolbyVisionOnTheGpu(job)) {
+      return List.of();
+    }
+
+    return GPU_DECODE_OPTIONS;
+  }
+
+  // The GPU filters run a job only when the encoder passed the worker's test encode of them and
+  // every filter before the encoder takes CUDA frames. bwdif takes frames from system memory, and
+  // no recording shows the hardware decode of AV1 profile 10.0 with its RPUs, so an interlaced
+  // source and a source of another codec than HEVC keep the CPU filters.
+  private static boolean reshapesDolbyVisionOnTheGpu(TranscodeJob job) {
+    return job.gpuDolbyVisionReshapeVerified()
+        && pictureConversion(job) == PictureConversion.RESHAPE_DOLBY_VISION_TO_PQ
+        && job.request().transcodeDecision().videoDecision() instanceof VideoDecision.Encode encode
+        && encode.sourceCodecFamily().equals(Optional.of(CodecFamily.HEVC))
+        && encode.deinterlace().isEmpty();
   }
 
   // ADR 0043 reads each track of an encoded replacement attempt from at most one segment period
@@ -1265,6 +1303,13 @@ public class FfmpegCommandBuilder {
   // The filters that scale the picture to the variant's height and turn it into the format and
   // range that the encoder takes.
   private static String scaleAndFormat(TranscodeJob job) {
+    if (reshapesDolbyVisionOnTheGpu(job)) {
+      return gpuDolbyVisionReshapeFilters(
+          job.videoEncoder(),
+          job.request().transcodeDecision().videoDecision(),
+          job.request().height());
+    }
+
     // Every variant takes the job's picture format: an encoder otherwise keeps a 10-bit or 4:4:4
     // source's format, and few hardware decoders accept 10-bit H.264. An SDR variant that no
     // filter tone-maps is converted to BT.709. A PQ or HLG variant keeps the source's transfer and
@@ -1375,6 +1420,20 @@ public class FfmpegCommandBuilder {
               + hdrColourParameters(encoder, decision);
       case CONVERT_TO_BT709 -> FORMAT_FILTER + encoderPixelFormat(encoder, decision);
     };
+  }
+
+  /**
+   * The filters that scale CUDA frames of Dolby Vision without a compatible base to the height and
+   * reshape them with each frame's RPU into the encoder's 10-bit BT.2020 PQ format on the GPU, as a
+   * job's command passes them. The worker's own test encode of the GPU reshape runs them.
+   */
+  static String gpuDolbyVisionReshapeFilters(String encoder, VideoDecision decision, int height) {
+    return "scale_cuda=-2:"
+        + height
+        + ","
+        + GPU_DOLBY_VISION_TO_PQ_RESHAPE_FILTER
+        + encoderPixelFormat(encoder, decision)
+        + hdrColourParameters(encoder, decision);
   }
 
   private static String hdrColourParameters(String encoder, VideoDecision decision) {
@@ -1682,6 +1741,14 @@ public class FfmpegCommandBuilder {
     return traitsOf(encoder).testedEncodeFeatures();
   }
 
+  /**
+   * Whether the worker runs its own test encode of the Dolby Vision reshape on the GPU with the
+   * encoder, whose recordings show the keyframes that ADR 0037 asks for in that output.
+   */
+  static boolean testsGpuDolbyVisionReshape(String encoder) {
+    return traitsOf(encoder).testsGpuDolbyVisionReshape();
+  }
+
   /** Whether the command forces the job's codec profile, tier and level on the encoder. */
   static boolean forcesCodecProfile(String encoder) {
     return traitsOf(encoder).codecProfileForcing() != CodecProfileForcing.NONE;
@@ -1718,6 +1785,7 @@ public class FfmpegCommandBuilder {
       boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
       boolean writesStaticHdrMetadataOfFrames,
+      boolean testsGpuDolbyVisionReshape,
       @NonNull String eightBitPixelFormat,
       @NonNull String tenBitPixelFormat,
       @NonNull List<String> frameTypeOptions,
