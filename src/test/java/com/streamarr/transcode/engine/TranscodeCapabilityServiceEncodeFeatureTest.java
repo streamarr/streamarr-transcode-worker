@@ -8,12 +8,14 @@ import static com.streamarr.transcode.engine.IsoBoxes.box;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
@@ -373,6 +376,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     var testsWithNvenc =
         commands.stream()
             .filter(command -> command.contains("hevc_nvenc") && command.contains("pipe:1"))
+            .filter(command -> !command.contains("-hwaccel"))
             .toList();
     assertThat(testsWithNvenc)
         .hasSize(EncodeFeature.values().length)
@@ -466,6 +470,238 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
 
     assertThat(featuresByEncoder(service))
         .containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, HLG, DOLBY_VISION_TO_PQ));
+  }
+
+  @Test
+  @DisplayName(
+      "Should reshape Dolby Vision on the GPU with hevc_nvenc, and test no other encoder for it,"
+          + " when hevc_nvenc's GPU reshape test encode writes 10-bit PQ")
+  void shouldReshapeDolbyVisionOnTheGpuWithHevcNvencWhenItsGpuReshapeTestEncodeWritesTenBitPq() {
+    var gpuTestedEncoders = new HashSet<String>();
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING + H264_NVENC_LISTING,
+            test -> {
+              if (test.onTheGpu()) {
+                gpuTestedEncoders.add(test.encoder());
+              }
+
+              return TestEncodeOutput.faithful(test);
+            });
+
+    service.detectCapabilities();
+
+    assertThat(service.reshapesDolbyVisionOnTheGpu("hevc_nvenc")).isTrue();
+    assertThat(
+            Stream.of("libx265", "libsvtav1", "h264_nvenc", "unknown")
+                .filter(service::reshapesDolbyVisionOnTheGpu))
+        .isEmpty();
+    assertThat(gpuTestedEncoders).containsExactly("hevc_nvenc");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("failedGpuReshapeTests")
+  @DisplayName(
+      "Should keep the Dolby Vision reshape of hevc_nvenc on the CPU and still list the feature"
+          + " when the GPU reshape test encode fails or writes another output")
+  void shouldKeepTheReshapeOfHevcNvencOnTheCpuWhenTheGpuReshapeTestEncodeFails(
+      String failure, TestEncodeOutput failedOutput) {
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                test.isGpuReshapeOf("hevc_nvenc") ? failedOutput : TestEncodeOutput.faithful(test));
+
+    service.detectCapabilities();
+
+    assertThat(service.reshapesDolbyVisionOnTheGpu("hevc_nvenc")).isFalse();
+    assertThat(featuresByEncoder(service))
+        .containsEntry("hevc_nvenc", Set.of(EncodeFeature.values()));
+  }
+
+  static Stream<Arguments> failedGpuReshapeTests() {
+    return Stream.of(
+        Arguments.of(
+            "the hardware decoder or a GPU filter fails, so FFmpeg exits with an error",
+            new TestEncodeOutput(
+                tenBitHevcSegment(colr(BT2020, PQ_TRANSFER, BT2020)), FAILED_EXIT_CODE)),
+        Arguments.of("the test writes nothing", TestEncodeOutput.of(new byte[0])),
+        Arguments.of(
+            "the test writes 8 bits",
+            TestEncodeOutput.of(eightBitSegment(colr(BT2020, PQ_TRANSFER, BT2020)))),
+        Arguments.of(
+            "the test declares the BT.709 transfer",
+            TestEncodeOutput.of(tenBitHevcSegment(colr(BT2020, BT709, BT2020)))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should run no GPU reshape test encode with hevc_nvenc when its CPU reshape test encode"
+          + " fails, because a job falls back to the CPU reshape")
+  void shouldRunNoGpuReshapeTestEncodeWithHevcNvencWhenItsCpuReshapeTestEncodeFails() {
+    var gpuTests = new ArrayList<FeatureTest>();
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test -> {
+              if (test.onTheGpu()) {
+                gpuTests.add(test);
+              }
+
+              return test.encoder().equals("hevc_nvenc") && test.feature() == DOLBY_VISION_TO_PQ
+                  ? TestEncodeOutput.of(new byte[0])
+                  : TestEncodeOutput.faithful(test);
+            });
+
+    service.detectCapabilities();
+
+    assertThat(gpuTests).isEmpty();
+    assertThat(service.reshapesDolbyVisionOnTheGpu("hevc_nvenc")).isFalse();
+    assertThat(featuresByEncoder(service)).containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, HLG));
+  }
+
+  @Test
+  @DisplayName(
+      "Should decode the worker's profile 5 test frame in hardware and scale and reshape it on the"
+          + " GPU into hevc_nvenc with a PQ encode's arguments when the GPU reshape test encode"
+          + " runs")
+  void shouldDecodeTheTestFrameInHardwareAndReshapeItOnTheGpuWhenTheGpuReshapeTestEncodeRuns() {
+    var commands = new ArrayList<List<String>>();
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              commands.add(List.copyOf(command.command()));
+              return command.command().contains("-encoders")
+                  ? new FakeProcess(HEVC_NVENC_LISTING, 0)
+                  : resolve(command, test -> TestEncodeOutput.faithful(test).process());
+            });
+
+    service.detectCapabilities();
+
+    var gpuTests = commands.stream().filter(command -> command.contains("-hwaccel")).toList();
+    var cpuReshape =
+        commands.stream()
+            .filter(command -> command.contains("hevc_nvenc"))
+            .filter(command -> filtersOf(command).contains("tonemapx"))
+            .findFirst()
+            .orElseThrow();
+    assertThat(gpuTests).hasSize(1);
+    var gpuTest = gpuTests.getFirst();
+    assertThat(gpuTest)
+        .containsSequence("-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i")
+        .containsSubsequence("-frames:v", "1", "-c:v", "hevc_nvenc", "-profile:v", "main10");
+    assertThat(filtersOf(gpuTest))
+        .isEqualTo(
+            "scale_cuda=-2:240,tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=p010le,"
+                + frameColour("smpte2084")
+                + STATIC_METADATA_DELETION);
+    assertThat(afterFilters(gpuTest)).isEqualTo(afterFilters(cpuReshape));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the Dolby Vision reshape of hevc_nvenc on the CPU when its GPU reshape test"
+          + " encode fails at the recheck after it passed at startup")
+  void shouldKeepTheReshapeOnTheCpuWhenTheGpuReshapeTestEncodeFailsAtTheRecheck() {
+    var gpuReshapeFails = new AtomicBoolean();
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                gpuReshapeFails.get() && test.isGpuReshapeOf("hevc_nvenc")
+                    ? new TestEncodeOutput(new byte[0], FAILED_EXIT_CODE)
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+    var atStartup = service.reshapesDolbyVisionOnTheGpu("hevc_nvenc");
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+    gpuReshapeFails.set(true);
+
+    service.recheckWithdrawnEncoders();
+
+    assertThat(atStartup).isTrue();
+    assertThat(service.reshapesDolbyVisionOnTheGpu("hevc_nvenc")).isFalse();
+    assertThat(featuresByEncoder(service))
+        .containsEntry("hevc_nvenc", Set.of(EncodeFeature.values()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should reshape Dolby Vision on the GPU with hevc_nvenc when its GPU reshape test encode"
+          + " passes at the recheck after it failed at startup")
+  void shouldReshapeOnTheGpuWhenTheGpuReshapeTestEncodePassesAtTheRecheck() {
+    var gpuReshapeFails = new AtomicBoolean(true);
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                gpuReshapeFails.get() && test.isGpuReshapeOf("hevc_nvenc")
+                    ? new TestEncodeOutput(new byte[0], FAILED_EXIT_CODE)
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+    var atStartup = service.reshapesDolbyVisionOnTheGpu("hevc_nvenc");
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+    gpuReshapeFails.set(false);
+
+    service.recheckWithdrawnEncoders();
+
+    assertThat(atStartup).isFalse();
+    assertThat(service.reshapesDolbyVisionOnTheGpu("hevc_nvenc")).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should launch a profile 5 to PQ job with hardware decode and the GPU filters when hevc_nvenc"
+          + " passed its GPU reshape test encode")
+  void shouldLaunchAProfile5JobWithTheGpuFiltersWhenHevcNvencPassedItsGpuReshapeTestEncode() {
+    var service = serviceWithHardware(HEVC_NVENC_LISTING, TestEncodeOutput::faithful);
+    service.detectCapabilities();
+
+    var command = commandLaunchedForAProfile5Job(service);
+
+    assertThat(command)
+        .containsSubsequence("-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i")
+        .containsSubsequence("-c:v", "hevc_nvenc");
+    assertThat(filtersOf(command)).startsWith("scale_cuda=-2:1080,tonemap_cuda=");
+  }
+
+  @Test
+  @DisplayName(
+      "Should launch a profile 5 to PQ job with hevc_nvenc, software decode and the CPU filters"
+          + " when hevc_nvenc failed its GPU reshape test encode")
+  void shouldLaunchAProfile5JobWithTheCpuFiltersWhenHevcNvencFailedItsGpuReshapeTestEncode() {
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                test.isGpuReshapeOf("hevc_nvenc")
+                    ? new TestEncodeOutput(new byte[0], FAILED_EXIT_CODE)
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+
+    var command = commandLaunchedForAProfile5Job(service);
+
+    assertThat(command).containsSubsequence("-c:v", "hevc_nvenc").doesNotContain("-hwaccel");
+    assertThat(filtersOf(command))
+        .startsWith("scale=-2:1080,format=yuv420p10le,tonemapx=")
+        .doesNotContain("_cuda");
+  }
+
+  @Test
+  @DisplayName(
+      "Should launch the next profile 5 to PQ job with libx265, software decode and the CPU filters"
+          + " when hevc_nvenc is withdrawn after its GPU reshape failed during a stream")
+  void shouldLaunchTheNextProfile5JobWithLibx265AndTheCpuFiltersWhenHevcNvencIsWithdrawn() {
+    var service = serviceWithHardware(HEVC_NVENC_LISTING, TestEncodeOutput::faithful);
+    service.detectCapabilities();
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+
+    var command = commandLaunchedForAProfile5Job(service);
+
+    assertThat(command).containsSubsequence("-c:v", "libx265").doesNotContain("-hwaccel");
+    assertThat(filtersOf(command))
+        .startsWith("scale=-2:1080,format=yuv420p10le,tonemapx=")
+        .doesNotContain("_cuda");
   }
 
   @Test
@@ -564,6 +800,93 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     return features;
   }
 
+  private static String filtersOf(List<String> command) {
+    return command.get(command.indexOf("-vf") + 1);
+  }
+
+  // The encoder's arguments and the output, which follow the filters.
+  private static List<String> afterFilters(List<String> command) {
+    return command.subList(command.indexOf("-vf") + 2, command.size());
+  }
+
+  // The command of the FFmpeg that the engine launches for a Dolby Vision profile 5 to PQ job.
+  private static List<String> commandLaunchedForAProfile5Job(TranscodeCapabilityService service) {
+    var launcher = ScriptedProcessLauncher.running();
+    var engine =
+        FfmpegTranscodeEngine.builder()
+            .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+            .capabilityService(service)
+            .launcher(launcher)
+            .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
+            .build();
+    var request = profile5ToPqRequest();
+
+    engine
+        .startProducer(request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1))
+        .stop();
+
+    return launcher.command(request.attemptId());
+  }
+
+  private static TranscodeRequest profile5ToPqRequest() {
+    var pq =
+        new VideoDynamicRange(
+            VideoDynamicRange.CompatibleBase.PQ,
+            VideoDynamicRange.Presence.ABSENT,
+            new VideoDynamicRange.DolbyVision.Absent());
+    var profile5 =
+        new VideoDynamicRange(
+            VideoDynamicRange.CompatibleBase.NONE,
+            VideoDynamicRange.Presence.ABSENT,
+            new VideoDynamicRange.DolbyVision.Present(
+                Optional.empty(),
+                VideoDynamicRange.Presence.PRESENT,
+                VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
+    var encode =
+        VideoDecision.Encode.builder()
+            .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
+            .sourcePacketsCarryPresentationTimes(true)
+            .sourceDynamicRange(profile5)
+            .outputDynamicRange(pq)
+            .codecProfile(VideoCodecProfile.HEVC_MAIN_10)
+            .tier(Optional.of(VideoCodecTier.MAIN))
+            .level(40)
+            .codecString("hvc1.2.4.L120.90")
+            .outputPictureFormat(new PictureFormat(10, ChromaSubsampling.CHROMA_420))
+            .staticHdrMetadata(
+                Optional.of(
+                    new StaticHdrMetadata(
+                        PlannedCopyOutput.MasteringDisplay.builder()
+                            .red(new PlannedCopyOutput.Chromaticity(34000, 16000))
+                            .green(new PlannedCopyOutput.Chromaticity(13250, 34500))
+                            .blue(new PlannedCopyOutput.Chromaticity(7500, 3000))
+                            .whitePoint(new PlannedCopyOutput.Chromaticity(15635, 16450))
+                            .maxLuminance(10_000_000)
+                            .minLuminance(1)
+                            .build(),
+                        new PlannedCopyOutput.ContentLightLevel(0, 0))))
+            .build();
+    return TranscodeRequest.builder()
+        .sessionId(UUID.randomUUID())
+        .sourcePath(Path.of("/media/movie.mkv"))
+        .targetSegmentDuration(6)
+        .outputFrameRate(Optional.of(new OutputFrameRate(24, 1)))
+        .mediaSegmentCount(11)
+        .transcodeDecision(
+            TranscodeDecision.builder()
+                .transcodeMode(TranscodeMode.VIDEO_TRANSCODE)
+                .videoCodecFamily("hevc")
+                .videoDecision(encode)
+                .audioDecision(AudioDecision.builder().mode(AudioMode.NONE).build())
+                .subtitleDecision(SubtitleDecisions.EXCLUDED)
+                .build())
+        .encoderPreset(EncoderPreset.FASTER)
+        .width(1920)
+        .height(1080)
+        .bitrate(5_000_000L)
+        .build();
+  }
+
   private static Process resolve(
       ProcessBuilder command, Function<FeatureTest, Process> featureTests) {
     var arguments = command.command();
@@ -583,30 +906,44 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         .orElseGet(() -> new FakeProcess("", 0));
   }
 
-  // A feature test encode, recognized by the filters that its command runs.
-  record FeatureTest(String encoder, EncodeFeature feature, Optional<Path> input) {
+  // A feature test encode, recognized by the filters that its command runs. The Dolby Vision
+  // reshape has a second test encode, whose decode, scale and reshape run on the GPU.
+  record FeatureTest(
+      String encoder, EncodeFeature feature, Optional<Path> input, boolean onTheGpu) {
 
     private static Optional<FeatureTest> of(
         String encoder, String filters, List<String> arguments) {
       var input = Path.of(arguments.get(arguments.indexOf("-i") + 1));
-      if (filters.contains("tonemapx")) {
+      if (filters.contains("tonemapx") || filters.contains("tonemap_cuda")) {
         return Optional.of(
-            new FeatureTest(encoder, EncodeFeature.DOLBY_VISION_TO_PQ, Optional.of(input)));
+            new FeatureTest(
+                encoder,
+                EncodeFeature.DOLBY_VISION_TO_PQ,
+                Optional.of(input),
+                filters.contains("tonemap_cuda")));
       }
 
       if (filters.contains("arib-std-b67")) {
-        return Optional.of(new FeatureTest(encoder, EncodeFeature.HLG, Optional.empty()));
+        return Optional.of(onTheCpu(encoder, EncodeFeature.HLG));
       }
 
       if (filters.contains("smpte2084")) {
-        return Optional.of(new FeatureTest(encoder, EncodeFeature.PQ, Optional.empty()));
+        return Optional.of(onTheCpu(encoder, EncodeFeature.PQ));
       }
 
       if (filters.endsWith("format=yuv420p10le") || filters.endsWith("format=p010le")) {
-        return Optional.of(new FeatureTest(encoder, EncodeFeature.TEN_BIT, Optional.empty()));
+        return Optional.of(onTheCpu(encoder, EncodeFeature.TEN_BIT));
       }
 
       return Optional.empty();
+    }
+
+    private static FeatureTest onTheCpu(String encoder, EncodeFeature feature) {
+      return new FeatureTest(encoder, feature, Optional.empty(), false);
+    }
+
+    private boolean isGpuReshapeOf(String encoder) {
+      return onTheGpu && this.encoder.equals(encoder);
     }
   }
 

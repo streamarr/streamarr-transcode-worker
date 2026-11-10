@@ -154,6 +154,14 @@ public class TranscodeCapabilityService {
   }
 
   /**
+   * Whether the encoder passed the worker's own test encode of the Dolby Vision reshape on the GPU:
+   * hardware decode, scale and reshape of the worker's profile 5 test frame into the encoder.
+   */
+  public boolean reshapesDolbyVisionOnTheGpu(String encoder) {
+    return testedEncodes.get().getOrDefault(encoder, TestedEncodes.NONE).gpuDolbyVisionReshape();
+  }
+
+  /**
    * Stops offering a hardware encoder that failed during a stream, so its codec family resolves to
    * the next usable encoder (ADR 0044). Returns whether the offered encoders changed.
    */
@@ -175,7 +183,8 @@ public class TranscodeCapabilityService {
   /**
    * Runs the test encode of every withdrawn hardware encoder and offers again each one that passes,
    * with the encode features whose own test encodes it passes now: a feature that it listed before
-   * its withdrawal is not offered again on the strength of the 8-bit test encode alone. Returns
+   * its withdrawal is not offered again on the strength of the 8-bit test encode alone. The GPU
+   * reshape of Dolby Vision likewise runs again only once its own test encode passes again. Returns
    * whether the offered encoders changed.
    */
   public boolean recheckWithdrawnEncoders() {
@@ -463,9 +472,7 @@ public class TranscodeCapabilityService {
     try (var dolbyVisionFrame = SampleDolbyVisionFrame.extract()) {
       var tested = new HashMap<String, TestedEncodes>();
       for (var backend : testedBackends) {
-        tested.put(
-            backend.encoder(),
-            new TestedEncodes(detectEncodeFeatures(backend, dolbyVisionFrame.path())));
+        tested.put(backend.encoder(), runFeatureTestEncodes(backend, dolbyVisionFrame.path()));
       }
 
       return Collections.unmodifiableMap(tested);
@@ -473,6 +480,24 @@ public class TranscodeCapabilityService {
       log.warn("Encode feature detection could not extract its Dolby Vision test frame", e);
       return Map.of();
     }
+  }
+
+  private TestedEncodes runFeatureTestEncodes(EncoderBackend backend, Path dolbyVisionFrame) {
+    var features = detectEncodeFeatures(backend, dolbyVisionFrame);
+    return new TestedEncodes(
+        features, passesGpuDolbyVisionReshapeTest(backend, features, dolbyVisionFrame));
+  }
+
+  // A job that the GPU filters cannot run reshapes on the CPU, so the GPU reshape is tested only
+  // with an encoder that passed the CPU reshape's test encode.
+  private boolean passesGpuDolbyVisionReshapeTest(
+      EncoderBackend backend, Set<EncodeFeature> features, Path dolbyVisionFrame) {
+    return features.contains(EncodeFeature.DOLBY_VISION_TO_PQ)
+        && FfmpegCommandBuilder.testsGpuDolbyVisionReshape(backend.encoder())
+        && passesFeatureTest(
+            backend.encoder(),
+            EncodeFeatureCheck.ofGpuDolbyVisionReshape(backend.codecFamily()),
+            dolbyVisionFrame);
   }
 
   private Set<EncodeFeature> detectEncodeFeatures(EncoderBackend backend, Path dolbyVisionFrame) {
@@ -487,10 +512,12 @@ public class TranscodeCapabilityService {
         .collect(Collectors.toUnmodifiableSet());
   }
 
-  // What an encoder's own test encodes showed: the outputs beyond 8-bit 4:2:0 SDR that it writes.
-  private record TestedEncodes(Set<EncodeFeature> features) {
+  // What an encoder's own test encodes showed: the outputs beyond 8-bit 4:2:0 SDR that it writes,
+  // and whether it also writes the Dolby Vision reshape from frames that the GPU decoded, scaled
+  // and reshaped.
+  private record TestedEncodes(Set<EncodeFeature> features, boolean gpuDolbyVisionReshape) {
 
-    private static final TestedEncodes NONE = new TestedEncodes(Set.of());
+    private static final TestedEncodes NONE = new TestedEncodes(Set.of(), false);
   }
 
   private boolean passesFeatureTest(

@@ -19,7 +19,8 @@ final class EncodeFeatureCheck {
 
   private static final String LAVFI_SOURCE = "color=size=320x240:rate=24";
   // The scale that a job's command runs before its format filters.
-  private static final String SCALE = "scale=-2:240,";
+  private static final int HEIGHT = 240;
+  private static final String SCALE = "scale=-2:" + HEIGHT + ",";
   private static final int TEST_HEVC_LEVEL = 30;
   private static final int TEST_AV1_LEVEL = 20;
   private static final PictureFormat TEN_BIT_420 =
@@ -39,9 +40,11 @@ final class EncodeFeatureCheck {
 
   private final EncodeFeature feature;
   private final VideoDecision.Encode encode;
+  private final boolean onTheGpu;
 
-  private EncodeFeatureCheck(EncodeFeature feature, CodecFamily family) {
+  private EncodeFeatureCheck(EncodeFeature feature, CodecFamily family, boolean onTheGpu) {
     this.feature = feature;
+    this.onTheGpu = onTheGpu;
     var output = outputOf(feature);
     this.encode =
         VideoDecision.Encode.builder()
@@ -69,7 +72,16 @@ final class EncodeFeatureCheck {
       throw new IllegalArgumentException("H.264 encodes only 8-bit SDR");
     }
 
-    return new EncodeFeatureCheck(feature, family);
+    return new EncodeFeatureCheck(feature, family, false);
+  }
+
+  /**
+   * The test encode of the Dolby Vision reshape whose decode, scale and reshape run on the GPU: the
+   * hardware decoder reads the test frame, and the GPU filters of a job's command hand the encoder
+   * its frames.
+   */
+  static EncodeFeatureCheck ofGpuDolbyVisionReshape(CodecFamily family) {
+    return new EncodeFeatureCheck(EncodeFeature.DOLBY_VISION_TO_PQ, family, true);
   }
 
   /**
@@ -79,19 +91,17 @@ final class EncodeFeatureCheck {
    */
   List<String> arguments(String encoder, Path dolbyVisionFrame) {
     var arguments = new ArrayList<>(List.of("-nostdin", "-v", "quiet"));
+    if (onTheGpu) {
+      arguments.addAll(FfmpegCommandBuilder.GPU_DECODE_OPTIONS);
+    }
+
     if (feature == EncodeFeature.DOLBY_VISION_TO_PQ) {
       arguments.addAll(List.of("-i", dolbyVisionFrame.toString()));
     } else {
       arguments.addAll(List.of("-f", "lavfi", "-i", LAVFI_SOURCE));
     }
 
-    arguments.addAll(
-        List.of(
-            "-frames:v",
-            "1",
-            "-an",
-            "-vf",
-            SCALE + FfmpegCommandBuilder.videoFormat(encoder, encode)));
+    arguments.addAll(List.of("-frames:v", "1", "-an", "-vf", filters(encoder)));
     arguments.addAll(FfmpegCommandBuilder.encoderArguments(encoder, encode));
     arguments.addAll(FfmpegCommandBuilder.frameTypeOptions(encoder));
     arguments.addAll(
@@ -102,6 +112,14 @@ final class EncodeFeatureCheck {
             String.join("+", FfmpegCommandBuilder.MP4_MOVFLAGS),
             "pipe:1"));
     return List.copyOf(arguments);
+  }
+
+  private String filters(String encoder) {
+    if (onTheGpu) {
+      return FfmpegCommandBuilder.gpuDolbyVisionReshapeFilters(encoder, encode, HEIGHT);
+    }
+
+    return SCALE + FfmpegCommandBuilder.videoFormat(encoder, encode);
   }
 
   /** Whether FFmpeg's output declares the feature's picture format and colour description. */
