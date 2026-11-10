@@ -1,7 +1,6 @@
 package com.streamarr.transcode.engine;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.function.IntPredicate;
@@ -11,10 +10,10 @@ import lombok.NonNull;
  * The media segments' intervals on ADR 0037's zero-based timeline of slots, each one period long.
  * On the plain grid segment N's interval is slot N. On a segment list, segment N's interval runs
  * from its listed start up to the next segment's, so one segment can span several slots; a list
- * gives each start as a slot or as an exact presentation time in ticks of a time base. The last
- * listed segment's audio ends at the job's advertised end, and runs to the end of the media only in
- * a job that carries none; its video runs to the end of the media either way, so a keyframe past
- * the advertised end opens no segment that the playlist does not advertise.
+ * gives each start as an exact presentation time in ticks of a time base. The last listed segment's
+ * audio ends at the job's advertised end, and runs to the end of the media only in a job that
+ * carries none; its video runs to the end of the media either way, so a keyframe past the
+ * advertised end opens no segment that the playlist does not advertise.
  */
 final class SegmentIntervals {
 
@@ -39,20 +38,6 @@ final class SegmentIntervals {
     requirePositive(periodSeconds);
     return new SegmentIntervals(
         periodSeconds, new long[0], slotsOf(periodSeconds), Optional.empty());
-  }
-
-  /**
-   * The intervals of a segment list whose slots last this many seconds: entry N is the slot where
-   * segment N starts. An empty list is the plain grid. The job's mapping has checked that a
-   * non-empty list starts at 0 and strictly increases.
-   */
-  static SegmentIntervals onSegmentList(int periodSeconds, @NonNull List<Long> startSlots) {
-    requirePositive(periodSeconds);
-    return new SegmentIntervals(
-        periodSeconds,
-        startSlots.stream().mapToLong(Long::longValue).toArray(),
-        slotsOf(periodSeconds),
-        Optional.empty());
   }
 
   /**

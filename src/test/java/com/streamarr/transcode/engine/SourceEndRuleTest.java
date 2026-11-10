@@ -101,12 +101,15 @@ class SourceEndRuleTest {
         videoEndingAt64Seconds()
             .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(59_000))))
             .build();
-    // 6 s slots: segment 8 spans slots 8 and 9, from 48 s to 60 s.
+    // 6 s slots, with each start in whole seconds: segment 8 spans slots 8 and 9, from 48 s to
+    // 60 s.
     var rule =
         SourceEndRule.builder()
             .intervals(
-                SegmentIntervals.onSegmentList(
-                    6, List.of(0L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 10L, 13L)))
+                SegmentIntervals.onExactStarts(
+                    6,
+                    new ExactSegmentStarts(
+                        List.of(0L, 6L, 12L, 18L, 24L, 30L, 36L, 42L, 48L, 60L, 78L), 1, 1)))
             .mediaSegmentCount(11)
             .video(copy())
             .build();

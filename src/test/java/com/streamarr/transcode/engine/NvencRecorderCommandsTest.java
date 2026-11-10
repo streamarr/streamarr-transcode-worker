@@ -210,7 +210,9 @@ class NvencRecorderCommandsTest {
             .sourcePath(Path.of("/work/source.mp4"))
             .startSequenceNumber(Integer.parseInt(job.get("startSequenceNumber")))
             .mediaSegmentCount(Integer.parseInt(job.get("mediaSegmentCount")))
-            .segmentStartSlots(segmentStartSlotsOf(recording))
+            // The recorder lists each segment's start as a 6 s slot, so one tick lasts a slot.
+            .exactSegmentStarts(
+                Optional.of(new ExactSegmentStarts(segmentStartSlotsOf(recording), 6, 1)))
             .targetSegmentDuration(6)
             .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
             .transcodeDecision(decision)

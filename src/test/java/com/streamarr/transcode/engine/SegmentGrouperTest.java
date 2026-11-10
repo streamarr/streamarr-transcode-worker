@@ -28,7 +28,7 @@ class SegmentGrouperTest {
   private static final SegmentIntervals SIX_SECOND_INTERVALS = SegmentIntervals.onPlainGrid(6);
   // Keyframes 10 s apart on 3 s slots: segments start at 0 s, 9 s, 18 s and 30 s.
   private static final SegmentIntervals MERGED_THREE_SECOND_SLOTS =
-      SegmentIntervals.onSegmentList(3, List.of(0L, 3L, 6L, 10L));
+      SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 9L, 18L, 30L), 1, 1));
   private static final long MILLISECONDS = 1000;
   private static final long SEGMENT_CAP = Mp4Stream.SEGMENT_CAP;
   private static final long FRAGMENT_BYTES = 2;

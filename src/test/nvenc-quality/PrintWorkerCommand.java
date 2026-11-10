@@ -37,6 +37,7 @@ public class PrintWorkerCommand {
                     .build())
             .subtitleDecision(SubtitleDecisions.EXCLUDED)
             .build();
+    // Each segment starts at its 6 s slot, so one tick of the exact starts lasts a slot.
     var slots = java.util.stream.LongStream.range(0, segments).boxed().toList();
     var request =
         TranscodeRequest.builder()
@@ -44,7 +45,7 @@ public class PrintWorkerCommand {
             .sourcePath(Path.of(a[7]))
             .startSequenceNumber(0)
             .mediaSegmentCount(segments)
-            .segmentStartSlots(slots)
+            .exactSegmentStarts(Optional.of(new ExactSegmentStarts(slots, 6, 1)))
             .targetSegmentDuration(6)
             .outputFrameRate(Optional.of(rate))
             .transcodeDecision(decision)
