@@ -336,7 +336,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       refusingNextReport = true;
     }
 
-    /** The most report calls open at once: started, and neither answered, refused nor cancelled. */
+    /** The most report calls open at once: started, and neither answered, refused nor canceled. */
     public int mostReportCallsOpenAtOnce() {
       return openReportCalls.most();
     }

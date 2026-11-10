@@ -130,7 +130,8 @@ final class WorkerProbeSession implements AutoCloseable {
   }
 
   // Never waits, so the worker ends a session under its monitor. A report of the ended session is
-  // never sent: its open call is cancelled, and a probe that ends from now on hands over nothing.
+  // never sent: the sender cancels its open calls and discards its waiting reports, and a probe
+  // that ends from now on hands over nothing.
   synchronized void shutdown() {
     attempts.values().forEach(ProbeAttempt::cancel);
     executor.shutdownNow();

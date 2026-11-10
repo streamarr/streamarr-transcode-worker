@@ -706,9 +706,9 @@ class FfprobeExecutorBitrateScanTest {
   @ParameterizedTest(name = "{0}")
   @MethodSource("copiesThatChangePackets")
   @DisplayName(
-      "Should report the stream and no measurement parts when a copy would change a measured"
-          + " stream's packets")
-  void shouldReportTheStreamAndNoMeasurementPartsWhenACopyWouldChangeAMeasuredStreamsPackets(
+      "Should report the stream and no measurement when a copy would change a measured stream's"
+          + " packets")
+  void shouldReportTheStreamAndNoMeasurementWhenACopyWouldChangeAMeasuredStreamsPackets(
       String description, ScriptedSource.ScriptedSourceBuilder source, int streamIndex) {
     var report = source.build().executor().probe(SOURCE, request(POSITIONS.chunk(0, 4)));
 
@@ -858,7 +858,7 @@ class FfprobeExecutorBitrateScanTest {
             "a stream measured twice",
             (UnaryOperator<BitrateScanChunk.Builder>) chunk -> chunk.addMeasuredStreamIndexes(1)),
         Arguments.of(
-            "more keyframes than a measurement part carries",
+            "more keyframes than a chunk holds",
             (UnaryOperator<BitrateScanChunk.Builder>)
                 chunk -> {
                   for (var i = 0; i < 4_095; i++) {
@@ -949,9 +949,9 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
-      "Should report a result too large when one interval holds more bytes than a measurement part"
+      "Should report a result too large when one interval holds more bytes than a measurement"
           + " entry carries")
-  void shouldReportAResultTooLargeWhenOneIntervalHoldsMoreBytesThanAMeasurementPartEntryCarries() {
+  void shouldReportAResultTooLargeWhenOneIntervalHoldsMoreBytesThanAMeasurementEntryCarries() {
     var listing =
         """
         stream_index=0|pts=500|dts=500|duration=500|size=4294967296|flags=K__
