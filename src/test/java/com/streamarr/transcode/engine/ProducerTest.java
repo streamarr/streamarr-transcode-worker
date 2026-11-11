@@ -88,6 +88,10 @@ class ProducerTest {
   private static final String AV1_RECORDING = "09-svtav1-vfr.fmp4";
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
+  // An FFmpeg that writes nothing while its audio's input reads ahead, as a copy that encodes its
+  // audio does.
+  private static final FfmpegPipeline READING_AHEAD =
+      new FfmpegPipeline.SingleProcess(List.of("ffmpeg"), true);
   private static final Duration POLL_INTERVAL = Duration.ofMillis(5);
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
@@ -3978,6 +3982,124 @@ class ProducerTest {
     assertThat(process.wasTerminated()).isTrue();
     assertThat(process.wasDestroyedForcibly()).isEqualTo(ignoresTermination);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The scripted FFmpeg has read one more byte at every count while it reads, and the watchdog
+  // counts ten times within a stall timeout: thirty counts span three stall timeouts.
+  @Test
+  @DisplayName(
+      "Should keep the attempt running when FFmpeg writes nothing for three stall timeouts while"
+          + " its audio's input reads ahead and FFmpeg reads")
+  void shouldKeepTheAttemptRunningWhenFfmpegWritesNothingWhileItsAudiosInputReadsAheadAndItReads() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var stallTimeout = Duration.ofMillis(200);
+    var producer =
+        producerFor(process, recording).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    var pausedAt = System.nanoTime();
+    var readAtThePause = process.bytesRead();
+
+    awaiting().until(() -> process.bytesRead() >= readAtThePause + 30);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - pausedAt))
+        .as("how long FFmpeg has written nothing")
+        .isGreaterThan(stallTimeout.multipliedBy(2));
+    assertThat(producer.outcome()).isNotDone();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  // The watchdog dates the bytes that a count finds to the count before it, so an FFmpeg that
+  // stops reading stalls within the stall timeout of its last read and at the earliest two counts,
+  // 200 ms, before that. The 500 ms after it leave time for the test's threads to run.
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall within the stall timeout of FFmpeg's last read"
+          + " when FFmpeg stops reading while its audio's input reads ahead")
+  void shouldFailTheAttemptWithinTheStallTimeoutOfTheLastReadWhenFfmpegStopsReadingAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var stallTimeout = Duration.ofSeconds(1);
+    var producer =
+        producerFor(process, recording).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    var readAtThePause = process.bytesRead();
+    awaiting().until(() -> process.bytesRead() >= readAtThePause + 15);
+
+    process.stopReading();
+    var stoppedAt = System.nanoTime();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt))
+        .as("the failure, counted from FFmpeg's last read")
+        .isBetween(stallTimeout.minusMillis(300), stallTimeout.plusMillis(500));
+    assertThat(process.wasTerminated()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall, without counting the bytes that FFmpeg reads,"
+          + " when FFmpeg writes nothing and no input of its reads ahead")
+  void shouldFailTheAttemptAsAnEncoderStallWithoutCountingReadsWhenNoInputReadsAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(200)).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(process.bytesRead()).as("the counts of the bytes that FFmpeg read").isZero();
+    assertThat(producer.takeAdvancedBytesRead()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should give the bytes that FFmpeg has read once they have grown, and nothing once FFmpeg"
+          + " has stopped reading, when its audio's input reads ahead")
+  void shouldGiveTheBytesThatFfmpegHasReadOnceTheyHaveGrownWhenItsAudiosInputReadsAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var producer = producerFor(process, recording).pipeline(READING_AHEAD).start();
+    awaiting().until(() -> process.bytesRead() >= 3);
+
+    var first = producer.takeAdvancedBytesRead();
+    process.stopReading();
+    var read = process.bytesRead();
+
+    assertThat(first).isPresent();
+    assertThat(first.getAsLong()).isBetween(1L, read);
+    awaiting().until(() -> latestBytesRead(producer, first.getAsLong()) == read);
+    assertThat(producer.takeAdvancedBytesRead()).as("the bytes read have not grown").isEmpty();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+  }
+
+  // The bytes read that the producer gives now, or those it gave before when none have grown.
+  private static long latestBytesRead(Producer producer, long before) {
+    return producer.takeAdvancedBytesRead().orElse(before);
   }
 
   @Test

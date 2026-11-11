@@ -96,6 +96,8 @@ public final class ScriptedProcess extends Process {
   private boolean destroyedForcibly;
   private boolean inputEnded;
   private boolean pausedBySignal;
+  private boolean reading;
+  private long bytesRead;
   private boolean quitArrivedWhilePausedBySignal;
   private boolean quitPendingUntilResumed;
   private boolean terminationPendingUntilResumed;
@@ -207,6 +209,30 @@ public final class ScriptedProcess extends Process {
    * How many bytes of its output the reader has taken. A pipe holds only a bounded amount of
    * FFmpeg's output that nobody has read, so FFmpeg blocks once the reader stops taking bytes.
    */
+  /** From now on, every count of the bytes that the process has read finds one more. */
+  public synchronized void startReading() {
+    reading = true;
+  }
+
+  /** From now on, every count of the bytes that the process has read finds the same bytes. */
+  public synchronized void stopReading() {
+    reading = false;
+  }
+
+  /** Counts the bytes that the process has read so far, as its launcher does. */
+  public synchronized long countBytesRead() {
+    if (reading) {
+      bytesRead++;
+    }
+
+    return bytesRead;
+  }
+
+  /** The bytes that the process has read so far: one for each count made while it read. */
+  public synchronized long bytesRead() {
+    return bytesRead;
+  }
+
   public synchronized int bytesTaken() {
     return position;
   }
