@@ -1025,7 +1025,7 @@ public final class Producer {
             ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
       }
 
-      return new Completed(assembler.droppedLateAudioSampleCount(), sourceEnd);
+      return new Completed(sourceEnd);
     }
   }
 

@@ -198,11 +198,6 @@ final class SegmentAssembler {
         + heldFragments().stream().mapToLong(Fragment::heldBytes).sum();
   }
 
-  /** The audio samples dropped because they arrived after their segment closed. */
-  long droppedLateAudioSampleCount() {
-    return audio.droppedLateSampleCount();
-  }
-
   /**
    * Drops every unit the assembler holds, which the producer then never delivers: an initialization
    * segment it holds back, the fragments of the open segment, those of the segments awaiting audio,

@@ -548,7 +548,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s"))
         .containsExactly(0L, 12_000L, 24_000L, 36_000L, 45_600L);
@@ -579,7 +579,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s"))
         .containsExactly(0L, 12_000L, 24_000L, 36_000L, 46_000L);
@@ -610,7 +610,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
     assertThat(videoDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
@@ -647,7 +647,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly(
             "init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s", "segment3.m4s");
@@ -676,7 +676,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L, 24_000L, 36_000L);
     assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
   }
@@ -771,7 +771,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly(
             "init.mp4",
@@ -805,7 +805,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -854,7 +854,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L, 24_000L, 36_000L);
     assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
@@ -938,8 +938,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(
-            new Completed(recording.droppedAudioSamples().size(), NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertDeliveredInOrder(recording);
   }
 
@@ -963,7 +962,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(recording.discardedPreroll()).isEmpty();
     assertThat(sink.acceptedNames())
         .startsWith("init.mp4", "segment5.m4s")
@@ -989,7 +988,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1011,7 +1010,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertDeliveredInOrder(recording);
   }
 
@@ -1035,7 +1034,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.mediaTimings())
         .hasSize(recording.segments().size())
         .extracting(ProductionTiming::productionTime)
@@ -1067,7 +1066,7 @@ class ProducerTest {
     assertThat(pausedBySignal).isTrue();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.mediaTimings())
         .extracting(ProductionTiming::productionTime)
         .startsWith(Duration.ofSeconds(2))
@@ -1100,7 +1099,7 @@ class ProducerTest {
     assertThat(paused).isFalse();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.mediaTimings())
         .extracting(ProductionTiming::productionTime)
         .startsWith(Duration.ofSeconds(7));
@@ -1128,7 +1127,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1160,7 +1159,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1194,7 +1193,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1228,7 +1227,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1266,7 +1265,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1292,7 +1291,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1349,7 +1348,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1378,7 +1377,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1407,7 +1406,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1445,7 +1444,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1483,7 +1482,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1494,7 +1493,7 @@ class ProducerTest {
     var producer = producerFor(process, recording).start();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
 
     var held = producer.holdBackFfmpeg();
 
@@ -1510,7 +1509,7 @@ class ProducerTest {
     var producer = producerFor(process, recording).start();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
 
     producer.pauseFfmpeg();
 
@@ -1537,7 +1536,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     var timings = sink.mediaTimings();
     assertThat(timings)
         .extracting(ProductionTiming::productionTime)
@@ -1566,7 +1565,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -1608,7 +1607,7 @@ class ProducerTest {
     stopped.sink().release();
     assertThat(next.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(stopped.process().isAlive()).isTrue();
     stopped.process().exit();
     assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
@@ -1640,10 +1639,10 @@ class ProducerTest {
     stopped.sink().release();
     assertThat(waiting.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(later.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(laterSink.acceptedNames()).contains("init.mp4");
     stopped.process().exit();
     assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
@@ -1722,7 +1721,7 @@ class ProducerTest {
     workerBudget.release(otherAttempts);
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
     assertReleasesEveryReservedByte(workerBudget);
@@ -1831,7 +1830,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment1.m4s", "segment2.m4s", "segment3.m4s");
   }
@@ -1855,7 +1854,7 @@ class ProducerTest {
     process.exit();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1874,8 +1873,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(
-            new Completed(recording.droppedAudioSamples().size(), NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertDeliveredInOrder(recording);
   }
 
@@ -2016,7 +2014,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
     var segment = mediaSegmentOf(sink, "segment0.m4s");
     assertThat(segment.samplesOf(segment.audioTrack()))
@@ -2062,7 +2060,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
     assertReleasesEveryReservedByte(workerBudget);
   }
@@ -2101,7 +2099,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertReleasesEveryReservedByte(workerBudget);
   }
@@ -2138,7 +2136,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
     assertReleasesEveryReservedByte(workerBudget);
@@ -2327,7 +2325,7 @@ class ProducerTest {
     workerBudget.release(otherAttempts);
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertReleasesEveryReservedByte(workerBudget);
   }
@@ -2754,7 +2752,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
   }
 
@@ -2776,7 +2774,7 @@ class ProducerTest {
 
       assertThat(producer.outcome())
           .succeedsWithin(OUTCOME_LIMIT)
-          .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+          .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
       assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
     } finally {
       Locale.setDefault(Locale.Category.FORMAT, formatLocale);
@@ -2913,7 +2911,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)));
   }
@@ -2940,7 +2938,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     var expectedEntry =
         IsoBoxes.largeSizeBox(
             "hvc1", IsoBoxes.concat(new byte[78], IsoBoxes.box("hvcC", HVC1_PARAMETER_SET_RECORD)));
@@ -2966,7 +2964,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(hevcInitializationSegment(hvc1Entry(recordWithStaticSei(planned.seiUnits()))));
   }
@@ -3033,7 +3031,7 @@ class ProducerTest {
               .start();
       assertThat(producer.outcome())
           .succeedsWithin(OUTCOME_LIMIT)
-          .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+          .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
       delivered.add(attemptSink.contentOf("init.mp4"));
     }
 
@@ -3068,7 +3066,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(
             hevcInitializationSegment(
@@ -3102,7 +3100,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(
             hevcInitializationSegment(
@@ -3132,7 +3130,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(entry));
   }
 
@@ -3160,7 +3158,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .as("the delivered initialization segment")
         .hasSizeGreaterThan(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).length);
@@ -3348,7 +3346,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
@@ -3438,7 +3436,6 @@ class ProducerTest {
         .succeedsWithin(OUTCOME_LIMIT)
         .isEqualTo(
             new Completed(
-                0,
                 new SourceEnd(
                     List.of(
                         new StreamEnd(0, Duration.ofMillis(20_040)),
@@ -3741,7 +3738,7 @@ class ProducerTest {
 
     assertThat(process.stdinText()).isEmpty();
     assertThat(producer.outcome())
-        .isCompletedWithValue(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isCompletedWithValue(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -3934,7 +3931,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -3955,7 +3952,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @ParameterizedTest(name = "FFmpeg ignores termination: {0}")
@@ -4085,7 +4082,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -4110,7 +4107,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -4533,7 +4530,7 @@ class ProducerTest {
     var producer = producerFor(process, recording).sink(deliveries).start();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     return deliveries;
   }
 
