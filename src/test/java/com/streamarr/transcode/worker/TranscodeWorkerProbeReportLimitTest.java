@@ -10,13 +10,12 @@ import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
-import com.streamarr.transcode.engine.MonotonicClock;
+import com.streamarr.transcode.fixtures.PausingClock;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime.Connection;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -271,45 +270,5 @@ class TranscodeWorkerProbeReportLimitTest {
 
   private static Uuid[] idsOf(ProbeRequest... requests) {
     return List.of(requests).stream().map(ProbeRequest::getProbeAttemptId).toArray(Uuid[]::new);
-  }
-
-  // A clock that holds one reading back until the test resumes it.
-  private static final class PausingClock implements MonotonicClock {
-
-    private final CountDownLatch paused = new CountDownLatch(1);
-    private final CountDownLatch resumed = new CountDownLatch(1);
-    private volatile boolean pausing;
-
-    private void pauseAtTheNextReading() {
-      pausing = true;
-    }
-
-    private void awaitPaused() throws InterruptedException {
-      paused.await();
-    }
-
-    private void resume() {
-      resumed.countDown();
-    }
-
-    @Override
-    public long nanoTime() {
-      if (pausing) {
-        pausing = false;
-        paused.countDown();
-        awaitResumed();
-      }
-
-      return System.nanoTime();
-    }
-
-    private void awaitResumed() {
-      try {
-        resumed.await();
-      } catch (InterruptedException interruption) {
-        Thread.currentThread().interrupt();
-        throw new AssertionError("Interrupted while the clock held a reading back", interruption);
-      }
-    }
   }
 }
