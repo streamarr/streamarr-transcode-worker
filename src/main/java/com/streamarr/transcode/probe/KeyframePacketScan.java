@@ -206,7 +206,7 @@ final class KeyframePacketScan {
         return true;
       }
 
-      var time = keyframeTime(packet.pts(), packet.dts());
+      var time = keyframeTime(timesOf(packet));
       if (time.isEmpty()) {
         missingTime = true;
         times.clear();
@@ -223,14 +223,18 @@ final class KeyframePacketScan {
       return true;
     }
 
-    private Optional<KeyframeTime> keyframeTime(OptionalLong pts, OptionalLong dts) {
-      var packetTimes =
-          switch (rule) {
-            case AS_REPORTED -> new PacketTimes(pts, dts);
-            case DECODE_AT_PRESENTATION -> new PacketTimes(pts, pts);
-            case EQUAL_WHEN_ONE_IS_MISSING ->
-                new PacketTimes(pts.isPresent() ? pts : dts, dts.isPresent() ? dts : pts);
-          };
+    private PacketTimes timesOf(Packet packet) {
+      var pts = packet.pts();
+      var dts = packet.dts();
+      return switch (rule) {
+        case AS_REPORTED -> new PacketTimes(pts, dts);
+        case DECODE_AT_PRESENTATION -> new PacketTimes(pts, pts);
+        case EQUAL_WHEN_ONE_IS_MISSING ->
+            new PacketTimes(pts.isPresent() ? pts : dts, dts.isPresent() ? dts : pts);
+      };
+    }
+
+    private static Optional<KeyframeTime> keyframeTime(PacketTimes packetTimes) {
       if (packetTimes.presentation().isEmpty() || packetTimes.decode().isEmpty()) {
         return Optional.empty();
       }
