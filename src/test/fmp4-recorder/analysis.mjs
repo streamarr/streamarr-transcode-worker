@@ -97,7 +97,7 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
     segments: delivered.map((segment) => describeSegment(segment, stream)),
     discardedPreroll: preroll.map((segment) => describeSegment(segment, stream)),
     failure,
-    droppedAudioSamples: droppedAudioSamples(stream, grid, { period, startSequenceNumber }),
+    lateAudioSamples: lateAudioSamples(stream, grid, { period, startSequenceNumber }),
     endsWithAudioOnlyFragments: lastVideo < stream.fragments.length - 1,
     trailingAudioOnlyFragmentCount: stream.fragments.length - 1 - lastVideo,
     diagnostics: diagnostics(stream),
@@ -134,15 +134,15 @@ function videoDecodeEndOf(fragment) {
 }
 
 /**
- * Every audio sample that arrives after its media segment closed, which the producer drops, in
- * arrival order. Once the keyframe of a later segment has arrived, a segment closes after the
+ * Every audio sample that arrives after its media segment closed, in arrival order. The producer
+ * fails the attempt at the first. Once the keyframe of a later segment has arrived, a segment closes after the
  * fragment in which an audio sample of a later segment arrives or the video's decode end runs
  * MARGIN_SECONDS and the video's lead past the segment's end. The lead is the most that the video's
  * decode end before a fragment ran ahead of an audio sample the fragment brings and the producer
  * holds. An audio sample before the start sequence number is preroll; an attempt from segment zero
  * keeps the samples before zero in segment zero. Nothing from a grouping failure on is read.
  */
-function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, startSequenceNumber }) {
+function lateAudioSamples(stream, { delivered, preroll, failure }, { period, startSequenceNumber }) {
   const audioTrack = audioTrackOf(stream);
   const openedAt = new Map([...preroll, ...delivered].map((segment) => [segment.openedAtFragment, segment.number]));
   const end = failure === null ? stream.fragments.length : failure.fragmentIndex;
@@ -151,7 +151,7 @@ function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, 
   let passedByVideo = -Infinity;
   let videoEnd = null;
   let leadTicks = 0n;
-  const dropped = [];
+  const late = [];
   for (let index = 0; index < end; index++) {
     const fragment = stream.fragments[index];
     const closedThrough = Math.min(opened - 1, Math.max(reached - 1, passedByVideo));
@@ -161,7 +161,7 @@ function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, 
         number = 0;
       }
       if (number >= startSequenceNumber && number <= closedThrough) {
-        dropped.push({ fragmentIndex: index, presentationTime, segmentNumber: number });
+        late.push({ fragmentIndex: index, presentationTime, segmentNumber: number });
       }
       if (number >= startSequenceNumber && number > closedThrough && videoEnd !== null) {
         const audioTicks = floorDiv(presentationTime * videoEnd.timescale, BigInt(timescale));
@@ -177,7 +177,7 @@ function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, 
     }
     opened = Math.max(opened, openedAt.get(index) ?? -Infinity);
   }
-  return dropped;
+  return late;
 }
 
 /** Whether two recordings' initialization segments are byte-identical, and their digests. */

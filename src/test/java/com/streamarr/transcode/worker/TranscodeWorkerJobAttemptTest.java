@@ -2248,7 +2248,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldReportAFailedTranscodeWhenItsEncodedAudiosLastFramesArriveAfterTheirMediaSegment()
       throws Exception {
     var recording = recording("17-encode-audio-ends-long-before-video.fmp4");
-    var lateSample = recording.droppedAudioSamples().getFirst();
+    var lateSample = recording.lateAudioSamples().getFirst();
     var job = variantJobBuilder();
     job.getExecutionBuilder().setMediaSegmentCount(recording.mediaSegmentCount());
 

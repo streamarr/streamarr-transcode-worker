@@ -213,10 +213,10 @@ describe('recording facts', () => {
   });
 });
 
-describe('dropped audio', () => {
+describe('late audio', () => {
   // A keyframe at 0 with audio, segment 1's keyframe at 6.006 s, then a frame whose decode ends
   // at the given 24 kHz tick, then an audio sample of segment 0 at 5 s.
-  const droppedAudioOf = (videoDecodeEnd) =>
+  const lateAudioOf = (videoDecodeEnd) =>
     recordingFacts(
       readStream(
         Buffer.concat([
@@ -231,19 +231,19 @@ describe('dropped audio', () => {
         ]),
       ),
       { period: 6, startSequenceNumber: 0 },
-    ).droppedAudioSamples;
+    ).lateAudioSamples;
 
-  it("Should drop an audio sample when it arrives once the video has run a second past its segment's end", () => {
-    assert.deepEqual(droppedAudioOf(168000), [{ fragmentIndex: 3, presentationTime: 240000n, segmentNumber: 0 }]);
+  it("Should list an audio sample as late when it arrives once the video has run a second past its segment's end", () => {
+    assert.deepEqual(lateAudioOf(168000), [{ fragmentIndex: 3, presentationTime: 240000n, segmentNumber: 0 }]);
   });
 
-  it("Should drop no audio sample when the video has not yet run a second past its segment's end", () => {
-    assert.deepEqual(droppedAudioOf(167999), []);
+  it("Should list no audio sample as late when the video has not yet run a second past its segment's end", () => {
+    assert.deepEqual(lateAudioOf(167999), []);
   });
 
   // As above, but the video's decode end reaches 73001 ticks before segment 1's keyframe arrives
   // beside an audio sample of segment 0 at 1 s: the video leads that sample by 49001 ticks.
-  const droppedAudioAfterALeadOf = (videoDecodeEnd) =>
+  const lateAudioAfterALeadOf = (videoDecodeEnd) =>
     recordingFacts(
       readStream(
         Buffer.concat([
@@ -262,14 +262,14 @@ describe('dropped audio', () => {
         ]),
       ),
       { period: 6, startSequenceNumber: 0 },
-    ).droppedAudioSamples;
+    ).lateAudioSamples;
 
-  it("Should drop an audio sample when the video has run a second and its lead past its segment's end", () => {
-    assert.deepEqual(droppedAudioAfterALeadOf(217001), [{ fragmentIndex: 4, presentationTime: 240000n, segmentNumber: 0 }]);
+  it("Should list an audio sample as late when the video has run a second and its lead past its segment's end", () => {
+    assert.deepEqual(lateAudioAfterALeadOf(217001), [{ fragmentIndex: 4, presentationTime: 240000n, segmentNumber: 0 }]);
   });
 
-  it("Should drop no audio sample when the video has run a second but not its lead past its segment's end", () => {
-    assert.deepEqual(droppedAudioAfterALeadOf(217000), []);
+  it("Should list no audio sample as late when the video has run a second but not its lead past its segment's end", () => {
+    assert.deepEqual(lateAudioAfterALeadOf(217000), []);
   });
 });
 

@@ -194,11 +194,11 @@ class ProducerTest {
 
   // The producer fails the others before it delivers every segment that expected.json lists.
   static Stream<Recording> recordingsWhoseAudioArrivesInTime() {
-    return recordings().filter(recording -> recording.droppedAudioSamples().isEmpty());
+    return recordings().filter(recording -> recording.lateAudioSamples().isEmpty());
   }
 
   static Stream<Recording> recordingsWhoseAudioArrivesLate() {
-    return recordings().filter(recording -> !recording.droppedAudioSamples().isEmpty());
+    return recordings().filter(recording -> !recording.lateAudioSamples().isEmpty());
   }
 
   static Stream<Recording> recordings() {
@@ -744,7 +744,7 @@ class ProducerTest {
     var delivered = mediaSegmentNames().stream().map(ProducerTest::numberOf).toList();
     assertThat(delivered)
         .as("the segments delivered before the first late sample arrived, its own among them")
-        .contains(recording.droppedAudioSamples().getFirst().segmentNumber())
+        .contains(recording.lateAudioSamples().getFirst().segmentNumber())
         .hasSizeLessThan(everySegment.size())
         .isEqualTo(everySegment.subList(0, delivered.size()));
   }
