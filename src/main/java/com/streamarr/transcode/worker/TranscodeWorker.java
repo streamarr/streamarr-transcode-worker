@@ -40,6 +40,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import build.buf.gen.streamarr.transcode.v1.YieldToSeekCommand;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.UnknownFieldSet;
 import com.google.protobuf.UnsafeByteOperations;
 import com.streamarr.transcode.engine.AttemptOutcome;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
@@ -102,6 +103,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
   // The most bytes of a segment that one upload message carries.
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
+  private static final int FFMPEG_BYTES_READ_FIELD = 4;
   private static final Duration PROBE_SUMMARY_INTERVAL = Duration.ofMinutes(1);
   private static final Duration PROBE_CAPACITY_REFRESH_INTERVAL = Duration.ofSeconds(1);
   private static final Duration JOB_ATTEMPT_PROGRESS_INTERVAL = Duration.ofSeconds(1);
@@ -975,14 +977,33 @@ public final class TranscodeWorker implements AutoCloseable {
                                 keyframeSearchProgress(pending.job().getJobAttemptId(), bytes))));
     activeAttempts
         .values()
-        .forEach(
-            attempt ->
-                attempt
-                    .producer()
-                    .takeAdvancedOutputEnd()
-                    .ifPresent(
-                        end ->
-                            tryReport(jobAttemptProgress(attempt.job().getJobAttemptId(), end))));
+        .forEach(attempt -> advancedProgressOf(attempt).ifPresent(this::tryReport));
+  }
+
+  // FFmpeg writes nothing while a copy's audio input reads ahead, so the bytes that it has read
+  // are the attempt's progress then, and the server restarts its stall clock for them as it does
+  // for output. The producer stops counting them once FFmpeg stops reading.
+  private static Optional<EstablishWorkerSessionRequest> advancedProgressOf(ActiveAttempt attempt) {
+    var outputEnd = attempt.producer().takeAdvancedOutputEnd();
+    var bytesRead = attempt.producer().takeAdvancedBytesRead();
+    if (outputEnd.isEmpty() && bytesRead.isEmpty()) {
+      return Optional.empty();
+    }
+
+    var progress = JobAttemptProgress.newBuilder().setJobAttemptId(attempt.job().getJobAttemptId());
+    outputEnd.ifPresent(end -> progress.setOutputEnd(protoDuration(end)));
+    bytesRead.ifPresent(bytes -> progress.setUnknownFields(ffmpegBytesRead(bytes)));
+    return Optional.of(
+        EstablishWorkerSessionRequest.newBuilder().setJobAttemptProgress(progress).build());
+  }
+
+  // JobAttemptProgress.ffmpeg_bytes_read, which the pinned contract SDK predates. The bytes on the
+  // wire are those that the field's setter writes.
+  private static UnknownFieldSet ffmpegBytesRead(long bytes) {
+    return UnknownFieldSet.newBuilder()
+        .addField(
+            FFMPEG_BYTES_READ_FIELD, UnknownFieldSet.Field.newBuilder().addVarint(bytes).build())
+        .build();
   }
 
   // A held encode's search for the video's last keyframe ends before its producer starts.
@@ -993,16 +1014,6 @@ public final class TranscodeWorker implements AutoCloseable {
             JobAttemptProgress.newBuilder()
                 .setJobAttemptId(jobAttemptId)
                 .setKeyframeSearchBytesRead(bytesRead))
-        .build();
-  }
-
-  private static EstablishWorkerSessionRequest jobAttemptProgress(
-      Uuid jobAttemptId, Duration outputEnd) {
-    return EstablishWorkerSessionRequest.newBuilder()
-        .setJobAttemptProgress(
-            JobAttemptProgress.newBuilder()
-                .setJobAttemptId(jobAttemptId)
-                .setOutputEnd(protoDuration(outputEnd)))
         .build();
   }
 
