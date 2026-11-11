@@ -348,7 +348,7 @@ final class BitrateScanChunkRun {
       var start = KeyframePositionsReport.containerStart(ffprobeOutput, other);
       var rescaled = new long[times.length];
       for (var i = 0; i < times.length; i++) {
-        var time = rescaleExactly(times[i], timeBase, other);
+        var time = timeBase.rescaleExactly(times[i], other);
         if (time.isEmpty()) {
           return Optional.empty();
         }
@@ -369,7 +369,7 @@ final class BitrateScanChunkRun {
       var start = KeyframePositionsReport.containerStart(ffprobeOutput, stream.timeBase());
       var starts = new long[times.length];
       for (var i = 0; i < times.length; i++) {
-        starts[i] = Math.addExact(rescaleUp(times[i], timeBase, stream.timeBase()), start);
+        starts[i] = Math.addExact(timeBase.rescaleUp(times[i], stream.timeBase()), start);
       }
 
       var sixBlocks =
@@ -383,34 +383,6 @@ final class BitrateScanChunkRun {
           .latestEnd(latestEnds.before(stream, starts[0]))
           .sixBlocks(sixBlocks)
           .build();
-    }
-
-    // The time in the other time base when it is a whole tick of it. The products can exceed a long
-    // even when the result fits, as at a time base of 1/1,000,000,000.
-    private static OptionalLong rescaleExactly(long ticks, TimeBase from, TimeBase to) {
-      var quotient = scaled(ticks, from, to).divideAndRemainder(denominator(from, to));
-      if (quotient[1].signum() != 0) {
-        return OptionalLong.empty();
-      }
-
-      return OptionalLong.of(quotient[0].longValueExact());
-    }
-
-    // The first tick of the other time base at or after the time.
-    private static long rescaleUp(long ticks, TimeBase from, TimeBase to) {
-      return new BigDecimal(scaled(ticks, from, to))
-          .divide(new BigDecimal(denominator(from, to)), 0, RoundingMode.CEILING)
-          .longValueExact();
-    }
-
-    private static BigInteger scaled(long ticks, TimeBase from, TimeBase to) {
-      return BigInteger.valueOf(ticks)
-          .multiply(BigInteger.valueOf(from.numerator()))
-          .multiply(BigInteger.valueOf(to.denominator()));
-    }
-
-    private static BigInteger denominator(TimeBase from, TimeBase to) {
-      return BigInteger.valueOf(from.denominator()).multiply(BigInteger.valueOf(to.numerator()));
     }
   }
 
