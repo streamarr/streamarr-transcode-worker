@@ -1,5 +1,7 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.fixtures.DetectedCapabilities.realCapabilities;
+import static com.streamarr.transcode.fixtures.DetectedCapabilities.softwareCapabilities;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
@@ -9394,8 +9396,6 @@ class WorkerMediaSmokeTest {
 
   private static FfmpegTranscodeEngine engine(
       TranscodeCapabilityService capabilities, ProcessLauncher launcher) {
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", DEFAULT_FRAGMENTATION_TARGET))
         .capabilityService(capabilities)
@@ -9415,23 +9415,6 @@ class WorkerMediaSmokeTest {
       adjusted.set(parameters, command.get(parameters) + ":lp=1");
       return launcher.launch(adjusted, jobAttemptId);
     };
-  }
-
-  private static TranscodeCapabilityService realCapabilities() {
-    return new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-  }
-
-  // Lists no hardware encoder, so that each codec family runs its software encoder.
-  private static TranscodeCapabilityService softwareCapabilities() {
-    return new TranscodeCapabilityService(
-        "ffmpeg",
-        command -> {
-          if (command.command().contains("-encoders")) {
-            return new ProcessBuilder("true").start();
-          }
-
-          return command.start();
-        });
   }
 
   // A tiny H.264 and AAC source for more than a thousand 1 s segments, recorded once.
