@@ -1037,9 +1037,12 @@ public final class TranscodeWorker implements AutoCloseable {
   // an audio stream as its audio. Nor one whose output outgrew the segment cap: in a stream session
   // with merged segments every replacement repeats it, so the server falls back to an encode on the
   // plain grid instead. Nor one whose Dolby Vision conversion failed: it moves to the copy with
-  // Dolby Vision stripped.
+  // Dolby Vision stripped. Nor one whose first segment opened late: another attempt that reads the
+  // source the same way misses the same pictures.
   private static JobAttemptFailure jobAttemptFailureOf(ProducerFailure reason) {
     return switch (reason) {
+      case FIRST_SEGMENT_OPENED_LATE ->
+          JobAttemptFailure.JOB_ATTEMPT_FAILURE_FIRST_SEGMENT_OPENED_LATE;
       case OUTPUT_MISMATCH -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH;
       case DOLBY_VISION_CONVERSION_FAILED ->
           JobAttemptFailure.JOB_ATTEMPT_FAILURE_DOLBY_VISION_CONVERSION_FAILED;

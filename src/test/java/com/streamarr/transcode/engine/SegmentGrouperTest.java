@@ -248,6 +248,48 @@ class SegmentGrouperTest {
         .hasMessageContaining("segment 2");
   }
 
+  // Segment 3 starts at 18 s; its first frame at 24 fps presents there too. The keyframe at 20 s is
+  // the first that the attempt decoded after a seek that landed past the one that fills 18 s.
+  @Test
+  @DisplayName(
+      "Should fail with a first segment that opened late when the keyframe that opens the first"
+          + " segment presents after the latest opening")
+  void shouldFailWithAFirstSegmentThatOpenedLateWhenItsKeyframePresentsAfterTheLatestOpening() {
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 3, SEGMENT_CAP);
+    grouper.refuseAFirstSegmentOpenedAfter(new MediaTime(18, new TimeBase(1, 1)));
+    var late = keyframeAt(20_000);
+
+    assertFailure(() -> grouper.accept(late), Reason.FIRST_SEGMENT_OPENED_LATE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should open the first segment and a later segment that opens late when the first segment's"
+          + " keyframe presents on the latest opening")
+  void shouldOpenTheFirstSegmentWhenItsKeyframePresentsOnTheLatestOpening() {
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 3, SEGMENT_CAP);
+    grouper.refuseAFirstSegmentOpenedAfter(new MediaTime(18, new TimeBase(1, 1)));
+    var preroll = keyframeAt(12_000);
+    var opening = keyframeAt(18_000);
+    var lateNext = keyframeAt(25_000);
+
+    assertThat(grouper.accept(preroll)).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(opening)).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(lateNext)).isEqualTo(closed(segment(3, opening)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should open the first segment wherever its keyframe presents when the attempt refuses no late"
+          + " opening")
+  void shouldOpenTheFirstSegmentWhereverItsKeyframePresentsWhenTheAttemptRefusesNoLateOpening() {
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 3, SEGMENT_CAP);
+    var late = keyframeAt(20_000);
+
+    assertThat(grouper.accept(late)).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.finish()).contains(segment(3, late));
+  }
+
   @Test
   @DisplayName("Should take no further fragment when a keyframe skipped a segment number")
   void shouldTakeNoFurtherFragmentWhenAKeyframeSkippedASegmentNumber() {

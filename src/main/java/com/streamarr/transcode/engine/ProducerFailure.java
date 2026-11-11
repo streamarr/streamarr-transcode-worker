@@ -30,6 +30,12 @@ public enum ProducerFailure {
   /** A keyframe skipped a segment number, so the source has no keyframe inside that interval. */
   SKIPPED_SEGMENT_NUMBER,
   /**
+   * An encode that reads the source from a seek opened its first media segment after the first
+   * frame at or after that segment's start: its seek landed after the keyframe that fills the
+   * start, and every attempt that reads the source the same way misses the same pictures.
+   */
+  FIRST_SEGMENT_OPENED_LATE,
+  /**
    * An attempt that encodes video wrote a video sample shorter than half a frame at the rate it
    * forced, which FFmpeg writes when the encoder emits packets out of decode order.
    */
@@ -84,6 +90,7 @@ public enum ProducerFailure {
           TRUNCATED_OUTPUT;
       case EXCEEDS_SEGMENT_CAP -> SEGMENT_CAP_EXCEEDED;
       case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
+      case FIRST_SEGMENT_OPENED_LATE -> FIRST_SEGMENT_OPENED_LATE;
       case SHORT_VIDEO_SAMPLE -> SHORT_VIDEO_SAMPLE;
       case OUTPUT_MISMATCH -> OUTPUT_MISMATCH;
       case DOLBY_VISION_CONVERSION_FAILED -> DOLBY_VISION_CONVERSION_FAILED;

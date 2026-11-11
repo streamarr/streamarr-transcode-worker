@@ -92,6 +92,7 @@ public class FfmpegTranscodeEngine {
             .pauses(producerPauses)
             .sink(sink)
             .clock(MonotonicClock.system())
+            .readsFromAKeyframeSeek(request.seekPosition().filter(Duration::isPositive).isPresent())
             .start();
     log.info(
         "Started transcode for session {} variant {} job attempt {} (encoder: {}, PID: {})",
