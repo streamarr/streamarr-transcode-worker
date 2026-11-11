@@ -25,8 +25,9 @@ import lombok.NonNull;
  * and can fail at another, with an I/O error or with the unchecked exception the test supplies. The
  * process exits at the end of its output, at launch, on {@code q}, or when the test says so. A
  * termination, like SIGTERM, ends the output where it stands and exits with 143 unless the process
- * ignores termination, as a hung FFmpeg does. A forcible end, like SIGKILL, ends the output and
- * exits with 137, or lingers until the test says it exits.
+ * ignores termination, as a hung FFmpeg does. A process that a signal stopped takes the termination
+ * only once it continues. A forcible end, like SIGKILL, ends the output and exits with 137, or
+ * lingers until the test says it exits.
  *
  * <p>Like the JDK's process on Unix, {@link #destroy()} and {@link #destroyForcibly()} also close
  * the process's standard input, output and error: a read of either output then fails with "Stream
@@ -97,6 +98,7 @@ public final class ScriptedProcess extends Process {
   private boolean pausedBySignal;
   private boolean quitArrivedWhilePausedBySignal;
   private boolean quitPendingUntilResumed;
+  private boolean terminationPendingUntilResumed;
   private volatile Thread reader;
 
   @Builder
@@ -150,21 +152,31 @@ public final class ScriptedProcess extends Process {
   }
 
   /**
-   * Stops the process as SIGSTOP does: it writes nothing and takes no {@code q} until {@link
-   * #resumeBySignal}.
+   * Stops the process as SIGSTOP does: it writes nothing, and takes neither a {@code q} nor a
+   * termination, until {@link #resumeBySignal}.
    */
   public synchronized void pauseBySignal() {
     pausedBySignal = true;
   }
 
-  /** Continues the process as SIGCONT does, and acts on a {@code q} that arrived meanwhile. */
+  /**
+   * Continues the process as SIGCONT does, and acts on a termination or a {@code q} that arrived
+   * meanwhile.
+   */
   public void resumeBySignal() {
+    boolean terminate;
     boolean quit;
     synchronized (this) {
       pausedBySignal = false;
+      terminate = terminationPendingUntilResumed;
+      terminationPendingUntilResumed = false;
       quit = quitPendingUntilResumed;
       quitPendingUntilResumed = false;
       notifyAll();
+    }
+
+    if (terminate) {
+      terminate();
     }
 
     if (quit) {
@@ -344,6 +356,11 @@ public final class ScriptedProcess extends Process {
   private synchronized void terminate() {
     terminated = true;
     if (ignoresTermination) {
+      return;
+    }
+
+    if (pausedBySignal) {
+      terminationPendingUntilResumed = true;
       return;
     }
 

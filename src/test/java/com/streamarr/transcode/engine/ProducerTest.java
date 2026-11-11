@@ -4034,8 +4034,8 @@ class ProducerTest {
 
     awaiting().until(sink::wasCancelled);
 
-    assertThat(process.wasTerminated()).isTrue();
     assertThat(process.isAlive()).isTrue();
+    awaiting().until(process::wasTerminated);
     process.exit();
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4");
@@ -4060,8 +4060,8 @@ class ProducerTest {
 
     awaiting().until(sink::wasCancelled);
 
-    assertThat(process.wasDestroyedForcibly()).isTrue();
     assertThat(process.isAlive()).isTrue();
+    awaiting().until(process::wasDestroyedForcibly);
     process.exit();
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.UNEXPECTED_ERROR);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4");

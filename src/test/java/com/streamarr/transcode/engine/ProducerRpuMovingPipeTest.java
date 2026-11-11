@@ -15,6 +15,7 @@ import static com.streamarr.transcode.engine.RpuMovingCopies.videoSamplesOf;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
@@ -57,6 +58,7 @@ class ProducerRpuMovingPipeTest {
       new SourceEnd(List.of(), Optional.empty());
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
+  private static final Duration POLL_INTERVAL = Duration.ofMillis(5);
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("5b0f8a8e-29b5-4c48-9f0c-7f4f3c1a9d21");
   private static final List<String> COPY_COMMAND = List.of("copy-ffmpeg");
@@ -253,18 +255,8 @@ class ProducerRpuMovingPipeTest {
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
     var encode = encodingFfmpeg().pauseAfter(0).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
-    var launcher =
-        ScriptedProcessLauncher.forCommands(
-            (command, _) -> {
-              if (!isCopying(command)) {
-                return encode;
-              }
-
-              writeTimingAndAwaitHangUp(command, RpuMovingCopies.copiedTiming());
-              return copy;
-            });
     var pauses = new ProducerPauses();
-    var producer = producer(launcher).pauses(pauses).start();
+    var producer = producerOf(copy, encode).pauses(pauses).start();
     assertThat(encode.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     assertThat(producer.holdBackFfmpeg()).isTrue();
 
@@ -277,6 +269,40 @@ class ProducerRpuMovingPipeTest {
     encode.resume();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
     assertThat(pauses.stoppedProducers()).isZero();
+  }
+
+  // The transfer meets the exited encoding FFmpeg's closed pipe and terminates the copying FFmpeg,
+  // which takes no termination while the hold stops it.
+  @Test
+  @DisplayName(
+      "Should keep counting a held producer as stopped until its release when the encoding FFmpeg"
+          + " exits while passing the copy on waits for it to read")
+  void
+      shouldKeepCountingAHeldProducerAsStoppedUntilItsReleaseWhenTheEncodingFfmpegExitsWhilePassingTheCopyOnWaitsForItToRead() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(COPIED_SOURCE)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var encode =
+        encodingFfmpeg()
+            .stdinCapacity(0)
+            .pauseAfter(0)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var pauses = new ProducerPauses();
+    var producer = producerOf(copy, encode).pauses(pauses).start();
+    assertThat(encode.inputBlocked()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.holdBackFfmpeg()).isTrue();
+
+    encode.exit();
+
+    await().atMost(OUTCOME_LIMIT).pollInterval(POLL_INTERVAL).until(copy::wasTerminated);
+    assertThat(pauses.stoppedProducers()).isOne();
+    producer.releaseHeldFfmpeg();
+    assertThat(pauses.stoppedProducers()).isZero();
+    encode.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
   }
 
   @Test
@@ -902,16 +928,18 @@ class ProducerRpuMovingPipeTest {
     return producer(copyingWith(copy, RpuMovingCopies.copiedTiming()), encode);
   }
 
+  // The scripted launcher stops both stand-ins when the producer pauses or holds its FFmpeg.
   private Producer.ProducerBuilder producer(CopyingFfmpeg copying, ScriptedProcess encode) {
     return producer(
-        (command, jobAttemptId) -> {
-          if (!isCopying(command)) {
-            return encode;
-          }
+        ScriptedProcessLauncher.forCommands(
+            (command, _) -> {
+              if (!isCopying(command)) {
+                return encode;
+              }
 
-          writeTimingAndAwaitHangUp(command, copying.framecrc());
-          return copying.process();
-        });
+              writeTimingAndAwaitHangUp(command, copying.framecrc());
+              return copying.process();
+            }));
   }
 
   private static CopyingFfmpeg copyingWith(ScriptedProcess process, String framecrc) {
