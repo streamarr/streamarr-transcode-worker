@@ -619,6 +619,160 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should refuse a partially sounded tail when copied audio ends inside encoded video's final segment")
+  void shouldRefuseAPartiallySoundedTailWhenCopiedAudioEndsInsideEncodedVideosFinalSegment() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(0, 12_000)
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
+  }
+
+  // The 24 frames of the 1 s segment each last 2,000 ticks of the audio's 48,000.
+  @ParameterizedTest(name = "{0} audio samples of {1} ticks")
+  @CsvSource({"94, 500", "11, 4000"})
+  @DisplayName(
+      "Should deliver an encoded segment when its copied audio ends within one video frame or one"
+          + " audio frame of its video")
+  void shouldDeliverAnEncodedSegmentWhenItsCopiedAudioEndsWithinOneFrameOfItsVideo(
+      int audioSampleCount, int audioSampleDuration) {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(
+                    0,
+                    IntStream.range(0, audioSampleCount)
+                        .mapToObj(_ -> audioSampleDuration)
+                        .toArray(Integer[]::new))
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName("Should deliver a copied segment when its copied audio ends inside it")
+  void shouldDeliverACopiedSegmentWhenItsCopiedAudioEndsInsideIt() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(0, 12_000)
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName("Should complete a short copy when its last picture barely outlasts its audio")
+  void shouldCompleteAShortCopyWhenItsLastPictureBarelyOutlastsItsAudio() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 48_000).build(),
+            TimedFragment.keyframeAt(24_000).videoDuration(1_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
+  @Test
+  @DisplayName("Should keep a copied audio frame intact when it covers the next segment's video")
+  void shouldKeepACopiedAudioFrameIntactWhenItCoversTheNextSegmentsVideo() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 96_000).build(),
+            TimedFragment.keyframeAt(24_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+  @DisplayName("Should refuse a segment without copied audio when the audio ends before its video")
+  void shouldRefuseASegmentWithoutCopiedAudioWhenTheAudioEndsBeforeItsVideo(
+      boolean atEof, boolean encodesVideo) {
+    var output =
+        atEof
+            ? OneSecondSegments.of(
+                IsoBoxes.videoAndAudioMoov(),
+                TimedFragment.keyframeAt(0)
+                    .videoDuration(1_000)
+                    .videoSampleCount(24)
+                    .audioFrom(
+                        0, IntStream.range(0, 48).mapToObj(_ -> 1_000).toArray(Integer[]::new))
+                    .build(),
+                TimedFragment.keyframeAt(24_000).videoDuration(1_000).videoSampleCount(24).build())
+            : OneSecondSegments.of(
+                IsoBoxes.videoAndAudioMoov(),
+                TimedFragment.keyframeAt(0)
+                    .videoDuration(1_000)
+                    .videoSampleCount(24)
+                    .audioFrom(
+                        0, IntStream.range(0, 48).mapToObj(_ -> 1_000).toArray(Integer[]::new))
+                    .build(),
+                TimedFragment.keyframeAt(24_000).videoDuration(1_000).videoSampleCount(24).build(),
+                TimedFragment.keyframeAt(48_000).videoDuration(1_000).videoSampleCount(24).build(),
+                TimedFragment.keyframeAt(72_000).videoDuration(1_000).videoSampleCount(24).build());
+    var process =
+        ScriptedProcess.builder()
+            .output(output.bytes())
+            .pauseAfter(atEof ? output.bytes().length : output.endOf(2))
+            .resumesOnQuit(true)
+            .build();
+    var builder = producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true);
+    if (encodesVideo) {
+      builder.videoDecision(VideoDecisionFixtures.encodeBuilder().build());
+    }
+    var producer = builder.start();
+    if (atEof) {
+      process.resume();
+    }
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment1.m4s", "segment2.m4s", "segment3.m4s");
+  }
+
+  @Test
+  @DisplayName(
       "Should deliver a media segment after the audio's end once the video runs a second past its"
           + " end when the audio ends before the video")
   void shouldDeliverAMediaSegmentAfterTheAudiosEndOnceTheVideoRunsASecondPastItsEnd() {

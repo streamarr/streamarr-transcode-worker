@@ -1679,6 +1679,33 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should report copied audio that ran short and upload no media segment past the audio when a"
+          + " video encode copies audio that ends long before the video")
+  void
+      shouldReportCopiedAudioThatRanShortAndUploadNoMediaSegmentPastTheAudioWhenAVideoEncodeCopiesAudioThatEndsLongBeforeTheVideo()
+          throws Exception {
+    // 180 s of video and 20 s of audio in 6 s segments: segment 3 holds the audio's last 2 s.
+    var recording = recording("17-encode-audio-ends-long-before-video.fmp4");
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(1);
+    job.getExecutionBuilder().setMediaSegmentCount(recording.mediaSegmentCount());
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(recording.file()))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPIED_AUDIO_RAN_SHORT);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    }
+  }
+
   private static UnaryOperator<VideoDecision.Builder> unary(
       UnaryOperator<VideoDecision.Builder> operator) {
     return operator;

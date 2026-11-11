@@ -192,6 +192,7 @@ public final class Producer {
                     .encodedFrameRate(encodedFrameRate)
                     .videoDecision(videoDecision)
                     .requiresSoundTrack(requiresSoundTrack)
+                    .copiesAudio(copiesAudio)
                     .paddedAudioEnd(paddedAudioEnd)
                     .build())
             .sink(sink)
