@@ -10,11 +10,24 @@ public sealed interface FfmpegPipeline {
   /** The pipeline as one shell-like line, for the log. */
   String commandLine();
 
+  /**
+   * Whether FFmpeg writes nothing while its audio's input reads on: a copy that encodes its audio
+   * reads the audio from an input of its own, and FFmpeg holds the video's input back while that
+   * input reads from the audio stream's last packet to its next one or to the source's end.
+   */
+  boolean audioInputReadsAhead();
+
   /** One FFmpeg that reads the source and writes the attempt's fragmented MP4. */
-  record SingleProcess(@NonNull List<String> command) implements FfmpegPipeline {
+  record SingleProcess(@NonNull List<String> command, boolean audioInputReadsAhead)
+      implements FfmpegPipeline {
 
     public SingleProcess {
       command = List.copyOf(command);
+    }
+
+    /** An FFmpeg that writes while it reads. */
+    public SingleProcess(List<String> command) {
+      this(command, false);
     }
 
     @Override
@@ -47,6 +60,12 @@ public sealed interface FfmpegPipeline {
       var command = new ArrayList<>(copyCommand);
       command.add(url);
       return List.copyOf(command);
+    }
+
+    /** False: the pipe encodes its video, and only a copy holds its video's input back. */
+    @Override
+    public boolean audioInputReadsAhead() {
+      return false;
     }
 
     @Override

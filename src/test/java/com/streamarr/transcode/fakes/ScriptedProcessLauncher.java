@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -75,6 +76,11 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
 
     scripted.pauseBySignal();
     return Optional.of(scripted::resumeBySignal);
+  }
+
+  @Override
+  public OptionalLong bytesRead(Process process) {
+    return OptionalLong.of(((ScriptedProcess) process).countBytesRead());
   }
 
   public boolean hasLaunched(UUID jobAttemptId) {

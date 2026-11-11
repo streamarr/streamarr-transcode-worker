@@ -57,7 +57,7 @@ public class PrintWorkerCommand {
     var pipeline = new FfmpegCommandBuilder("ffmpeg", Duration.ofMillis(250)).buildPipeline(job);
     List<String> cmd =
         switch (pipeline) {
-          case FfmpegPipeline.SingleProcess(var command) -> command;
+          case FfmpegPipeline.SingleProcess(var command, var _) -> command;
           default -> throw new IllegalStateException(String.valueOf(pipeline));
         };
     cmd.forEach(System.out::println);

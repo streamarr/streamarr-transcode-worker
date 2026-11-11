@@ -69,7 +69,8 @@ public enum ProducerFailure {
   OUTPUT_UNREADABLE,
   /**
    * FFmpeg wrote nothing to its standard output for the stall timeout while the producer was
-   * reading it, so the producer ended FFmpeg.
+   * reading it, so the producer ended FFmpeg. An FFmpeg that writes nothing while its audio's input
+   * reads ahead had not read for the stall timeout either.
    */
   ENCODER_STALLED,
   /**

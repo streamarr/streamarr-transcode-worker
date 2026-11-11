@@ -3774,6 +3774,64 @@ class FfmpegCommandBuilderTest {
             "1:a:0");
   }
 
+  // FFmpeg holds the first input back while the audio trails, and writes nothing while the audio's
+  // input reads from the audio stream's last packet to its next one or to the source's end.
+  @Test
+  @DisplayName(
+      "Should say that the audio's input reads ahead when a copy encodes its audio, from the start"
+          + " and from a later segment")
+  void shouldSayThatTheAudiosInputReadsAheadWhenACopyEncodesItsAudio() {
+    var fromTheStart = request(TranscodeMode.AUDIO_TRANSCODE).build();
+    var fromALaterSegment = request(TranscodeMode.AUDIO_TRANSCODE).startSequenceNumber(5).build();
+
+    assertThat(builder.buildPipeline(job(fromTheStart, "copy")).audioInputReadsAhead()).isTrue();
+    assertThat(builder.buildPipeline(job(fromALaterSegment, "copy")).audioInputReadsAhead())
+        .isTrue();
+  }
+
+  // Copied audio never trails, and an encode that holds no frame keeps the one input.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"REMUX, copy", "VIDEO_TRANSCODE, libx264", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should say that no input reads ahead when a job copies its audio or encodes its video"
+          + " without holding the last frame")
+  void shouldSayThatNoInputReadsAheadWhenAJobCopiesItsAudioOrEncodesItsVideoWithoutHoldingAFrame(
+      TranscodeMode mode, String videoEncoder) {
+    var pipeline = builder.buildPipeline(job(request(mode).build(), videoEncoder));
+
+    assertThat(pipeline.audioInputReadsAhead()).isFalse();
+  }
+
+  // The held encode reads its audio from a second input too, and its one filter graph keeps its
+  // video beside its audio.
+  @Test
+  @DisplayName("Should say that no input reads ahead when an encode holds the last frame")
+  void shouldSayThatNoInputReadsAheadWhenAnEncodeHoldsTheLastFrame() {
+    var held = heldAndPadded(TranscodeMode.FULL_TRANSCODE).build();
+
+    var pipeline = builder.buildPipeline(job(held, "libx264"));
+
+    assertThat(pipeline.audioInputReadsAhead()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should say that no input reads ahead when two FFmpegs move a Dolby Vision profile 5"
+          + " source's RPUs for an encode")
+  void shouldSayThatNoInputReadsAheadWhenTwoFfmpegsMoveAProfile5SourcesRpus() {
+    var request =
+        request(
+                decision(TranscodeMode.VIDEO_TRANSCODE)
+                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .build())
+            .build();
+
+    var pipeline = builder.buildPipeline(job(request, "libx264"));
+
+    assertThat(pipeline).isInstanceOf(FfmpegPipeline.RpuMovingPipe.class);
+    assertThat(pipeline.audioInputReadsAhead()).isFalse();
+  }
+
   // A named stream that is no audio stream maps nothing, so that the producer refuses the output
   // without a sound track.
   @Test
