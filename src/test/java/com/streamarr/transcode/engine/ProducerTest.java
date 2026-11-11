@@ -705,6 +705,34 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
   }
 
+  // The last picture starts at 0.998 s and ends at 1.04 s, past the interval's end, and no later
+  // segment takes the audio beside it. The audio ends at 0.979 s, 61 ms before that picture's end.
+  @Test
+  @DisplayName(
+      "Should refuse the output's last segment when its encoded video runs past its interval and"
+          + " outlasts the copied audio by more than one frame")
+  void
+      shouldRefuseTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalAndOutlastsTheCopiedAudioByMoreThanOneFrame() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(960)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(0, audioSamples(47, 1_000))
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("recordingsWhoseAudioLastsAsLongAsTheirVideo")
   @DisplayName(
@@ -722,7 +750,12 @@ class ProducerTest {
 
   // 48 samples of 1,000 ticks, each half as long as a video frame of the 1 s segments.
   private static Integer[] oneSecondOfAudioSamples() {
-    return IntStream.range(0, 48).mapToObj(_ -> 1_000).toArray(Integer[]::new);
+    return audioSamples(48, 1_000);
+  }
+
+  // This many audio samples, each lasting this many ticks of the audio's 48,000.
+  private static Integer[] audioSamples(int count, int duration) {
+    return IntStream.range(0, count).mapToObj(_ -> duration).toArray(Integer[]::new);
   }
 
   static Stream<Recording> recordingsWhoseAudioLastsAsLongAsTheirVideo() {

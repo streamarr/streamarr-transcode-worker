@@ -178,7 +178,7 @@ final class SegmentAssembler {
    */
   void dropAudioAfterTheLastSegment() {
     heldInitializationSegment = Optional.empty();
-    grouper.finish().map(AwaitingSegment::of).ifPresent(awaitingAudio::addLast);
+    grouper.finish().map(AwaitingSegment::lastOf).ifPresent(awaitingAudio::addLast);
     if (!awaitingAudio.isEmpty()) {
       audio.discardAfter(awaitingAudio.getLast().sequenceNumber());
     }
@@ -356,11 +356,13 @@ final class SegmentAssembler {
             .max()
             .orElseThrow();
     // The segment takes only the audio that starts inside its interval, so the audio beside video
-    // that a late keyframe leaves past the interval's end belongs to the next segment.
-    var end =
-        Math.min(
-            lastPictureEnd,
-            intervals.endOf(segment.sequenceNumber(), timescale).orElse(lastPictureEnd));
+    // that a late keyframe leaves past the interval's end belongs to the next segment. The output's
+    // last segment has no next segment to carry it.
+    var end = lastPictureEnd;
+    if (!segment.lastOfTheOutput()) {
+      end = Math.min(end, intervals.endOf(segment.sequenceNumber(), timescale).orElse(end));
+    }
+
     var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
     if (copiedAudioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
       return;
@@ -413,10 +415,15 @@ final class SegmentAssembler {
   // assembler references exactly the fragments heldFragments() counts. The audio queue holds the
   // fragments of the audio the segment still takes; the grouper's other fragments of it, such as
   // an audio-only fragment of an earlier segment's audio, hold nothing it delivers.
-  private record AwaitingSegment(int sequenceNumber, List<CarriedSample> videoSamples) {
+  private record AwaitingSegment(
+      int sequenceNumber, List<CarriedSample> videoSamples, boolean lastOfTheOutput) {
 
     static AwaitingSegment of(MediaSegment segment) {
-      return new AwaitingSegment(segment.sequenceNumber(), segment.videoSamples());
+      return new AwaitingSegment(segment.sequenceNumber(), segment.videoSamples(), false);
+    }
+
+    static AwaitingSegment lastOf(MediaSegment segment) {
+      return new AwaitingSegment(segment.sequenceNumber(), segment.videoSamples(), true);
     }
   }
 
