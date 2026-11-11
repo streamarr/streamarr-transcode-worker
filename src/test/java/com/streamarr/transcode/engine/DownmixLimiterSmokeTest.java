@@ -207,18 +207,16 @@ class DownmixLimiterSmokeTest {
             fiveChannelBursts.flatMap(
                 burst -> Stream.of(Job.STEREO, Job.MONO).map(job -> Map.entry(burst, job))),
             Stream.of(Map.entry("one-stage-surround-pair-48000", Job.SURROUND_PAIR)));
-    var placements = List.of(Placement.START, Placement.MIDDLE, Placement.END);
+    // In the middle of its file only. The limiter reads a burst at the file's start or end as it
+    // reads one in the middle, which the bounded burst's placements and the test of the file's
+    // last samples hold.
     return bursts.flatMap(
         burst ->
             RATES.stream()
-                .flatMap(
+                .map(
                     rate ->
-                        placements.stream()
-                            .map(
-                                placement ->
-                                    Arguments.of(
-                                        burst.getKey(),
-                                        placing(burst.getValue(), placement, rate)))));
+                        Arguments.of(
+                            burst.getKey(), placing(burst.getValue(), Placement.MIDDLE, rate))));
   }
 
   @ParameterizedTest(name = "{0}, {1}")
