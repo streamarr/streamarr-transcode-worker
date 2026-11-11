@@ -67,7 +67,7 @@ public final class ScriptedKeyframeSource {
   /** The framecrc that a scan with the command writes. */
   public synchronized byte[] framecrcOf(List<String> command) {
     var seek = argumentAfter(command, "-ss");
-    if (command.contains("-copypriorss")) {
+    if (command.contains("-frames:v")) {
       return landingCheck(seek.orElseThrow());
     }
 

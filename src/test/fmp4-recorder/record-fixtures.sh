@@ -249,8 +249,9 @@ done
 
 # ------------------------------------------------------------------ 1. constant 23.976 fps libx264 encode, and an encoded seek
 run pipe 01-encode-cfr src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
-# The replacement attempt for segment 5 (a job seeking to 30 s) is an encode without the server's
-# keyframe position, so it reads from one period early, 24 s, and encodes from 30 s on.
+# The replacement attempt for segment 5 (a job seeking to 30 s) reads from one period early, 24 s, as
+# an encode without a keyframe position read before the worker searched for that keyframe (a recipe
+# deviation), and encodes from 30 s on.
 run pipe 01-encode-cfr-seek30 start=5 seek=24 decode-only src/cfr.mp4 -- "${X264_FROM_SEGMENT_5[@]}" "${AAC_FROM_SEGMENT_5[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.hls-recipe hls-recipe src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
 run hls 01-encode-cfr.video-only video src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"

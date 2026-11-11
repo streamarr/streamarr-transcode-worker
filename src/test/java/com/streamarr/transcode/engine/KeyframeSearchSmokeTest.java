@@ -18,39 +18,50 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
-/** A held encode's search for the video's last keyframe, run by real FFmpeg. */
+/** The search for the keyframe that an encode from a later segment reads from, by real FFmpeg. */
 @Tag("SmokeTest")
 @DisplayName("Keyframe Search Smoke Tests")
 class KeyframeSearchSmokeTest {
 
   @TempDir Path root;
 
-  // At 4 fps with three B-frames in a pyramid, each picture decodes 0.5 s before it presents. The
-  // attempt for the segment at 18 s reads back from 14 s, so the search reads from 10 s to 14 s and
-  // then from 2 s to 10 s. The keyframe that presents at 10 s decodes at 9.5 s, so FFmpeg's scan of
-  // an MPEG-TS source reads it in the interval before the one it presents in. An MPEG-TS seek to
-  // the keyframe at 8 s lands on decode times, so the attempt reads from its decode time, 7.5 s; an
-  // MP4 seek lands on presentation times, so the attempt reads from 8 s, where a seek to 7.5 s
-  // would land on the keyframe at 6 s.
+  // At 4 fps with three B-frames in a pyramid, each picture decodes 0.5 s before it presents. An
+  // MPEG-TS seek lands on decode times, so the attempt reads from the keyframe's decode time; an
+  // MP4 seek lands on presentation times, so it reads from the keyframe's presentation time, where
+  // a seek to its decode time would land on the keyframe before it.
+  @ParameterizedTest(name = "{0} from {3} s")
+  @CsvSource({"mpegts, ts, 9.5, 18", "mp4, mp4, 10, 18", "mpegts, ts, 7.5, 10", "mp4, mp4, 8, 10"})
+  @DisplayName(
+      "Should read from where a seek lands on the last keyframe that presents half a second before"
+          + " the first segment when an encode searches for it")
+  void shouldReadFromWhereASeekLandsOnTheLastKeyframeWhenAnEncodeSearchesForIt(
+      String format, String extension, BigDecimal expectedSeconds, int firstSegmentStartSeconds)
+      throws Exception {
+    var source = delayedPicturesWithKeyframesUpToTenSeconds(format, extension);
+    var request = searching(source, OptionalInt.empty(), firstSegmentStartSeconds);
+
+    var readPosition = engine().readPosition(request, _ -> {}).orElseThrow();
+
+    assertThat(readPosition).isEqualTo(secondsOf(expectedSeconds));
+  }
+
+  // The video's pictures end at 20 s, before the segment at 24 s, and its last keyframe presents at
+  // 10 s, so a held encode reads from the keyframe at 8 s, which gives a deinterlacer the history
+  // before the held picture.
   @ParameterizedTest(name = "{0}")
   @CsvSource({"mpegts, ts, 7.5", "mp4, mp4, 8"})
   @DisplayName(
-      "Should read from where a seek lands on the keyframe 0.5 s before the last when the last"
-          + " keyframe decodes in the interval before the one it presents in")
-  void shouldReadFromWhereASeekLandsOnTheKeyframeBeforeTheLastWhenTheLastDecodesBeforeItsInterval(
+      "Should read from where a seek lands on the keyframe 0.5 s before the video's last when a held"
+          + " encode's video ends before its first segment")
+  void shouldReadFromTheKeyframeBeforeTheLastWhenAHeldEncodesVideoEndsBeforeItsFirstSegment(
       String format, String extension, BigDecimal expectedSeconds) throws Exception {
     var source = delayedPicturesWithKeyframesUpToTenSeconds(format, extension);
 
     var readPosition =
-        engine()
-            .heldPictureReadPosition(heldRequest(source, OptionalInt.empty()), _ -> {})
-            .orElseThrow();
+        engine().readPosition(searching(source, OptionalInt.empty(), 24), _ -> {}).orElseThrow();
 
-    assertThat(readPosition)
-        .as("where a seek lands on the keyframe that presents at 8 s")
-        .isEqualTo(Duration.ofNanos(expectedSeconds.movePointRight(9).longValueExact()));
+    assertThat(readPosition).isEqualTo(secondsOf(expectedSeconds));
   }
 
   // The timeline's zero is the earliest start among the streams that a command reads. The 440 Hz
@@ -72,18 +83,17 @@ class KeyframeSearchSmokeTest {
 
     var readPosition =
         engine()
-            .heldPictureReadPosition(heldRequest(source, OptionalInt.of(audioStream)), _ -> {})
+            .readPosition(searching(source, OptionalInt.of(audioStream), 18), _ -> {})
             .orElseThrow();
 
     assertThat(readPosition)
         .as("where a seek on the attempt's own timeline reads the video's keyframe")
-        .isEqualTo(Duration.ofNanos(expectedSeconds.movePointRight(9).longValueExact()));
+        .isEqualTo(secondsOf(expectedSeconds));
   }
 
   // A raw H.264 stream carries no index and its demuxer cannot seek: a scan from a seek reads no
-  // packet. The attempt for the segment at 24 s reads back from 14 s, so the search reads from 4 s
-  // to 14 s and then from 0 s to 4 s, where it finds the keyframes that decode before 4 s. A seek
-  // to the one that decodes at 1.92 s would read no picture to hold.
+  // packet, and the scan from zero finds the keyframes. A seek to the keyframe at 8 s would read no
+  // picture.
   @Test
   @DisplayName(
       "Should read from the start of the timeline when the demuxer of a raw H.264 stream cannot seek"
@@ -91,35 +101,27 @@ class KeyframeSearchSmokeTest {
   void shouldReadFromTheStartOfTheTimelineWhenARawStreamsDemuxerCannotSeekToTheFoundKeyframe()
       throws Exception {
     var source = delayedPicturesWithKeyframesUpToTenSeconds("h264", "h264");
-    var request = heldRequest(source, OptionalInt.empty()).toBuilder().startSequenceNumber(12);
 
-    var readPosition = engine().heldPictureReadPosition(request.build(), _ -> {}).orElseThrow();
+    var readPosition =
+        engine().readPosition(searching(source, OptionalInt.empty(), 24), _ -> {}).orElseThrow();
 
     assertThat(readPosition).isZero();
   }
 
   // The clip's edit list starts it 1 s into its only GOP, so its keyframe and every picture before
-  // the clip's start decode but are not presented. The attempt for the segment at 8 s reads back
-  // from 4 s, or from the start of the timeline.
-  @ParameterizedTest(name = "read back from {0} s")
-  @ValueSource(ints = {4, 0})
+  // the clip's start decode but are not presented.
+  @Test
   @DisplayName(
       "Should read from the start of the timeline when the only keyframe of an MP4 clip, which its"
           + " edit list trims inside its GOP, decodes but is not presented")
-  void shouldReadFromTheStartOfTheTimelineWhenAnEditListClipsOnlyKeyframeIsNotPresented(
-      int readBackSeconds) throws Exception {
+  void shouldReadFromTheStartOfTheTimelineWhenAnEditListClipsOnlyKeyframeIsNotPresented()
+      throws Exception {
     var source = clipTrimmedInsideItsOnlyGop();
-    var request =
-        heldRequest(source, OptionalInt.empty()).toBuilder()
-            .startSequenceNumber(4)
-            .seekPosition(Optional.of(Duration.ofSeconds(readBackSeconds)))
-            .build();
 
-    var readPosition = engine().heldPictureReadPosition(request, _ -> {});
+    var readPosition =
+        engine().readPosition(searching(source, OptionalInt.empty(), 8), _ -> {}).orElseThrow();
 
-    assertThat(readPosition.orElse(Duration.ofSeconds(readBackSeconds)))
-        .as("where the attempt reads from")
-        .isZero();
+    assertThat(readPosition).isZero();
   }
 
   // 6 s of H.264 at 24 fps with one keyframe, copied from 1 s into a 20 s MP4 source.
@@ -238,9 +240,10 @@ class KeyframeSearchSmokeTest {
         .build();
   }
 
-  // A held encode on a 2 s grid whose first segment starts at 18 s, read back from 14 s, of the
-  // named audio stream, or of none.
-  private static TranscodeRequest heldRequest(Path source, OptionalInt audioStream) {
+  // A held encode on a 2 s grid that searches for the last keyframe that presents half a second
+  // before its first segment, of the named audio stream, or of none.
+  private static TranscodeRequest searching(
+      Path source, OptionalInt audioStream, int firstSegmentStartSeconds) {
     var audio = AudioDecision.builder().mode(AudioMode.NONE).build();
     if (audioStream.isPresent()) {
       audio =
@@ -259,7 +262,7 @@ class KeyframeSearchSmokeTest {
         .attemptId(UUID.randomUUID())
         .sourcePath(source)
         .targetSegmentDuration(2)
-        .startSequenceNumber(9)
+        .startSequenceNumber(firstSegmentStartSeconds / 2)
         .mediaSegmentCount(20)
         .outputFrameRate(Optional.of(new OutputFrameRate(4, 1)))
         .transcodeDecision(
@@ -277,8 +280,13 @@ class KeyframeSearchSmokeTest {
         .width(128)
         .height(72)
         .bitrate(100_000L)
-        .seekPosition(Optional.of(Duration.ofSeconds(14)))
+        .readFromLastKeyframePresentingAtOrBefore(
+            Optional.of(Duration.ofSeconds(firstSegmentStartSeconds).minusMillis(500)))
         .advertisedEnd(Optional.of(Duration.ofSeconds(40)))
         .build();
+  }
+
+  private static Duration secondsOf(BigDecimal seconds) {
+    return Duration.ofNanos(seconds.movePointRight(9).longValueExact());
   }
 }

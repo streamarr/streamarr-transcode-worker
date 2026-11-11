@@ -119,6 +119,7 @@ class TranscodeWorkerHardwareEncoderFailureTest {
     var failed = encodeJob();
     var next = encodeJob().toBuilder();
     next.getExecutionBuilder().setStartSequenceNumber(5).setSeekPositionSeconds(30);
+    next.getExecutionBuilder().getSeekPositionBuilder().setSeconds(28);
 
     try (var worker = worker(launcher, Duration.ofHours(1))) {
       worker.start("localhost", 1);

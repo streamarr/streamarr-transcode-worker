@@ -4,8 +4,8 @@ import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The source bytes that a held encode's search for the video's last keyframe has read, which the
- * worker reports as the attempt's progress whenever they advance (ADR 0037, early ends).
+ * The source bytes that the search for the keyframe that an encode reads from has read, which the
+ * worker reports as the attempt's progress whenever they advance (ADR 0037, seek).
  */
 final class KeyframeSearchProgress {
 
