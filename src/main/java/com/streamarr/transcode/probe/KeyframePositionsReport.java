@@ -8,16 +8,19 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
+import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
+import com.google.protobuf.Duration;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.OptionalLong;
+import java.util.Optional;
 import lombok.Builder;
 import lombok.NonNull;
 import tools.jackson.databind.JsonNode;
@@ -26,7 +29,7 @@ import tools.jackson.databind.JsonNode;
  * The keyframe positions of the chosen video stream, added to a successful probe result, with the
  * measurement of each video and audio stream when the container index gave one. Times count ticks
  * of the time base on the demuxer's timeline, before the container start time is subtracted. {@code
- * endTime} is the latest end of the stream's packets, which only a packet scan reads.
+ * streamEnds} holds where each scanned stream's packets end, which only a packet scan reads.
  */
 @Builder
 record KeyframePositionsReport(
@@ -36,7 +39,7 @@ record KeyframePositionsReport(
     @NonNull KeyframePositionSource source,
     @NonNull List<KeyframeTime> keyframes,
     List<TrackMeasurement> measured,
-    OptionalLong endTime) {
+    List<ScannedStreamEnd> streamEnds) {
 
   /** The contract bounds each list of a ProbeKeyframePositionsPart to this many entries. */
   static final int MAXIMUM_KEYFRAMES_PER_PART = 4_096;
@@ -50,10 +53,13 @@ record KeyframePositionsReport(
   /** The contract bounds the streams that one attempt's measurement parts name. */
   static final int MAXIMUM_MEASURED_STREAMS = 1_024;
 
+  /** The greatest whole seconds that a protobuf duration holds. */
+  private static final long MAXIMUM_DURATION_SECONDS = 315_576_000_000L;
+
   KeyframePositionsReport {
     keyframes = List.copyOf(keyframes);
     measured = measured == null ? List.of() : List.copyOf(measured);
-    endTime = endTime == null ? OptionalLong.empty() : endTime;
+    streamEnds = streamEnds == null ? List.of() : List.copyOf(streamEnds);
   }
 
   ProbeAttemptReport report() {
@@ -80,10 +86,11 @@ record KeyframePositionsReport(
             .setTimeBaseDenominator(Math.toIntExact(timeBase.denominator()))
             .setSource(source)
             .setKeyframeCount(zeroBased.size());
-    zeroBasedEnd(start).ifPresent(positions::setEndTime);
     var result =
         MaximumFrameRate.withMeasuredRate(
-            withKeyframes(probed.result(), ProbeKeyframes.newBuilder().setPositions(positions)),
+            withStreamEnds(
+                withKeyframes(
+                    probed.result(), ProbeKeyframes.newBuilder().setPositions(positions))),
             measured.stream()
                 .filter(stream -> stream.streamIndex() == streamIndex)
                 .findFirst()
@@ -105,17 +112,42 @@ record KeyframePositionsReport(
         .build();
   }
 
-  // An end that leaves the long range on the zero-based timeline is left out, as an unknown end is.
-  private OptionalLong zeroBasedEnd(long start) {
-    if (endTime.isEmpty()) {
-      return OptionalLong.empty();
+  /**
+   * The result with each scanned stream's end on the timeline of the keyframe positions. The
+   * contract carries a positive end only, so an end at or before the container's start is left out,
+   * as an unknown end is, and so is one beyond the contract's duration range.
+   */
+  private ProbeAttemptResult withStreamEnds(ProbeAttemptResult result) {
+    var timeline = ProbeTimeline.of(probed.ffprobeOutput().path("format"));
+    var media = result.getMedia().toBuilder();
+    for (var end : streamEnds) {
+      endTimeOf(end, timeline)
+          .ifPresent(
+              endTime ->
+                  media.addStreamEnds(
+                      SourceStreamEnd.newBuilder()
+                          .setStreamIndex(end.streamIndex())
+                          .setEndTime(endTime)));
     }
 
+    return result.toBuilder().setMedia(media).build();
+  }
+
+  private static Optional<Duration> endTimeOf(ScannedStreamEnd end, ProbeTimeline timeline) {
+    Duration endTime;
     try {
-      return OptionalLong.of(Math.subtractExact(endTime.getAsLong(), start));
+      endTime = timeline.at(BigInteger.valueOf(end.ticks()), end.timeBase());
     } catch (ArithmeticException _) {
-      return OptionalLong.empty();
+      return Optional.empty();
     }
+
+    var isPositive =
+        endTime.getSeconds() > 0 || (endTime.getSeconds() == 0 && endTime.getNanos() > 0);
+    if (!isPositive || endTime.getSeconds() > MAXIMUM_DURATION_SECONDS) {
+      return Optional.empty();
+    }
+
+    return Optional.of(endTime);
   }
 
   /**

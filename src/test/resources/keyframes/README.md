@@ -21,8 +21,8 @@ file with the FFmpeg in the pinned worker image. Each source is 4 s of 64x36 `te
 | `ffmpeg-version.txt` | The first line of `ffmpeg -version` from the recording image | |
 
 `scans/` keeps no source. For each recording it holds the probe's own ffprobe output, without the
-source's path (`.json`), the framecrc lines of the probe's packet scan of the first stream
-(`.framecrc`), and FFmpeg's diagnostics when it printed any (`.diagnostics`), without the
+source's path (`.json`), the framecrc lines of the probe's packet scan of the video stream and of
+each audio stream whose sample rate ffprobe states (`.framecrc`), and FFmpeg's diagnostics when it printed any (`.diagnostics`), without the
 addresses that FFmpeg prints with them. FFmpeg's raw H.264 and HEVC demuxers give no packet a
 presentation time, and its AVI demuxer gives none to a stream with B-frames.
 

@@ -76,6 +76,7 @@ import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.worker.support.FfprobePackets;
 import com.streamarr.transcode.worker.support.FfprobePackets.Packet;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
@@ -107,6 +108,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1039,8 +1041,7 @@ class WorkerMediaSmokeTest {
     var scanPositions = scan.result().getMedia().getKeyframes().getPositions();
     assertThat(scanPositions.getSource())
         .isEqualTo(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
-    assertThat(
-            scanPositions.toBuilder().setSource(indexPositions.getSource()).clearEndTime().build())
+    assertThat(scanPositions.toBuilder().setSource(indexPositions.getSource()).build())
         .isEqualTo(indexPositions);
     assertThat(keyframeTimes(scan.keyframePositionsParts()))
         .isNotEmpty()
@@ -1072,7 +1073,8 @@ class WorkerMediaSmokeTest {
     assertThat(keyframeTimes(report.keyframePositionsParts())).isEqualTo(packetKeyframes);
   }
 
-  // The two truncated sources end before the duration that their headers state.
+  // The two truncated sources end before the duration that their headers state. The oracle is
+  // ffprobe's own list of each stream's packets, which the scan's FFmpeg command does not print.
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
@@ -1081,20 +1083,52 @@ class WorkerMediaSmokeTest {
         "mkv-pipe.mkv",
         "mp4-fragmented.mp4",
         "mp4-truncated.mp4",
-        "mkv-truncated-cues-front.mkv"
+        "mkv-truncated-cues-front.mkv",
+        "mp4-h264-aac-ac3.mp4"
       })
   @DisplayName(
-      "Should end the scanned stream where the last packet that FFmpeg passes to a muxer ends when"
-          + " a packet scan reads a source without a usable index")
-  void shouldEndScannedStreamWhereLastPacketThatFfmpegPassesToMuxerEndsWhenPacketScanReadsSource(
-      String fixture) throws Exception {
+      "Should end the video stream and each audio stream where ffprobe lists the stream's last"
+          + " packet end when a packet scan reads the source")
+  void shouldEndTheVideoStreamAndEachAudioStreamWhereFfprobeListsItsLastPacketEnd(String fixture)
+      throws Exception {
     var source = keyframeSource(fixture);
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
-    var positions = report.result().getMedia().getKeyframes().getPositions();
-    assertThat(positions.hasEndTime()).isTrue();
-    assertThat(positions.getEndTime()).isEqualTo(latestPacketEnd(source, positions));
+    var listedEnds = listedStreamEnds(source, OptionalInt.empty());
+    assertThat(listedEnds)
+        .as("the video stream and at least one audio stream")
+        .hasSizeGreaterThanOrEqualTo(2)
+        .containsKey(report.result().getMedia().getKeyframes().getPositions().getStreamIndex());
+    assertThat(scannedEnds(report)).isEqualTo(listedEnds);
+  }
+
+  // FFmpeg's MPEG-TS demuxer gives a packet neither time when its PES header carries none. FFmpeg's
+  // stream copy then fills the packet's decode time from the packets before it and passes the
+  // packet on without a presentation time, and the fMP4 muxer writes it at its decode time. The
+  // oracle is ffprobe's packet list of the whole fixture, with that one packet counted at its
+  // decode time. Video packet 40 presents in the middle of the stream and packet 95 presents last.
+  @ParameterizedTest(name = "video packet {0}")
+  @ValueSource(ints = {40, 95})
+  @DisplayName(
+      "Should end each stream where a copy of it ends when a packet scan reads an MPEG-TS source"
+          + " in which one video packet has no presentation time")
+  void shouldEndEachStreamWhereACopyOfItEndsWhenOneVideoPacketOfAnMpegTsSourceHasNoPresentationTime(
+      int packetWithoutTimes) throws Exception {
+    var whole = keyframeSource("mpegts.ts");
+    var source = root.resolve("without-times.ts");
+    Files.write(source, withoutTimesOnVideoPacket(Files.readAllBytes(whole), packetWithoutTimes));
+    var listedTimes =
+        ffprobe(List.of("-select_streams", "0", "-show_entries", "packet=pts,dts"), source);
+    assertThat(listedTimes.lines().toList().get(packetWithoutTimes))
+        .as("the times that ffprobe lists for the changed packet")
+        .startsWith("N/A,N/A");
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    assertThat(scannedEnds(report))
+        .hasSize(2)
+        .isEqualTo(listedStreamEnds(whole, OptionalInt.of(packetWithoutTimes)));
   }
 
   @Test
@@ -9895,13 +9929,116 @@ class WorkerMediaSmokeTest {
     return keyframes;
   }
 
-  // The latest end of the chosen stream's packets on the zero-based timeline: a packet's
-  // presentation time plus its duration.
-  private static long latestPacketEnd(Path source, KeyframePositions positions) throws Exception {
-    return muxedPackets(source, positions).stream()
-        .mapToLong(fields -> Long.parseLong(fields.get(2)) + Long.parseLong(fields.get(3)))
-        .max()
-        .orElseThrow();
+  // The end that the scan reports for each source stream, by stream index.
+  private static Map<Integer, Duration> scannedEnds(ProbeAttemptReport report) {
+    var ends = new LinkedHashMap<Integer, Duration>();
+    for (var end : report.result().getMedia().getStreamEndsList()) {
+      ends.put(
+          end.getStreamIndex(),
+          Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()));
+    }
+
+    return ends;
+  }
+
+  // Where each video and audio stream's packets end on the keyframes' timeline, by stream index,
+  // from ffprobe's packet list: the latest sum of a packet's presentation time and duration, less
+  // the container's start time, rounded to the nearest nanosecond. MPEG-TS lists each stream under
+  // its program and again by itself. The named packet of stream 0 counts at its decode time.
+  private static Map<Integer, Duration> listedStreamEnds(
+      Path source, OptionalInt firstStreamPacketAtItsDecodeTime) throws Exception {
+    var containerStart =
+        new BigDecimal(ffprobe(List.of("-show_entries", "format=start_time"), source));
+    var ends = new LinkedHashMap<Integer, Duration>();
+    var streams =
+        ffprobe(List.of("-show_entries", "stream=index,codec_type,time_base"), source).lines();
+    for (var stream : streams.map(line -> line.split(",")).toList()) {
+      if (stream.length < 3 || !Set.of("video", "audio").contains(stream[1])) {
+        continue;
+      }
+
+      var index = Integer.parseInt(stream[0]);
+      var packetAtItsDecodeTime =
+          index == 0 ? firstStreamPacketAtItsDecodeTime : OptionalInt.empty();
+      var timeBase = stream[2].split("/");
+      var endSeconds =
+          new BigDecimal(latestListedPacketEnd(source, index, packetAtItsDecodeTime))
+              .multiply(new BigDecimal(timeBase[0]))
+              .divide(new BigDecimal(timeBase[1]), 20, RoundingMode.HALF_UP)
+              .subtract(containerStart)
+              .setScale(9, RoundingMode.HALF_UP);
+      ends.put(index, Duration.ofNanos(endSeconds.movePointRight(9).longValueExact()));
+    }
+
+    return ends;
+  }
+
+  // Each line is a packet's presentation time, decode time and duration. Every packet of the
+  // keyframe fixtures has a positive duration. The AVI demuxer gives its packets a decode time
+  // only, and such a packet counts at its decode time.
+  private static long latestListedPacketEnd(
+      Path source, int streamIndex, OptionalInt packetAtItsDecodeTime) throws Exception {
+    var packets =
+        ffprobe(
+                List.of(
+                    "-select_streams",
+                    Integer.toString(streamIndex),
+                    "-show_entries",
+                    "packet=pts,dts,duration"),
+                source)
+            .lines()
+            .map(line -> line.split(","))
+            .toList();
+    var latestEnd = Long.MIN_VALUE;
+    for (var number = 0; number < packets.size(); number++) {
+      var packet = packets.get(number);
+      var countsAtDecodeTime =
+          "N/A".equals(packet[0])
+              || (packetAtItsDecodeTime.isPresent() && packetAtItsDecodeTime.getAsInt() == number);
+      var time = Long.parseLong(countsAtDecodeTime ? packet[1] : packet[0]);
+      latestEnd = Math.max(latestEnd, time + Long.parseLong(packet[2]));
+    }
+
+    return latestEnd;
+  }
+
+  // The MPEG-TS bytes with the presentation and decode times removed from the PES header of one
+  // video packet, by its number among the video packets. The header keeps its length: the two flags
+  // are cleared and the bytes that held the times become stuffing.
+  private static byte[] withoutTimesOnVideoPacket(byte[] transportStream, int videoPacket) {
+    var changed = transportStream.clone();
+    var videoPacketsSeen = 0;
+    for (var offset = 0; offset + 188 <= changed.length; offset += 188) {
+      assertThat(changed[offset]).as("the sync byte at %d", offset).isEqualTo((byte) 0x47);
+      var startsAPayloadUnit = (changed[offset + 1] & 0x40) != 0;
+      var adaptationFieldControl = (changed[offset + 3] >> 4) & 3;
+      var payload = offset + 4;
+      if ((adaptationFieldControl & 2) != 0) {
+        payload += 1 + (changed[offset + 4] & 0xFF);
+      }
+
+      var hasPayload = (adaptationFieldControl & 1) != 0;
+      if (!hasPayload || !startsAPayloadUnit || !isVideoPesHeaderAt(changed, payload, offset)) {
+        continue;
+      }
+
+      if (videoPacketsSeen++ == videoPacket) {
+        changed[payload + 7] &= 0x3F;
+        var headerDataLength = changed[payload + 8] & 0xFF;
+        Arrays.fill(changed, payload + 9, payload + 9 + headerDataLength, (byte) 0xFF);
+        return changed;
+      }
+    }
+
+    throw new AssertionError("The transport stream has no video packet " + videoPacket);
+  }
+
+  private static boolean isVideoPesHeaderAt(byte[] transportStream, int payload, int packet) {
+    return payload + 9 <= packet + 188
+        && transportStream[payload] == 0
+        && transportStream[payload + 1] == 0
+        && transportStream[payload + 2] == 1
+        && (transportStream[payload + 3] & 0xF0) == 0xE0;
   }
 
   private record KeyframeTime(long presentation, long decode) {}
