@@ -814,6 +814,68 @@ class ProducerTest {
     assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
   }
 
+  // Segment 1 holds one picture, from 1 s to 1.042 s. The audio's last sample starts at 0.979 s,
+  // in segment 0, and ends at 1.021 s, within one frame of that picture's end.
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 1})
+  @DisplayName(
+      "Should deliver a last segment without audio of its own from whichever segment the attempt"
+          + " starts when the copied audio before it ends within one frame of its video")
+  void
+      shouldDeliverALastSegmentWithoutAudioOfItsOwnFromWhicheverSegmentTheAttemptStartsWhenTheCopiedAudioBeforeItEndsWithinOneFrameOfItsVideo(
+          int startSequenceNumber) {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(1_000, audioSamples(24, 2_000))
+                .build(),
+            TimedFragment.keyframeAt(24_000).videoDuration(1_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .startSequenceNumber(startSequenceNumber)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).last().isEqualTo("segment1.m4s");
+  }
+
+  // Segment 0 is the preroll of an attempt from segment 1. Its audio ends at 0.958 s, 83 ms before
+  // segment 1's one picture ends.
+  @Test
+  @DisplayName(
+      "Should refuse a replacement attempt's first segment when the copied audio before it ends more"
+          + " than one frame before its video")
+  void
+      shouldRefuseAReplacementAttemptsFirstSegmentWhenTheCopiedAudioBeforeItEndsMoreThanOneFrameBeforeItsVideo() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(0, audioSamples(23, 2_000))
+                .build(),
+            TimedFragment.keyframeAt(24_000).videoDuration(1_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .startSequenceNumber(1)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment1.m4s");
+  }
+
   @ParameterizedTest
   @CsvSource({"false,false", "false,true", "true,false", "true,true"})
   @DisplayName("Should refuse a segment without copied audio when the audio ends before its video")

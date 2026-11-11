@@ -361,7 +361,8 @@ final class SegmentAssembler {
     }
 
     var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
-    if (copiedAudioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
+    var audioTail = copiedAudioTail.or(audio::prerollTail);
+    if (audioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
       return;
     }
 
@@ -369,7 +370,7 @@ final class SegmentAssembler {
         videoSamples.stream().mapToLong(carried -> carried.sample().duration()).max().orElseThrow();
     var beforeLastFrame = new MediaTime(end - frameDuration, new TimeBase(1, timescale));
     if (videoDecision instanceof VideoDecision.Encode
-        && copiedAudioTail
+        && audioTail
             .filter(tail -> tail.coversToWithinOneFrame(videoEnd, beforeLastFrame))
             .isPresent()) {
       return;

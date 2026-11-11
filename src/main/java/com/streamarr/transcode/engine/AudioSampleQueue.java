@@ -37,6 +37,7 @@ final class AudioSampleQueue {
   // Before any audio sample, none has run backwards.
   private long lastPresentationTime = Long.MIN_VALUE;
   private long droppedLateSampleCount;
+  private Optional<AudioTail> prerollTail = Optional.empty();
 
   /**
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence; empty
@@ -110,6 +111,14 @@ final class AudioSampleQueue {
     return droppedLateSampleCount;
   }
 
+  /**
+   * Where the last preroll sample ends, which the segment before the attempt's first carries; empty
+   * when no preroll sample arrived.
+   */
+  Optional<AudioTail> prerollTail() {
+    return prerollTail;
+  }
+
   Stream<Fragment> heldFragments() {
     return held.stream().map(queued -> queued.sample().fragment());
   }
@@ -133,6 +142,7 @@ final class AudioSampleQueue {
     }
 
     if (number < startSequenceNumber) {
+      prerollTail = Optional.of(AudioTail.of(sample, timescale));
       return false;
     }
 
