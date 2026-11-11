@@ -48,9 +48,9 @@ import org.junit.jupiter.api.io.TempDir;
 // the worker runs its test encode again. No GPU runs here: the scripted test encode stays running
 // until the test lets it exit, as an FFmpeg that waits on an unresponsive driver does.
 @Tag("UnitTest")
-@DisplayName("Transcode Worker Progress During Encoder Recheck Tests")
+@DisplayName("Transcode Worker Encoder Recheck Timer Tests")
 @Timeout(value = 1, unit = TimeUnit.MINUTES)
-class TranscodeWorkerProgressDuringEncoderRecheckTest {
+class TranscodeWorkerEncoderRecheckTimerTest {
 
   private static final String H264_NVENC_ENCODERS =
       "V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n";
