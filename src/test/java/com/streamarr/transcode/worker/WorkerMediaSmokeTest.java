@@ -5721,7 +5721,7 @@ class WorkerMediaSmokeTest {
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
     var firstSample = startSequenceNumber * 6 * COUNTED_AUDIO_SAMPLE_RATE;
-    var delivered = DeliveredSamples.of(playable(uploads.contentOf(uploads.names())));
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
     assertThat(delivered.sourceSamples(firstSample, COUNTED_AUDIO_SAMPLES))
         .as("the source's samples from the first segment's start to the audio's end at 10 s")
         .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES - firstSample, 0, 0));
@@ -5809,9 +5809,9 @@ class WorkerMediaSmokeTest {
    * frame's samples follow its own presentation time, so a frame that is absent leaves its times
    * without a sample instead of moving the samples after it.
    */
-  private record DeliveredSamples(int[] byTime, BitSet delivered, long deliveredTwice) {
+  private record DeliveredAudio(int[] byTime, BitSet delivered, long deliveredTwice) {
 
-    static DeliveredSamples of(Path media) throws Exception {
+    static DeliveredAudio of(Path media) throws Exception {
       var decoded = media.resolveSibling(media.getFileName() + ".s32le");
       runFfmpeg(List.of("-i", media.toString(), "-map", "0:a:0", "-f", "s32le"), decoded);
       var samples =
@@ -5831,7 +5831,7 @@ class WorkerMediaSmokeTest {
       }
 
       assertThat(samples.hasRemaining()).as("decoded samples beyond the decoded frames").isFalse();
-      return new DeliveredSamples(byTime, delivered, deliveredTwice);
+      return new DeliveredAudio(byTime, delivered, deliveredTwice);
     }
 
     // The counted source's sample at index n holds n + 1 in the upper 24 bits.
