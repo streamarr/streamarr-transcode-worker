@@ -3775,16 +3775,22 @@ class WorkerMediaSmokeTest {
     assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
     var replacementMedia = playable(replacementUploads.contentOf(replacementUploads.names()));
     assertDecodes(replacementMedia);
-    // The attempt from the start copies every source packet in decode order, so its packet at the
+    // The attempt from the start copies every source packet in decode order, so its sample at the
     // keyframe's index is that keyframe on the output timeline.
-    var fromStartPackets =
-        videoPackets(playable(fromStartUploads.contentOf(fromStartUploads.names())));
-    assertThat(fromStartPackets).hasSameSizeAs(sourcePackets);
-    var copiedKeyframe = fromStartPackets.get(keyframeIndex);
-    assertThat(copiedKeyframe.keyframe()).as("the copy of the server's keyframe").isTrue();
-    assertThat(videoPackets(replacementMedia).getFirst().presentationTime())
-        .as("the first video presentation time of the replacement attempt's segment 2")
-        .isEqualByComparingTo(copiedKeyframe.presentationTime());
+    var fromStartSamples = videoSamples(fromStartUploads.contentOf(fromStartUploads.names()));
+    assertThat(fromStartSamples).hasSameSizeAs(sourcePackets);
+    var copiedKeyframe = fromStartSamples.get(keyframeIndex);
+    assertThat(copiedKeyframe.isSync()).as("the copy of the server's keyframe").isTrue();
+    var replacementSamples = videoSamples(replacementUploads.contentOf(replacementUploads.names()));
+    assertThat(replacementSamples.getFirst().presentationTime())
+        .as("the first video presentation time of the replacement attempt's segment 2, in ticks")
+        .isEqualTo(copiedKeyframe.presentationTime());
+  }
+
+  // The output's video samples in decode order, with the times that its bytes carry.
+  private static List<Mp4Samples.Sample> videoSamples(byte[] media) {
+    var movie = Mp4Samples.read(media);
+    return movie.samplesOf(movie.videoTrack());
   }
 
   @ParameterizedTest(name = "{0} source, {1}, from segment {2}")
