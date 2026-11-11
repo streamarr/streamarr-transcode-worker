@@ -3,7 +3,7 @@ package com.streamarr.transcode.probe;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
-import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
+import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import com.streamarr.transcode.probe.SyntheticMp4.Edit;
 import java.nio.file.Files;
@@ -80,11 +80,11 @@ class Mp4StreamMeasurerTest {
 
     var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, AUDIO));
 
-    assertThat(index.measured()).extracting(TrackMeasurement::streamIndex).containsExactly(0, 1);
+    assertThat(index.measured()).extracting(StreamMeasurement::streamIndex).containsExactly(0, 1);
     var audio = index.measured().get(1);
     assertThat(audio.measuredBytes()).isEqualTo(63);
     assertThat(audio.packetCount()).isEqualTo(9);
-    assertThat(audio.timescale()).isEqualTo(48_000);
+    assertThat(audio.timeBase()).isEqualTo(new TimeBase(1, 48_000));
     assertThat(audio.measuredDuration()).isEqualTo(108_000);
     assertThat(audio.intervalBytes()).containsExactly(14, 14, 14, 21);
     assertThat(audio.intervalPacketCounts()).containsExactly(2, 2, 2, 3);
@@ -276,7 +276,7 @@ class Mp4StreamMeasurerTest {
 
     var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, OTHER_VIDEO));
 
-    assertThat(index.measured()).extracting(TrackMeasurement::streamIndex).containsExactly(0);
+    assertThat(index.measured()).extracting(StreamMeasurement::streamIndex).containsExactly(0);
   }
 
   @Test
@@ -432,7 +432,7 @@ class Mp4StreamMeasurerTest {
 
     var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, OTHER_VIDEO));
 
-    assertThat(index.measured()).extracting(TrackMeasurement::streamIndex).containsExactly(0);
+    assertThat(index.measured()).extracting(StreamMeasurement::streamIndex).containsExactly(0);
   }
 
   @Test
@@ -497,7 +497,7 @@ class Mp4StreamMeasurerTest {
 
     var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, AUDIO));
 
-    assertThat(index.measured()).extracting(TrackMeasurement::packetCount).containsExactly(4L, 8L);
+    assertThat(index.measured()).extracting(StreamMeasurement::packetCount).containsExactly(4L, 8L);
   }
 
   @Test

@@ -12,7 +12,6 @@ import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
 import com.google.protobuf.Duration;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
-import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
@@ -34,7 +33,7 @@ record KeyframePositionsReport(
     @NonNull TimeBase timeBase,
     @NonNull KeyframePositionSource source,
     @NonNull List<KeyframeTime> keyframes,
-    List<TrackMeasurement> measured,
+    List<StreamMeasurement> measured,
     List<ScannedStreamEnd> streamEnds) {
 
   /** The greatest whole seconds that a protobuf duration holds. */
@@ -70,7 +69,7 @@ record KeyframePositionsReport(
             measured.stream()
                 .filter(stream -> stream.streamIndex() == streamIndex)
                 .findFirst()
-                .flatMap(TrackMeasurement::maximumFrameRate));
+                .flatMap(StreamMeasurement::maximumFrameRate));
     var report = withPositions(zeroBased);
     if (!isReportable(measured, zeroBased.size())) {
       return report.setResult(result).build();
@@ -146,32 +145,38 @@ record KeyframePositionsReport(
    * and the time bases fit. A measurement that cannot be carried is left out, and the result
    * reports no measurement.
    */
-  private static boolean isReportable(List<TrackMeasurement> measured, int keyframeCount) {
+  private static boolean isReportable(List<StreamMeasurement> measured, int keyframeCount) {
     return !measured.isEmpty()
         && measured.stream()
             .allMatch(
                 stream ->
                     stream.intervalBytes().length == keyframeCount
-                        && stream.timescale() <= Integer.MAX_VALUE);
+                        && stream.timeBase().numerator() <= Integer.MAX_VALUE
+                        && stream.timeBase().denominator() <= Integer.MAX_VALUE);
   }
 
   private StreamMeasurements.Builder measurements() {
+    // A probe measures a file in the step that reads its keyframe positions.
     var measurements =
         StreamMeasurements.newBuilder()
-            .setSource(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_SAMPLE_TABLE);
+            .setSource(
+                source == KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN
+                    ? StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN
+                    : StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_SAMPLE_TABLE);
     for (var stream : measured) {
       measurements.addStreams(
           MeasuredStream.newBuilder()
               .setStreamIndex(stream.streamIndex())
               .setMeasuredBytes(stream.measuredBytes())
               .setPacketCount(stream.packetCount())
-              .setTimeBaseNumerator(1)
-              .setTimeBaseDenominator((int) stream.timescale())
+              .setTimeBaseNumerator((int) stream.timeBase().numerator())
+              .setTimeBaseDenominator((int) stream.timeBase().denominator())
               .setMeasuredDuration(stream.measuredDuration()));
     }
 
     return measurements;
   }
+
 
   static ProbeAttemptResult withKeyframes(
       ProbeAttemptResult result, ProbeKeyframes.Builder keyframes) {

@@ -6,7 +6,6 @@ import static com.streamarr.transcode.probe.SyntheticSampleEntry.HEVC_VPS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
-import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -43,7 +42,7 @@ class Mp4StreamMeasurerCopyTest {
 
     var index = Mp4SyncSampleReader.read(source, video, List.of(video));
 
-    assertThat(index.measured()).extracting(TrackMeasurement::measuredBytes).containsExactly(40L);
+    assertThat(index.measured()).extracting(StreamMeasurement::measuredBytes).containsExactly(40L);
   }
 
   static Stream<VideoCase> videoKeptByCopy() {
@@ -174,7 +173,7 @@ class Mp4StreamMeasurerCopyTest {
 
     var index = Mp4SyncSampleReader.read(source, video, List.of(video, copied.stream()));
 
-    assertThat(index.measured()).extracting(TrackMeasurement::streamIndex).containsExactly(0, 1);
+    assertThat(index.measured()).extracting(StreamMeasurement::streamIndex).containsExactly(0, 1);
   }
 
   static Stream<AudioCase> audioKeptByCopy() {
@@ -318,7 +317,7 @@ class Mp4StreamMeasurerCopyTest {
 
     var index = Mp4SyncSampleReader.read(source, video, List.of(video, other));
 
-    assertThat(index.measured()).extracting(TrackMeasurement::streamIndex).containsExactly(0);
+    assertThat(index.measured()).extracting(StreamMeasurement::streamIndex).containsExactly(0);
   }
 
   private static TrackStream video(String codecName) {
