@@ -131,7 +131,7 @@ fill_boundaries() {  # LIST ARGS...
   done
 }
 
-# run KIND NAME [start=N] [seek=S] [decode-only] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
+# run KIND NAME [start=N] [seek=S] [decode-only] [duration=D] [skip=T] [hls-recipe] [video] [audio-input] SRC -- CODEC/KEYFRAME ARGS...
 #   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4, its command line one argument per
 #              line in out/NAME.args and the media segment count it forces keyframes up to in out/NAME.count
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
@@ -140,9 +140,12 @@ fill_boundaries() {  # LIST ARGS...
 #   decode-only reads from the seek without FFmpeg's exact seek (-noaccurate_seek), as an encoded replacement attempt does.
 #   duration=D  reads only the source's first D seconds.
 #   skip=T      leaves the time T out of the forced keyframe times.
+#   audio-input reads the audio from a second input of the source, seeked as the first, as a copy that
+#               encodes its audio does.
 run() {
   local kind=$1 name=$2; shift 2
   local start=0 seek=() decode_only=() common=("${COMMON_PIPE[@]}") maps=(-map 0:0 -map 0:a:0)
+  local audio_input=no
   local duration=() seconds="" skip=""
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
@@ -153,16 +156,18 @@ run() {
       skip=*) skip=${1#skip=} ;;
       hls-recipe) common=("${COMMON_HLS[@]}") ;;
       video) maps=(-map 0:0) ;;
+      audio-input) audio_input=yes; maps=(-map 0:0 -map 1:a:0) ;;
       *) break ;;
     esac
     shift
   done
   local src=$1; shift 2
+  local second_input=(); [ "$audio_input" = yes ] && second_input=(-isync 0 "${seek[@]}" -i "$src")
   local count; count=$(segment_count "$src" "$seconds")
   fill_boundaries "$(boundaries "$start" "$count" "$skip")" "$@"
   if [ "$kind" = pipe ]; then
     # -map -0:s: the worker excludes subtitle streams; these sources have none.
-    local command=("${FF[@]}" -y "${seek[@]}" "${decode_only[@]}" "${duration[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
+    local command=("${FF[@]}" -y "${seek[@]}" "${decode_only[@]}" "${duration[@]}" -i "$src" "${second_input[@]}" "${maps[@]}" -map -0:s "${common[@]}" \
       "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
     printf '%s\n' "${command[@]}" > "out/$name.args"
     echo "$count" > "out/$name.count"
@@ -341,10 +346,11 @@ run pipe 15-copy-adjacent-keyframes src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@
 run hls 15-copy-adjacent-keyframes.video-only video src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ 16. stream copy with encoded audio, and its replacement attempt
-run pipe 16-copy-encode-audio src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
+# The copy reads its encoded audio from a second input, so that the first feeds only video.
+run pipe 16-copy-encode-audio audio-input src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
 # The replacement attempt reads from one period before its keyframe, so that the audio encoder
 # receives its lead before 30 s, and aligns its encoded audio on 30 s as an encode does.
-run pipe 16-copy-encode-audio-seek30 start=5 seek=24 src/cfr.mp4 -- "${COPY_VIDEO_PIPE[@]}" "${AAC_FROM_SEGMENT_5[@]}"
+run pipe 16-copy-encode-audio-seek30 start=5 seek=24 audio-input src/cfr.mp4 -- "${COPY_VIDEO_PIPE[@]}" "${AAC_FROM_SEGMENT_5[@]}"
 
 # ------------------------------------------------------------------ 17. audio that ends 160 s before the video, copied and encoded
 run pipe 17-copy-audio-ends-long-before-video src/long-video.mp4 -- "${COPY_PIPE[@]}"

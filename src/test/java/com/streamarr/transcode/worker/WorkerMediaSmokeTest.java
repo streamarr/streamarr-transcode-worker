@@ -108,6 +108,7 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -311,6 +312,12 @@ class WorkerMediaSmokeTest {
 
   // 18 s of video and 10 s of FLAC audio in three 6 s segments.
   private static final int FLAC_SOURCE_SEGMENT_COUNT = 3;
+  private static final int COUNTED_AUDIO_SAMPLE_RATE = 48_000;
+  // The counted source's audio ends at 10 s, inside segment 1 of the ten that its video fills.
+  private static final int COUNTED_AUDIO_SAMPLES = 10 * COUNTED_AUDIO_SAMPLE_RATE;
+  private static final int COUNTED_AUDIO_SEGMENT_COUNT = 10;
+  private static final int COUNTED_AUDIO_ADVERTISED_END_SAMPLES =
+      COUNTED_AUDIO_SEGMENT_COUNT * 6 * COUNTED_AUDIO_SAMPLE_RATE;
   private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
   // FFmpeg's FLAC encoder codes 4,608 samples a frame at 48 kHz, less than 0.1 s.
   private static final int FLAC_SAMPLES_PAST_THE_END_AT_MOST = 4_800;
@@ -5929,6 +5936,213 @@ class WorkerMediaSmokeTest {
     assertThat(uploadedAudio)
         .isNotEmpty()
         .containsExactlyElementsOf(ffmpegAudio.subList(0, uploadedAudio.size()));
+  }
+
+  // The source's AAC ends at 10 s, inside segment 1, and its video at 90 s: FFmpeg writes the
+  // encoder's last frames and the padding only once the audio's input ends.
+  @Test
+  @DisplayName(
+      "Should upload every audio packet that FFmpeg wrote before the advertised end when a copy"
+          + " encodes and pads AAC audio that ends 80 s before the video of an MP4 source")
+  void
+      shouldUploadEveryAudioPacketBeforeTheAdvertisedEndWhenACopyPadsAacThatEndsLongBeforeTheVideo()
+          throws Exception {
+    var source = audioEndsLongBeforeVideoSource();
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var job =
+        audioEndsLongBeforeVideoPaddedJob(
+                source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE, "aac")
+            .build();
+
+    var uploads = execute(engine(softwareCapabilities(), launcher), source.getParent(), job);
+
+    var advertisedEndTicks = AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT * 6L * 48_000;
+    var ffmpegAudio =
+        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root).stream()
+            .filter(Packet::isAudio)
+            .filter(packet -> packet.pts() < advertisedEndTicks)
+            .toList();
+    assertThat(audioPacketsOf(uploads))
+        .as("FFmpeg's audio packets that start before the advertised end at 90 s")
+        .isNotEmpty()
+        .containsExactlyElementsOf(ffmpegAudio);
+  }
+
+  // FFmpeg releases the last packets inside a frame-threaded audio decoder, the encoder's last
+  // frame and the padding only once the audio's input ends, and it holds an input back only while
+  // every output stream that the input feeds runs ahead of the one that trails. Read from the
+  // video's input, a copy's audio came out after the video had run on to the source's end, 50 s
+  // later, when the worker had delivered the segments it belongs to. The encode that holds its
+  // last frame keeps its video beside its audio in one filter graph.
+  // A replacement attempt seeks both inputs alike: a Matroska source by decode time, and an MP4
+  // source by presentation time.
+  @ParameterizedTest(name = "{0} of the {1} source from segment {2}")
+  @CsvSource({
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mkv, 0",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mkv, 1",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mp4, 1",
+    "TRANSCODE_MODE_FULL_TRANSCODE, mkv, 0"
+  })
+  @DisplayName(
+      "Should deliver every source audio sample once, at its own time, and silence after it when"
+          + " the video outlasts by 50 s the audio that an attempt encodes and pads")
+  void shouldDeliverEverySourceAudioSampleOnceAtItsOwnTimeWhenTheVideoOutlastsTheEncodedAudio(
+      TranscodeMode mode, String container, int startSequenceNumber) throws Exception {
+    var source = countedAudioEndsLongBeforeVideoSource(container);
+    var job = countedAudioJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var firstSample = startSequenceNumber * 6 * COUNTED_AUDIO_SAMPLE_RATE;
+    var delivered = DeliveredSamples.of(playable(uploads.contentOf(uploads.names())));
+    assertThat(delivered.sourceSamples(firstSample, COUNTED_AUDIO_SAMPLES))
+        .as("the source's samples from the first segment's start to the audio's end at 10 s")
+        .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES - firstSample, 0, 0));
+    assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+    assertThat(delivered.silentSamples(COUNTED_AUDIO_SAMPLES, COUNTED_AUDIO_ADVERTISED_END_SAMPLES))
+        .as("the samples from the audio's end at 10 s to the advertised end at 60 s")
+        .isEqualTo(
+            new SilentSamples(COUNTED_AUDIO_ADVERTISED_END_SAMPLES - COUNTED_AUDIO_SAMPLES, 0, 0));
+  }
+
+  // A job that encodes the counted source's mono audio to FLAC, which keeps every sample's value,
+  // and pads it to the advertised end, holding the last frame too when it encodes the video: the
+  // jobs that the server sends.
+  private static VariantJob.Builder countedAudioJob(Path source, TranscodeMode mode) {
+    var job = seekableSourceJob(source, mode);
+    paddedTo(job, COUNTED_AUDIO_SEGMENT_COUNT);
+    job.getDecisionBuilder().getAudioBuilder().setCodec("flac").setChannels(1);
+    if (mode == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE) {
+      job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    }
+
+    return job;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 60 s, and 10 s of 24-bit mono FLAC at
+  // 48 kHz whose sample n holds n + 1: each decoded sample names the source sample it came from,
+  // and digital silence is 0. The video outlasts the audio by 50 s, several times the 10 s for
+  // which FFmpeg's muxer holds a stream's packets for another's. The MP4 source carries the
+  // Matroska source's streams unchanged.
+  private static synchronized Path countedAudioEndsLongBeforeVideoSource(String container)
+      throws Exception {
+    var matroska = seekableSources.resolve("counted-audio-ends-long-before-video.mkv");
+    if (!generatedSeekableSources.contains(matroska)) {
+      var samples = seekableSources.resolve("counted-audio.s32le");
+      var counted =
+          ByteBuffer.allocate(COUNTED_AUDIO_SAMPLES * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+      IntStream.rangeClosed(1, COUNTED_AUDIO_SAMPLES).forEach(count -> counted.putInt(count << 8));
+      Files.write(samples, counted.array());
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=60",
+              "-f",
+              "s32le",
+              "-ar",
+              String.valueOf(COUNTED_AUDIO_SAMPLE_RATE),
+              "-ac",
+              "1",
+              "-i",
+              samples.toString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s32"),
+          matroska);
+      generatedSeekableSources.add(matroska);
+    }
+
+    var source = seekableSources.resolve("counted-audio-ends-long-before-video." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  /**
+   * How many of the counted source's samples in a range the delivered audio holds unchanged at
+   * their own times, lacks, and holds with another value.
+   */
+  private record SourceSamples(long unchanged, long absent, long changed) {}
+
+  /** How many samples of a range the delivered audio holds as digital silence, lacks, or not. */
+  private record SilentSamples(long silent, long absent, long notSilent) {}
+
+  /**
+   * The delivered audio's decoded samples by the time each one plays at, in samples: each decoded
+   * frame's samples follow its own presentation time, so a frame that is absent leaves its times
+   * without a sample instead of moving the samples after it.
+   */
+  private record DeliveredSamples(int[] byTime, BitSet delivered, long deliveredTwice) {
+
+    static DeliveredSamples of(Path media) throws Exception {
+      var decoded = media.resolveSibling(media.getFileName() + ".s32le");
+      runFfmpeg(List.of("-i", media.toString(), "-map", "0:a:0", "-f", "s32le"), decoded);
+      var samples =
+          ByteBuffer.wrap(Files.readAllBytes(decoded)).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+      var frames =
+          ffprobe(List.of("-select_streams", "a:0", "-show_entries", "frame=pts,nb_samples"), media)
+              .lines()
+              .map(DecodedFrame::parse)
+              .toList();
+      var byTime = new int[frames.stream().mapToInt(DecodedFrame::end).max().orElse(0)];
+      var delivered = new BitSet();
+      var deliveredTwice = 0L;
+      for (var time : frames.stream().flatMapToInt(DecodedFrame::times).toArray()) {
+        deliveredTwice += delivered.get(time) ? 1 : 0;
+        delivered.set(time);
+        byTime[time] = samples.get();
+      }
+
+      assertThat(samples.hasRemaining()).as("decoded samples beyond the decoded frames").isFalse();
+      return new DeliveredSamples(byTime, delivered, deliveredTwice);
+    }
+
+    // The counted source's sample at index n holds n + 1 in the upper 24 bits.
+    SourceSamples sourceSamples(int from, int until) {
+      var absent = IntStream.range(from, until).filter(time -> !delivered.get(time)).count();
+      var unchanged =
+          IntStream.range(from, until)
+              .filter(time -> delivered.get(time) && byTime[time] == (time + 1) << 8)
+              .count();
+      return new SourceSamples(unchanged, absent, until - from - absent - unchanged);
+    }
+
+    SilentSamples silentSamples(int from, int until) {
+      var absent = IntStream.range(from, until).filter(time -> !delivered.get(time)).count();
+      var silent =
+          IntStream.range(from, until)
+              .filter(time -> delivered.get(time) && byTime[time] == 0)
+              .count();
+      return new SilentSamples(silent, absent, until - from - absent - silent);
+    }
+  }
+
+  // A decoded audio frame: the time its first sample plays at, in samples, and how many it holds.
+  private record DecodedFrame(int start, int sampleCount) {
+
+    static DecodedFrame parse(String ptsAndSampleCount) {
+      var fields = ptsAndSampleCount.split(",");
+      return new DecodedFrame(Integer.parseInt(fields[0]), Integer.parseInt(fields[1]));
+    }
+
+    int end() {
+      return start + sampleCount;
+    }
+
+    IntStream times() {
+      return IntStream.range(start, end());
+    }
   }
 
   @Test

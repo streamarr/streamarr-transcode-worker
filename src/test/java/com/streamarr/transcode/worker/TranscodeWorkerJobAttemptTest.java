@@ -1561,18 +1561,19 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @ParameterizedTest(name = "{0} with {1}")
+  // A copy that encodes its audio reads it from a second input of the source.
+  @ParameterizedTest(name = "{0} with {1} from input {2}")
   @CsvSource({
-    "TRANSCODE_MODE_REMUX, AUDIO_MODE_COPY",
-    "TRANSCODE_MODE_AUDIO_TRANSCODE, AUDIO_MODE_TRANSCODE",
-    "TRANSCODE_MODE_VIDEO_TRANSCODE, AUDIO_MODE_COPY",
-    "TRANSCODE_MODE_FULL_TRANSCODE, AUDIO_MODE_TRANSCODE"
+    "TRANSCODE_MODE_REMUX, AUDIO_MODE_COPY, 0",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, AUDIO_MODE_TRANSCODE, 1",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, AUDIO_MODE_COPY, 0",
+    "TRANSCODE_MODE_FULL_TRANSCODE, AUDIO_MODE_TRANSCODE, 0"
   })
   @DisplayName(
       "Should map the audio stream that the job names when a replacement attempt copies or encodes"
           + " it")
   void shouldMapTheAudioStreamThatTheJobNamesWhenAReplacementAttemptCopiesOrEncodesIt(
-      TranscodeMode mode, AudioMode audioMode) throws Exception {
+      TranscodeMode mode, AudioMode audioMode, int audioInput) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(mode);
     job.getExecutionBuilder().setStartSequenceNumber(3);
@@ -1591,8 +1592,8 @@ class TranscodeWorkerJobAttemptTest {
 
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
-          .containsSequence("-map", "0:0", "-map", "0:2?")
-          .doesNotContain("0:a:0");
+          .containsSequence("-map", "0:0", "-map", audioInput + ":2?")
+          .doesNotContain("0:a:0", "1:a:0");
     }
   }
 
