@@ -54,6 +54,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
@@ -112,6 +113,12 @@ class FfprobeExecutorKeyframeTest {
          "time_base":"1/90000","has_b_frames":2,"disposition":{"attached_pic":0}},
         {"index":1,"codec_type":"audio","codec_name":"aac","id":"0x101","time_base":"1/90000",
          "disposition":{"attached_pic":0}}]}
+      """;
+  private static final String AVI_STREAMS_WITHOUT_REORDERING =
+      """
+      {"format":{"format_name":"avi","start_time":"0.000000"},
+       "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                   "time_base":"1/24","has_b_frames":0}]}
       """;
   private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
   private static final String NO_PACKETS =
@@ -805,9 +812,11 @@ class FfprobeExecutorKeyframeTest {
                         .setTimeBaseNumerator(1)
                         .setTimeBaseDenominator(90_000)
                         .setSource(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN)
-                        .setKeyframeCount(4))
+                        .setKeyframeCount(4)
+                        .setEndTime(268_340))
                 .build());
-    // The container starts at 1.460111 s, which is 131,410 ticks, at the first audio packet.
+    // The container starts at 1.460111 s, which is 131,410 ticks, at the first audio packet. The
+    // last packet presents at 396,000 ticks for 3,750 ticks, so the stream ends at 268,340 ticks.
     assertThat(report.keyframePositionsParts())
         .containsExactly(
             ProbeKeyframePositionsPart.newBuilder()
@@ -815,6 +824,111 @@ class FfprobeExecutorKeyframeTest {
                 .addAllPresentationTimeDeltas(List.of(2_090L, 63_750L, 123_750L, 75_000L))
                 .addAllDecodeTimeDeltas(List.of(-5_410L, 63_750L, 123_750L, 75_000L))
                 .build());
+  }
+
+  // The packets come in decode order. The second packet presents last, at 144,750 ticks for 3,750
+  // ticks, and the two B-frames after it present earlier. The container starts at 131,410 ticks.
+  @Test
+  @DisplayName(
+      "Should end the scanned stream at the packet that presents last when later packets present"
+          + " before it")
+  void shouldEndTheScannedStreamAtThePacketThatPresentsLastWhenLaterPacketsPresentBeforeIt() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0,     126000,     133500,     3750,      100, 0x00000000
+                0,     129750,     144750,     3750,      100, 0x00000000, F=0x0
+                0,     133500,     137250,     3750,      100, 0x00000000, F=0x0
+                0,     137250,     141000,     3750,      100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnd(report)).hasValue(17_090);
+  }
+
+  // The time base is 1/24 and the container starts at zero. Each packet lasts one tick.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "a decode time alone | 0, 18, -9223372036854775808, 1, 100, 0x00000000, F=0x0 | 19",
+        "a presentation time alone | 0, -9223372036854775808, 20, 1, 100, 0x00000000, F=0x0 | 21"
+      })
+  @DisplayName(
+      "Should end the scanned stream by the one time that a packet has when the stream does not"
+          + " reorder frames")
+  void shouldEndTheScannedStreamByTheOneTimeThatAPacketHasWhenTheStreamDoesNotReorderFrames(
+      String description, String lastPacket, long expectedEnd) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(AVI_STREAMS_WITHOUT_REORDERING)
+            .packetScan("0, 0, 0, 1, 100, 0x00000000\n" + lastPacket + "\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("avi.avi"), packetScanRequest());
+
+    assertThat(scannedEnd(report)).hasValue(expectedEnd);
+  }
+
+  // FFmpeg's Matroska demuxer prints a duration of 0 for a block without one. The container starts
+  // 23 ticks before zero, so the last packet presents at 2,940 ticks.
+  @ParameterizedTest
+  @CsvSource({"0", "-42"})
+  @DisplayName(
+      "Should end the scanned stream at its last presentation time when the last packet has no"
+          + " positive duration")
+  void shouldEndTheScannedStreamAtItsLastPresentationTimeWhenTheLastPacketHasNoPositiveDuration(
+      long duration) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan(
+                """
+                0, 0, 0, 42, 100, 0x00000000
+                0, 2917, 2917, %d, 100, 0x00000000, F=0x0
+                """
+                    .formatted(duration))
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(scannedEnd(report)).hasValue(2_940);
+  }
+
+  // A stream that reorders frames gets no presentation time from a packet's decode time. A packet
+  // whose end exceeds the long range has no end either.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "a packet without a presentation time"
+            + " | 0, 129750, -9223372036854775808, 3750, 100, 0x00000000, F=0x0",
+        "a packet whose end exceeds the long range"
+            + " | 0, 129750, 9223372036854775806, 3750, 100, 0x00000000, F=0x0"
+      })
+  @DisplayName(
+      "Should report the keyframe positions without an end when the end of a scanned packet is"
+          + " unknown")
+  void shouldReportTheKeyframePositionsWithoutAnEndWhenTheEndOfAScannedPacketIsUnknown(
+      String description, String packetWithoutAnEnd) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                "0, 126000, 133500, 3750, 100, 0x00000000\n"
+                    + packetWithoutAnEnd
+                    + "\n0, 189750, 197250, 3750, 100, 0x00000000\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnd(report)).isEmpty();
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(2);
   }
 
   @Test
@@ -1241,6 +1355,18 @@ class FfprobeExecutorKeyframeTest {
               assertThat(part.getPresentationTimeDeltasList()).isEqualTo(expected);
               assertThat(part.getDecodeTimeDeltasList()).isEqualTo(expected);
             });
+  }
+
+  // Each recording's ffprobe output states the stream's duration_ts from zero: 97 ticks of 1/24 s
+  // for the AVI file. The raw HEVC stream's last packet presents at 216,000 ticks for 24,000 ticks.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"avi.avi, 97", "hevc-pir.hevc, 240000"})
+  @DisplayName("Should end the scanned stream where the recorded packet scan's last packet ends")
+  void shouldEndTheScannedStreamWhereTheRecordedPacketScansLastPacketEnds(
+      String recording, long expectedEnd) {
+    var report = recordedScan(recording).executor().probe(Path.of(recording), packetScanRequest());
+
+    assertThat(scannedEnd(report)).hasValue(expectedEnd);
   }
 
   @Test
@@ -1724,6 +1850,15 @@ class FfprobeExecutorKeyframeTest {
 
   private static ProbeRequest packetScanRequest() {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
+  }
+
+  private static OptionalLong scannedEnd(ProbeAttemptReport report) {
+    var positions = report.result().getMedia().getKeyframes().getPositions();
+    if (!positions.hasEndTime()) {
+      return OptionalLong.empty();
+    }
+
+    return OptionalLong.of(positions.getEndTime());
   }
 
   @ParameterizedTest

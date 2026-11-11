@@ -1039,7 +1039,8 @@ class WorkerMediaSmokeTest {
     var scanPositions = scan.result().getMedia().getKeyframes().getPositions();
     assertThat(scanPositions.getSource())
         .isEqualTo(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
-    assertThat(scanPositions.toBuilder().setSource(indexPositions.getSource()).build())
+    assertThat(
+            scanPositions.toBuilder().setSource(indexPositions.getSource()).clearEndTime().build())
         .isEqualTo(indexPositions);
     assertThat(keyframeTimes(scan.keyframePositionsParts()))
         .isNotEmpty()
@@ -1069,6 +1070,31 @@ class WorkerMediaSmokeTest {
     var packetKeyframes = packetKeyframes(source, positions);
     assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size()).isPositive();
     assertThat(keyframeTimes(report.keyframePositionsParts())).isEqualTo(packetKeyframes);
+  }
+
+  // The two truncated sources end before the duration that their headers state.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "mpegts.ts",
+        "avi.avi",
+        "mkv-pipe.mkv",
+        "mp4-fragmented.mp4",
+        "mp4-truncated.mp4",
+        "mkv-truncated-cues-front.mkv"
+      })
+  @DisplayName(
+      "Should end the scanned stream where the last packet that FFmpeg passes to a muxer ends when"
+          + " a packet scan reads a source without a usable index")
+  void shouldEndScannedStreamWhereLastPacketThatFfmpegPassesToMuxerEndsWhenPacketScanReadsSource(
+      String fixture) throws Exception {
+    var source = keyframeSource(fixture);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    var positions = report.result().getMedia().getKeyframes().getPositions();
+    assertThat(positions.hasEndTime()).isTrue();
+    assertThat(positions.getEndTime()).isEqualTo(latestPacketEnd(source, positions));
   }
 
   @Test
@@ -9867,6 +9893,15 @@ class WorkerMediaSmokeTest {
     }
 
     return keyframes;
+  }
+
+  // The latest end of the chosen stream's packets on the zero-based timeline: a packet's
+  // presentation time plus its duration.
+  private static long latestPacketEnd(Path source, KeyframePositions positions) throws Exception {
+    return muxedPackets(source, positions).stream()
+        .mapToLong(fields -> Long.parseLong(fields.get(2)) + Long.parseLong(fields.get(3)))
+        .max()
+        .orElseThrow();
   }
 
   private record KeyframeTime(long presentation, long decode) {}

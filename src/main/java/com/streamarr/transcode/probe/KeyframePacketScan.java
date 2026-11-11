@@ -120,6 +120,7 @@ final class KeyframePacketScan {
         .timeBase(timeBase)
         .source(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN)
         .keyframes(keyframes.times())
+        .endTime(keyframes.streamEnd())
         .build()
         .report();
   }
@@ -189,6 +190,8 @@ final class KeyframePacketScan {
     private final List<KeyframeTime> times = new ArrayList<>();
     private boolean missingTime;
     private boolean keyframeNotAfterPrevious;
+    private long streamEnd = Long.MIN_VALUE;
+    private boolean isStreamEndUnknown;
 
     /**
      * A keyframe without a time, or one whose times are not both after the previous keyframe's,
@@ -202,11 +205,13 @@ final class KeyframePacketScan {
       }
 
       var packet = Packet.parse(line);
+      var packetTimes = timesOf(packet);
+      extendStreamEnd(packetTimes.presentation(), packet.duration());
       if (!packet.isKeyframe()) {
         return true;
       }
 
-      var time = keyframeTime(timesOf(packet));
+      var time = keyframeTime(packetTimes);
       if (time.isEmpty()) {
         missingTime = true;
         times.clear();
@@ -221,6 +226,19 @@ final class KeyframePacketScan {
 
       times.add(time.get());
       return true;
+    }
+
+    // The stream ends where the latest packet end lies: a packet's presentation time plus its
+    // duration. One packet without a presentation time, or with an end beyond the long range,
+    // leaves the stream's end unknown.
+    private void extendStreamEnd(OptionalLong presentation, long duration) {
+      var positiveDuration = Math.max(0, duration);
+      if (presentation.isEmpty() || presentation.getAsLong() > Long.MAX_VALUE - positiveDuration) {
+        isStreamEndUnknown = true;
+        return;
+      }
+
+      streamEnd = Math.max(streamEnd, presentation.getAsLong() + positiveDuration);
     }
 
     private PacketTimes timesOf(Packet packet) {
@@ -255,11 +273,20 @@ final class KeyframePacketScan {
     List<KeyframeTime> times() {
       return times;
     }
+
+    /** The latest end of the stream's packets, or empty when a packet's end is unknown. */
+    OptionalLong streamEnd() {
+      if (isStreamEndUnknown || streamEnd == Long.MIN_VALUE) {
+        return OptionalLong.empty();
+      }
+
+      return OptionalLong.of(streamEnd);
+    }
   }
 
   private record PacketTimes(OptionalLong presentation, OptionalLong decode) {}
 
-  private record Packet(OptionalLong pts, OptionalLong dts, int flags) {
+  private record Packet(OptionalLong pts, OptionalLong dts, long duration, int flags) {
 
     static Packet parse(String line) {
       var fields = Arrays.stream(line.split(",")).map(String::strip).toList();
@@ -274,7 +301,8 @@ final class KeyframePacketScan {
               .findFirst()
               .map(field -> Integer.decode(field.substring("F=".length())))
               .orElse(KEYFRAME_FLAG);
-      return new Packet(time(fields.get(2)), time(fields.get(1)), flags);
+      return new Packet(
+          time(fields.get(2)), time(fields.get(1)), Long.parseLong(fields.get(3)), flags);
     }
 
     boolean isKeyframe() {

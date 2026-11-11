@@ -17,6 +17,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import lombok.Builder;
 import lombok.NonNull;
 import tools.jackson.databind.JsonNode;
@@ -24,7 +25,8 @@ import tools.jackson.databind.JsonNode;
 /**
  * The keyframe positions of the chosen video stream, added to a successful probe result, with the
  * measurement of each video and audio stream when the container index gave one. Times count ticks
- * of the time base on the demuxer's timeline, before the container start time is subtracted.
+ * of the time base on the demuxer's timeline, before the container start time is subtracted. {@code
+ * endTime} is the latest end of the stream's packets, which only a packet scan reads.
  */
 @Builder
 record KeyframePositionsReport(
@@ -33,7 +35,8 @@ record KeyframePositionsReport(
     @NonNull TimeBase timeBase,
     @NonNull KeyframePositionSource source,
     @NonNull List<KeyframeTime> keyframes,
-    List<TrackMeasurement> measured) {
+    List<TrackMeasurement> measured,
+    OptionalLong endTime) {
 
   /** The contract bounds each list of a ProbeKeyframePositionsPart to this many entries. */
   static final int MAXIMUM_KEYFRAMES_PER_PART = 4_096;
@@ -50,6 +53,7 @@ record KeyframePositionsReport(
   KeyframePositionsReport {
     keyframes = List.copyOf(keyframes);
     measured = measured == null ? List.of() : List.copyOf(measured);
+    endTime = endTime == null ? OptionalLong.empty() : endTime;
   }
 
   ProbeAttemptReport report() {
@@ -76,6 +80,7 @@ record KeyframePositionsReport(
             .setTimeBaseDenominator(Math.toIntExact(timeBase.denominator()))
             .setSource(source)
             .setKeyframeCount(zeroBased.size());
+    endTime.ifPresent(end -> positions.setEndTime(end - start));
     var result =
         MaximumFrameRate.withMeasuredRate(
             withKeyframes(probed.result(), ProbeKeyframes.newBuilder().setPositions(positions)),
