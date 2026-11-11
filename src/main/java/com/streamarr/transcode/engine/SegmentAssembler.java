@@ -387,13 +387,25 @@ final class SegmentAssembler {
     if (videoDecision instanceof VideoDecision.Copy
         && segment.lastOfTheOutput()
         && new MediaTime(lastPictureEnd - start, new TimeBase(1, timescale))
-                .compareTo(minimumCopyDuration)
+                .compareTo(intervalOf(segment.sequenceNumber(), timescale))
             < 0) {
       return;
     }
 
     throw new FragmentedMp4Exception(
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
+  }
+
+  // How long the segment's own interval lasts. The last listed segment of a job without an
+  // advertised end runs to the end of the media, so the job's shortest interval stands for it.
+  private MediaTime intervalOf(int sequenceNumber, long timescale) {
+    var end = intervals.endOf(sequenceNumber, timescale);
+    if (end.isEmpty()) {
+      return minimumCopyDuration;
+    }
+
+    return new MediaTime(
+        end.getAsLong() - intervals.startOf(sequenceNumber, timescale), new TimeBase(1, timescale));
   }
 
   private Set<Fragment> heldFragments() {

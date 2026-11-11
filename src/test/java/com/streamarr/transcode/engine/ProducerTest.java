@@ -823,6 +823,76 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // Exact starts at 0 s, 1.083 s, 2 s and 3 s: segment 1's interval, 0.917 s, is the shortest. The
+  // copy ends in segment 2, whose 1 s interval holds 0.958 s of video after the audio's end.
+  @Test
+  @DisplayName(
+      "Should complete a short copy when its silent last segment ends inside its own interval and"
+          + " an earlier interval is shorter than its video")
+  void
+      shouldCompleteAShortCopyWhenItsSilentLastSegmentEndsInsideItsOwnIntervalAndAnEarlierIntervalIsShorterThanItsVideo() {
+    var output = copyWhoseAudioEndsWhereItsLastSegmentStarts(23);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .intervals(
+                SegmentIntervals.onExactStarts(
+                    1, new ExactSegmentStarts(List.of(0L, 26L, 48L, 72L), 1, 24)))
+            .mediaSegmentCount(4)
+            .copiesAudio(true)
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  // Exact starts at 0 s, 1.083 s and 2 s, and no advertised end: the last listed segment's interval
+  // runs to the end of the media.
+  @Test
+  @DisplayName(
+      "Should complete a copy when its last listed segment holds one picture after its audio's end")
+  void shouldCompleteACopyWhenItsLastListedSegmentHoldsOnePictureAfterItsAudiosEnd() {
+    var output = copyWhoseAudioEndsWhereItsLastSegmentStarts(1);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .intervals(
+                SegmentIntervals.onExactStarts(
+                    1, new ExactSegmentStarts(List.of(0L, 26L, 48L), 1, 24)))
+            .mediaSegmentCount(3)
+            .copiesAudio(true)
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  // Keyframes at 0 s, 1.083 s and 2 s. The audio ends at 2 s, and the segment from 2 s holds this
+  // many pictures of 1/24 s.
+  private static OneSecondSegments copyWhoseAudioEndsWhereItsLastSegmentStarts(
+      int lastSegmentPictureCount) {
+    return OneSecondSegments.of(
+        IsoBoxes.videoAndAudioMoov(),
+        TimedFragment.keyframeAt(0)
+            .videoDuration(1_000)
+            .videoSampleCount(26)
+            .audioFrom(0, audioSamples(52, 1_000))
+            .build(),
+        TimedFragment.keyframeAt(26_000)
+            .videoDuration(1_000)
+            .videoSampleCount(22)
+            .audioFrom(52_000, audioSamples(44, 1_000))
+            .build(),
+        TimedFragment.keyframeAt(48_000)
+            .videoDuration(1_000)
+            .videoSampleCount(lastSegmentPictureCount)
+            .build());
+  }
+
   @Test
   @DisplayName("Should keep a copied audio frame intact when it covers the next segment's video")
   void shouldKeepACopiedAudioFrameIntactWhenItCoversTheNextSegmentsVideo() {
