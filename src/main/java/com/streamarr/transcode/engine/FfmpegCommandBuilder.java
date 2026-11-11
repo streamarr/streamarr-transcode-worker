@@ -127,6 +127,8 @@ public class FfmpegCommandBuilder {
 
   private static final String FLUSH_PACKETS = "-flush_packets";
   private static final String COPY_PRIOR_SEEK_START = "-copypriorss";
+  // Places the input that follows on the timeline of the input whose index the option names.
+  private static final String SYNC_TO_INPUT = "-isync";
 
   // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
   // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
@@ -475,7 +477,7 @@ public class FfmpegCommandBuilder {
             "1",
             "-fpsprobesize",
             "0",
-            "-isync",
+            SYNC_TO_INPUT,
             String.valueOf(source),
             "-f",
             "mp4",
@@ -552,12 +554,12 @@ public class FfmpegCommandBuilder {
 
     if (holdsLastFrame(request)) {
       addSourceInput(cmd, request);
-      cmd.addAll(List.of("-isync", String.valueOf(EncoderInput.SOURCE.sourceInputIndex())));
+      cmd.addAll(List.of(SYNC_TO_INPUT, String.valueOf(EncoderInput.SOURCE.sourceInputIndex())));
       addSourceInput(cmd, request);
       return;
     }
 
-    cmd.addAll(List.of("-isync", String.valueOf(AUDIO_INPUT)));
+    cmd.addAll(List.of(SYNC_TO_INPUT, String.valueOf(AUDIO_INPUT)));
     addSeekArgs(cmd, request);
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
     addSourceInput(cmd, request);
