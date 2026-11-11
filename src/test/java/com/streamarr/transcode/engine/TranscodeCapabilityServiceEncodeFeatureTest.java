@@ -151,9 +151,42 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
 
   @Test
   @DisplayName(
-      "Should pass libx265 its level, tier and colour parameters and libsvtav1 its colour"
-          + " parameters when a feature's test encode runs with a software encoder")
-  void shouldPassEachSoftwareEncoderItsOwnParametersWhenAFeaturesTestEncodeRunsWithIt() {
+      "Should pass libx265 its level, tier and colour parameters when a feature's test encode runs"
+          + " with it")
+  void shouldPassLibx265ItsLevelTierAndColourParametersWhenAFeaturesTestEncodeRunsWithIt() {
+    var commands = featureTestCommandsOfADetectionWith("libx265");
+
+    assertThat(commands)
+        .hasSize(EncodeFeature.values().length)
+        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-svtav1-params"))
+        .extracting(command -> parametersAfter("-x265-params", command))
+        .allSatisfy(
+            parameters -> assertThat(parameters).matches("level-idc=\\d+:high-tier=0(:.+)?"))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).doesNotContain("transfer="))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).contains("transfer=arib-std-b67"))
+        .filteredOn(parameters -> parameters.contains("transfer=smpte2084"))
+        .hasSize(2);
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass libsvtav1 its colour parameters when a feature's test encode runs with it")
+  void shouldPassLibsvtav1ItsColourParametersWhenAFeaturesTestEncodeRunsWithIt() {
+    var commands = featureTestCommandsOfADetectionWith("libsvtav1");
+
+    assertThat(commands)
+        .hasSize(EncodeFeature.values().length)
+        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-x265-params"))
+        .extracting(command -> parametersAfter("-svtav1-params", command))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).isEmpty())
+        .satisfiesOnlyOnce(
+            parameters -> assertThat(parameters).contains("transfer-characteristics=arib-std-b67"))
+        .filteredOn(parameters -> parameters.contains("transfer-characteristics=smpte2084"))
+        .hasSize(2);
+  }
+
+  // The commands of the feature test encodes that one detection runs with the encoder.
+  private static List<List<String>> featureTestCommandsOfADetectionWith(String encoder) {
     var commands = new ArrayList<List<String>>();
     var service =
         new TranscodeCapabilityService(
@@ -165,28 +198,10 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
 
     service.detectCapabilities();
 
-    var featureTests = commands.stream().filter(command -> command.contains("pipe:1")).toList();
-    assertThat(featureTests)
-        .filteredOn(command -> command.contains("libx265"))
-        .hasSize(EncodeFeature.values().length)
-        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-svtav1-params"))
-        .extracting(command -> parametersAfter("-x265-params", command))
-        .allSatisfy(
-            parameters -> assertThat(parameters).matches("level-idc=\\d+:high-tier=0(:.+)?"))
-        .satisfiesOnlyOnce(parameters -> assertThat(parameters).doesNotContain("transfer="))
-        .satisfiesOnlyOnce(parameters -> assertThat(parameters).contains("transfer=arib-std-b67"))
-        .filteredOn(parameters -> parameters.contains("transfer=smpte2084"))
-        .hasSize(2);
-    assertThat(featureTests)
-        .filteredOn(command -> command.contains("libsvtav1"))
-        .hasSize(EncodeFeature.values().length)
-        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-x265-params"))
-        .extracting(command -> parametersAfter("-svtav1-params", command))
-        .satisfiesOnlyOnce(parameters -> assertThat(parameters).isEmpty())
-        .satisfiesOnlyOnce(
-            parameters -> assertThat(parameters).contains("transfer-characteristics=arib-std-b67"))
-        .filteredOn(parameters -> parameters.contains("transfer-characteristics=smpte2084"))
-        .hasSize(2);
+    return commands.stream()
+        .filter(command -> command.contains("pipe:1"))
+        .filter(command -> command.contains(encoder))
+        .toList();
   }
 
   // The value that follows the option in the command; empty when the command lacks the option.
