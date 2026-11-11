@@ -5,7 +5,6 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeCancelReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.probe.FfprobeExecutor;
@@ -56,8 +55,9 @@ final class WorkerProbeSession implements AutoCloseable {
     }
   }
 
+  // A scan with playback priority is no playback probe, so its report takes no kept report call.
   private static ProbeReportQueue.Order waitingOrderOf(ProbeRequest request) {
-    if (request.getPriority() == ProbePriority.PROBE_PRIORITY_PLAYBACK) {
+    if (ProbeKind.of(request) == ProbeKind.PLAYBACK) {
       return ProbeReportQueue.Order.PLAYBACK;
     }
 

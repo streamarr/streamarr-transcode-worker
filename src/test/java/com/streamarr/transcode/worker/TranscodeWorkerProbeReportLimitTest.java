@@ -6,6 +6,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.BitrateScanChunk;
 import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
@@ -163,6 +164,104 @@ class TranscodeWorkerProbeReportLimitTest {
       answer(connection, open);
       assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
           .containsExactlyElementsOf(idsOf(List.of(waiting)));
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(Scan.class)
+  @DisplayName(
+      "Should make the report of a scan with playback priority wait and leave the kept report"
+          + " calls free when the other reports hold their report calls")
+  void shouldMakeTheReportOfAScanWithPlaybackPriorityWaitWhenTheOtherReportsHoldTheirReportCalls(
+      Scan scan) throws Exception {
+    var runtime = acceptingReportCalls(3);
+    var open = background();
+    var scanning = scan.withPlaybackPriority();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdReportAnswers();
+      probe(runtime, open);
+      probe(runtime, scanning);
+
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .as("the scan's report waits although two report calls are free")
+          .containsExactlyElementsOf(idsOf(List.of(open)));
+      answer(connection, open);
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .containsExactlyElementsOf(idsOf(List.of(scanning)));
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(Scan.class)
+  @DisplayName(
+      "Should make the report of a refused scan with playback priority wait and leave the kept"
+          + " report calls free when the other reports hold their report calls")
+  void shouldMakeTheReportOfARefusedScanWithPlaybackPriorityWaitWhenTheOtherReportsHoldTheirCalls(
+      Scan scan) throws Exception {
+    var runtime = acceptingReportCalls(3);
+    var open = background();
+    // The first scan holds the one unit of the keyframe packet scan capacity until it runs.
+    var holding = scan.withPlaybackPriority();
+    var refused = scan.withPlaybackPriority();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdReportAnswers();
+      probe(runtime, open);
+      start(connection, holding);
+      start(connection, refused);
+
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .as("the refused scan's report waits although two report calls are free")
+          .containsExactlyElementsOf(idsOf(List.of(open)));
+      answer(connection, open);
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .containsExactlyElementsOf(idsOf(List.of(refused)));
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(Scan.class)
+  @DisplayName(
+      "Should send the report of a playback probe before the waiting report of a scan with"
+          + " playback priority that ended earlier")
+  void shouldSendTheReportOfALaterPlaybackProbeBeforeTheWaitingReportOfAScanWithPlaybackPriority(
+      Scan scan) throws Exception {
+    var runtime = acceptingReportCalls(1);
+    var open = background();
+    var scanning = scan.withPlaybackPriority();
+    var playback = playback();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      holdTheOneReportCall(runtime, open);
+      probe(runtime, scanning);
+      probe(runtime, playback);
+
+      connection.releaseReportAnswers();
+
+      assertThat(reportedAttempts(connection)).containsExactly(idsOf(open, playback, scanning));
+    }
+  }
+
+  // A keyframe packet scan and a bitrate scan chunk are never playback probes, whatever their
+  // priority.
+  private enum Scan {
+    A_KEYFRAME_PACKET_SCAN,
+    A_BITRATE_SCAN_CHUNK;
+
+    private ProbeRequest withPlaybackPriority() {
+      var request = requestBuilder().setPriority(ProbePriority.PROBE_PRIORITY_PLAYBACK);
+      return switch (this) {
+        case A_KEYFRAME_PACKET_SCAN -> request.setScanKeyframePackets(true).build();
+        case A_BITRATE_SCAN_CHUNK ->
+            request.setBitrateScanChunk(BitrateScanChunk.getDefaultInstance()).build();
+      };
     }
   }
 
