@@ -673,6 +673,62 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // The audio of a segment is the samples that start inside its interval, so the video that a late
+  // keyframe leaves past the interval's end has its audio in the next segment.
+  @Test
+  @DisplayName(
+      "Should deliver an encoded segment when its video runs past its interval and its copied"
+          + " audio fills the interval")
+  void shouldDeliverAnEncodedSegmentWhenItsVideoRunsPastItsIntervalAndItsCopiedAudioFillsIt() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(27)
+                .audioFrom(0, oneSecondOfAudioSamples())
+                .build(),
+            TimedFragment.keyframeAt(27_000)
+                .videoDuration(1_000)
+                .videoSampleCount(21)
+                .audioFrom(48_000, oneSecondOfAudioSamples())
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordingsWhoseAudioLastsAsLongAsTheirVideo")
+  @DisplayName(
+      "Should deliver every recorded media segment when the attempt copies audio that lasts as"
+          + " long as its video")
+  void shouldDeliverEveryRecordedMediaSegmentWhenTheAttemptCopiesAudioThatLastsAsLongAsItsVideo(
+      Recording recording) {
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    var producer =
+        producerFor(process, recording).copiesAudio(true).requiresSoundTrack(true).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactlyElementsOf(uploadNames(recording));
+  }
+
+  // 48 samples of 1,000 ticks, each half as long as a video frame of the 1 s segments.
+  private static Integer[] oneSecondOfAudioSamples() {
+    return IntStream.range(0, 48).mapToObj(_ -> 1_000).toArray(Integer[]::new);
+  }
+
+  static Stream<Recording> recordingsWhoseAudioLastsAsLongAsTheirVideo() {
+    return recordingsThatComplete().filter(recording -> !recording.file().contains("audio-ends"));
+  }
+
   @Test
   @DisplayName("Should deliver a copied segment when its copied audio ends inside it")
   void shouldDeliverACopiedSegmentWhenItsCopiedAudioEndsInsideIt() {
@@ -768,7 +824,7 @@ class ProducerTest {
     }
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
-    assertThat(sink.acceptedNames()).doesNotContain("segment1.m4s", "segment2.m4s", "segment3.m4s");
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
   @Test

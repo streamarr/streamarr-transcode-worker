@@ -32,6 +32,7 @@ import lombok.NonNull;
  */
 final class SegmentAssembler {
 
+  private final SegmentIntervals intervals;
   private final SegmentGrouper grouper;
   private final AudioSampleQueue audio;
   private final VideoProgress video;
@@ -61,6 +62,8 @@ final class SegmentAssembler {
    *     empty when the attempt copies the video, whose sample durations follow the source
    * @param videoDecision the video that the initialization segment must declare
    * @param requiresSoundTrack whether the initialization segment must declare a sound track
+   * @param copiesAudio whether the attempt copies the source's audio packets, so that the assembler
+   *     refuses a media segment whose video outlasts that audio when it requires a sound track
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence, at or
    *     after which the assembler drops every audio sample; empty for any other attempt
    */
@@ -74,6 +77,7 @@ final class SegmentAssembler {
       boolean requiresSoundTrack,
       boolean copiesAudio,
       @NonNull Optional<Duration> paddedAudioEnd) {
+    this.intervals = intervals;
     this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
     this.audio = new AudioSampleQueue(intervals, startSequenceNumber, paddedAudioEnd);
     this.video = new VideoProgress(intervals);
@@ -94,9 +98,10 @@ final class SegmentAssembler {
    *     track that it requires or other video than the decision, when the first video sample of an
    *     AV1 encode holds no sequence header that matches its {@code av1C}, when a video sample that
    *     the copy rewrites cannot be read, when the grouper refuses the fragment, when it holds a
-   *     short video sample or an audio sample that starts before the one before it, or when the
+   *     short video sample or an audio sample that starts before the one before it, when the
    *     rewritten initialization segment or a segment it closes is larger than the segment cap once
-   *     rebuilt, after which nothing is delivered, not even the segments it would close
+   *     rebuilt, or when a segment it closes has video beyond the copied audio it requires, after
+   *     which nothing is delivered, not even the segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
@@ -184,7 +189,8 @@ final class SegmentAssembler {
    * only the audio of its own interval; the audio after the last segment's interval is dropped
    * first.
    *
-   * @throws FragmentedMp4Exception when one is larger than the segment cap once rebuilt
+   * @throws FragmentedMp4Exception when one is larger than the segment cap once rebuilt, or has
+   *     video beyond the copied audio it requires
    */
   List<ClosedSegment> finish() {
     dropAudioAfterTheLastSegment();
@@ -342,13 +348,19 @@ final class SegmentAssembler {
 
     var videoSamples = segment.videoSamples();
     var timescale = videoSamples.getFirst().fragment().tracks().video().orElseThrow().timescale();
-    var end =
+    var lastPictureEnd =
         videoSamples.stream()
             .mapToLong(
                 carried ->
                     Math.addExact(carried.sample().presentationTime(), carried.sample().duration()))
             .max()
             .orElseThrow();
+    // The segment takes only the audio that starts inside its interval, so the audio beside video
+    // that a late keyframe leaves past the interval's end belongs to the next segment.
+    var end =
+        Math.min(
+            lastPictureEnd,
+            intervals.endOf(segment.sequenceNumber(), timescale).orElse(lastPictureEnd));
     var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
     if (copiedAudioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
       return;
@@ -372,7 +384,8 @@ final class SegmentAssembler {
             .min()
             .orElseThrow();
     if (videoDecision instanceof VideoDecision.Copy
-        && new MediaTime(end - start, new TimeBase(1, timescale)).compareTo(minimumCopyDuration)
+        && new MediaTime(lastPictureEnd - start, new TimeBase(1, timescale))
+                .compareTo(minimumCopyDuration)
             < 0) {
       return;
     }
