@@ -1,10 +1,14 @@
 package com.streamarr.transcode.fixtures;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
+import com.streamarr.transcode.engine.EncodeFeature;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.engine.TranscodeCapabilityService.ProcessFactory;
+import com.streamarr.transcode.engine.WorkerVerifiedEncoder;
 import java.io.IOException;
+import java.util.Set;
 
 /**
  * What the worker detects with the FFmpeg on the path. One detection starts FFmpeg more than ten
@@ -44,10 +48,21 @@ public final class DetectedCapabilities {
     return command.start();
   }
 
+  // A test encode that fails or outlasts its deadline drops its encoder or its encode feature from
+  // a detection without an error. A shared detection that lacks one would fail every later test
+  // that needs it, far from the cause. So a detection short of what the locked FFmpeg gives fails
+  // the test that asked for it, and the next test detects again.
   private static TranscodeCapabilityService detected(ProcessFactory processes) {
     var capabilities = new TranscodeCapabilityService("ffmpeg", processes);
     capabilities.detectCapabilities();
     assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
+    assertThat(capabilities.softwareEncoders())
+        .as("the software encoders and encode features whose test encodes passed in this detection")
+        .extracting(encoder -> encoder.backend().encoder(), WorkerVerifiedEncoder::encodeFeatures)
+        .containsExactlyInAnyOrder(
+            tuple("libx264", Set.of()),
+            tuple("libx265", Set.of(EncodeFeature.values())),
+            tuple("libsvtav1", Set.of(EncodeFeature.values())));
     return capabilities;
   }
 }
