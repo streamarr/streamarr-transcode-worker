@@ -6862,9 +6862,8 @@ class WorkerMediaSmokeTest {
         .addAllSegmentStartTicks(List.of(0L, 6L))
         .setSegmentStartTimeBase(WHOLE_SECONDS);
 
-    try (var pipe =
-        new PacedSourcePipe(root.resolve("source-pipe"), THRICE_THE_SOURCES_BYTE_RATE)) {
-      var engine = engine(softwareCapabilities(), pipe.feeding(new ProcessBuilderLauncher()));
+    try (var pipes = new PacedSourcePipes(root, THRICE_THE_SOURCES_BYTE_RATE)) {
+      var engine = engine(softwareCapabilities(), pipes.feeding(new ProcessBuilderLauncher()));
 
       var completion = executeToCompletion(engine, source.getParent(), job.build());
 
@@ -6920,33 +6919,35 @@ class WorkerMediaSmokeTest {
   }
 
   /**
-   * Feeds FFmpeg its source through a named pipe, in place of the path that its command reads, at a
-   * steady number of bytes a second, as a slow mount would serve it.
+   * Feeds FFmpeg each of its inputs through a named pipe of its own, in place of the path that its
+   * command reads, at a steady number of bytes a second, as a slow mount would serve it.
    */
-  private static final class PacedSourcePipe implements AutoCloseable {
+  private static final class PacedSourcePipes implements AutoCloseable {
 
     private static final int WRITES_PER_SECOND = 20;
 
-    private final Path pipe;
+    private final Path directory;
     private final int bytesPerWrite;
-    private final ScheduledExecutorService writer =
-        Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
-    private volatile FileChannel output;
+    private final List<PacedPipe> pipes = new CopyOnWriteArrayList<>();
 
-    private PacedSourcePipe(Path pipe, int bytesPerSecond) throws Exception {
-      var mkfifo = new ProcessBuilder("mkfifo", pipe.toString()).start();
-      assertThat(mkfifo.waitFor()).isZero();
-      this.pipe = pipe;
+    private PacedSourcePipes(Path directory, int bytesPerSecond) {
+      this.directory = directory;
       this.bytesPerWrite = bytesPerSecond / WRITES_PER_SECOND;
     }
 
     private ProcessLauncher feeding(ProcessLauncher launcher) {
       return (command, jobAttemptId) -> {
-        var input = command.indexOf("-i") + 1;
-        assertThat(input).as("the command reads an input").isPositive();
-        startWriting(readSource(Path.of(command.get(input))));
+        var inputs =
+            IntStream.range(1, command.size())
+                .filter(argument -> command.get(argument - 1).equals("-i"))
+                .boxed()
+                .toList();
+        assertThat(inputs).as("the command reads an input").isNotEmpty();
         var adjusted = new ArrayList<>(command);
-        adjusted.set(input, pipe.toString());
+        for (var input : inputs) {
+          adjusted.set(input, pipeFeeding(readSource(Path.of(command.get(input)))).toString());
+        }
+
         return launcher.launch(adjusted, jobAttemptId);
       };
     }
@@ -6959,21 +6960,53 @@ class WorkerMediaSmokeTest {
       }
     }
 
-    // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
-    // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
-    private void startWriting(byte[] source) {
+    private Path pipeFeeding(byte[] source) {
       try {
-        output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
+        var path = directory.resolve("source-pipe-" + pipes.size());
+        var mkfifo = new ProcessBuilder("mkfifo", path.toString()).start();
+        assertThat(mkfifo.waitFor()).isZero();
+        pipes.add(new PacedPipe(path, source, bytesPerWrite));
+        return path;
       } catch (IOException e) {
         throw new UncheckedIOException(e);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(e);
       }
-
-      var written = new AtomicInteger();
-      writer.scheduleAtFixedRate(
-          () -> writeNext(source, written), 0, 1_000 / WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
     }
 
-    private void writeNext(byte[] source, AtomicInteger written) {
+    @Override
+    public void close() throws Exception {
+      for (var pipe : pipes) {
+        pipe.close();
+      }
+    }
+  }
+
+  /**
+   * Writes a source into one named pipe at a steady pace, on a thread of its own, so that an input
+   * which FFmpeg holds back delays no other input's bytes.
+   */
+  private static final class PacedPipe implements AutoCloseable {
+
+    private final byte[] source;
+    private final int bytesPerWrite;
+    private final ScheduledExecutorService writer =
+        Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
+    private final FileChannel output;
+    private final AtomicInteger written = new AtomicInteger();
+
+    // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
+    // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
+    private PacedPipe(Path pipe, byte[] source, int bytesPerWrite) throws IOException {
+      this.source = source;
+      this.bytesPerWrite = bytesPerWrite;
+      this.output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
+      writer.scheduleAtFixedRate(
+          this::writeNext, 0, 1_000 / PacedSourcePipes.WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
+    }
+
+    private void writeNext() {
       try {
         var length = Math.min(bytesPerWrite, source.length - written.get());
         var block = ByteBuffer.wrap(source, written.getAndAdd(length), length);
@@ -6993,10 +7026,7 @@ class WorkerMediaSmokeTest {
     @Override
     public void close() throws Exception {
       writer.shutdownNow();
-      if (output != null) {
-        output.close();
-      }
-
+      output.close();
       assertThat(writer.awaitTermination(5, TimeUnit.SECONDS)).as("the writer stopped").isTrue();
     }
   }
