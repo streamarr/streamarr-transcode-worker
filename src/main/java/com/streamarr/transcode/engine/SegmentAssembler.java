@@ -44,7 +44,7 @@ final class SegmentAssembler {
   private final boolean requiresSoundTrack;
   private final boolean copiesAudio;
   private final MediaTime minimumCopyDuration;
-  private Optional<CopiedAudioTail> copiedAudioTail = Optional.empty();
+  private Optional<AudioTail> copiedAudioTail = Optional.empty();
   // Set by the initialization segment, which the reader returns before any fragment.
   private Optional<VideoSampleRewrite> sampleRewrite = Optional.empty();
   // An AV1 encode's initialization segment, held until the first fragment that carries video.
@@ -333,13 +333,10 @@ final class SegmentAssembler {
 
     if (!samples.isEmpty()) {
       var last = samples.getLast();
-      var timeBase = new TimeBase(1, last.fragment().tracks().audio().orElseThrow().timescale());
-      var end = Math.addExact(last.sample().presentationTime(), last.sample().duration());
       copiedAudioTail =
           Optional.of(
-              new CopiedAudioTail(
-                  new MediaTime(end, timeBase),
-                  new MediaTime(Math.addExact(end, last.sample().duration()), timeBase)));
+              AudioTail.of(
+                  last.sample(), last.fragment().tracks().audio().orElseThrow().timescale()));
     }
 
     if (videoDecision instanceof VideoDecision.Copy && !samples.isEmpty()) {
@@ -394,12 +391,6 @@ final class SegmentAssembler {
 
     throw new FragmentedMp4Exception(
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
-  }
-
-  private record CopiedAudioTail(MediaTime end, MediaTime endPlusFrame) {
-    private boolean coversToWithinOneFrame(MediaTime videoEnd, MediaTime beforeLastVideoFrame) {
-      return end.compareTo(beforeLastVideoFrame) >= 0 || endPlusFrame.compareTo(videoEnd) >= 0;
-    }
   }
 
   private Set<Fragment> heldFragments() {
