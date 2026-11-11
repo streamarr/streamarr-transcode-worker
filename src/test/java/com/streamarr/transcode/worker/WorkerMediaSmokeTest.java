@@ -4045,11 +4045,9 @@ class WorkerMediaSmokeTest {
       String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
     var run = runSeekableSourceJob(container, mode, startSequenceNumber);
 
-    var ffmpegBoxes = TopLevelBoxes.of(run.ffmpegOutput());
-    assertThat(ffmpegBoxes).extracting(Box::type).startsWith("ftyp", "moov");
     assertThat(run.uploads().segments())
         .as("the initialization segment")
-        .containsEntry("init.mp4", Arrays.copyOf(run.ffmpegOutput(), ffmpegBoxes.get(1).end()));
+        .containsEntry("init.mp4", initializationSegmentOf(run.ffmpegOutput()));
     assertThat(run.mediaSegmentNames())
         .isNotEmpty()
         .allSatisfy(
@@ -4057,23 +4055,40 @@ class WorkerMediaSmokeTest {
                 assertThat(TopLevelBoxes.of(run.uploads().segments().get(name)))
                     .extracting(Box::type)
                     .containsExactly("moof", "mdat"));
-    var ffmpegPackets = FfprobePackets.of(run.ffmpegOutput(), root);
-    var ffmpegPacketsByStreamAndDts =
-        ffmpegPackets.stream()
-            .collect(Collectors.toMap(WorkerMediaSmokeTest::streamAndDts, Function.identity()));
-    var uploadedPackets = FfprobePackets.of(run.uploadedOutput(), root);
-    assertThat(uploadedPackets)
+    var ffmpegMovie = Mp4Samples.read(run.ffmpegOutput());
+    var ffmpegSamplesByTrackAndDecodeTime =
+        everySampleOf(ffmpegMovie).stream()
+            .collect(
+                Collectors.toMap(WorkerMediaSmokeTest::trackAndDecodeTime, Function.identity()));
+    var uploadedMovie = Mp4Samples.read(run.uploadedOutput());
+    assertThat(everySampleOf(uploadedMovie))
         .isNotEmpty()
         .allSatisfy(
-            packet ->
-                assertThat(packet)
-                    .isEqualTo(ffmpegPacketsByStreamAndDts.get(streamAndDts(packet))));
-    var uploadedVideo = uploadedPackets.stream().filter(Packet::isVideo).toList();
-    var ffmpegVideo = ffmpegPackets.stream().filter(Packet::isVideo).toList();
-    assertThat(uploadedVideo.getFirst().isKeyframe()).isTrue();
+            sample ->
+                assertThat(sample)
+                    .isEqualTo(ffmpegSamplesByTrackAndDecodeTime.get(trackAndDecodeTime(sample))));
+    var uploadedVideo = uploadedMovie.samplesOf(uploadedMovie.videoTrack());
+    var ffmpegVideo = ffmpegMovie.samplesOf(ffmpegMovie.videoTrack());
+    assertThat(uploadedVideo.getFirst().isSync()).isTrue();
     assertThat(uploadedVideo)
         .containsExactlyElementsOf(
             ffmpegVideo.subList(ffmpegVideo.indexOf(uploadedVideo.getFirst()), ffmpegVideo.size()));
+  }
+
+  // The output's ftyp and moov, as FFmpeg writes them ahead of its fragments.
+  private static byte[] initializationSegmentOf(byte[] ffmpegOutput) {
+    var boxes = TopLevelBoxes.of(ffmpegOutput);
+    assertThat(boxes).extracting(Box::type).startsWith("ftyp", "moov");
+    return Arrays.copyOf(ffmpegOutput, boxes.get(1).end());
+  }
+
+  // Every sample of the output, in the order its fragments carry them.
+  private static List<Mp4Samples.Sample> everySampleOf(Mp4Samples.Movie movie) {
+    return movie.fragments().stream().flatMap(fragment -> fragment.samples().stream()).toList();
+  }
+
+  private static List<Long> trackAndDecodeTime(Mp4Samples.Sample sample) {
+    return List.of(sample.trackId(), sample.decodeTime());
   }
 
   @ParameterizedTest(name = "{0} source, {1}, from segment {2}")
@@ -5919,16 +5934,18 @@ class WorkerMediaSmokeTest {
 
     var lastVideoSegment = "segment" + VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + ".m4s";
     assertThat(uploads.names()).containsExactly("init.mp4", lastVideoSegment);
-    var ffmpegPackets =
-        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root);
+    var ffmpegOutput = launcher.outputOf(fromProto(job.getJobAttemptId()));
+    assertThat(uploads.segments())
+        .as("the initialization segment")
+        .containsEntry("init.mp4", initializationSegmentOf(ffmpegOutput));
+    assertThat(videoSamplesOf(uploads, lastVideoSegment))
+        .isNotEmpty()
+        .containsExactlyElementsOf(videoSamples(ffmpegOutput));
+    var ffmpegPackets = FfprobePackets.of(ffmpegOutput, root);
     var interval =
         AudioInterval.ofDeliveredSegment(
             VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT, SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS);
-    var uploaded = packetsOf(uploads, lastVideoSegment);
-    assertThat(uploaded.stream().filter(Packet::isVideo).toList())
-        .isNotEmpty()
-        .containsExactlyElementsOf(ffmpegPackets.stream().filter(Packet::isVideo).toList());
-    assertThat(uploaded.stream().filter(Packet::isAudio).toList())
+    assertThat(packetsOf(uploads, lastVideoSegment).stream().filter(Packet::isAudio).toList())
         .as("the copied audio of 60 s to 66 s, packet for packet")
         .isNotEmpty()
         .containsExactlyElementsOf(
@@ -7170,10 +7187,6 @@ class WorkerMediaSmokeTest {
         execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
 
     return new SeekableSourceRun(uploads, launcher.outputOf(fromProto(job.getJobAttemptId())));
-  }
-
-  private static List<Long> streamAndDts(Packet packet) {
-    return List.of((long) packet.stream(), packet.dts());
   }
 
   static Stream<Arguments> sourceContainersAndModes() {
