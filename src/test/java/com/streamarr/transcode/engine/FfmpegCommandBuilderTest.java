@@ -394,6 +394,27 @@ class FfmpegCommandBuilderTest {
         .flatMap(source -> softwareEncodersFor(source, CompatibleBase.SDR));
   }
 
+  @Test
+  @DisplayName(
+      "Should tone map into planar 10-bit video when an HDR source requests 10-bit SDR output")
+  void shouldToneMapIntoPlanar10BitVideoWhenAnHdrSourceRequests10BitSdrOutput() {
+    var encode =
+        hevcEncode()
+            .codecProfile(VideoCodecProfile.HEVC_MAIN_10)
+            .codecString("hvc1.2.4.L123.90")
+            .outputPictureFormat(new PictureFormat(10, ChromaSubsampling.CHROMA_420))
+            .sourceDynamicRange(dynamicRange(CompatibleBase.PQ))
+            .outputDynamicRange(dynamicRange(CompatibleBase.SDR));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), "libx265");
+
+    assertThat(videoFilter(cmd))
+        .isEqualTo(
+            "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
+                + "format=yuv420p10le,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT"
+                + FRAME_GRID);
+  }
+
   @ParameterizedTest(name = "{0} to {1}, {2}")
   @MethodSource("conversionsWithoutToneMapping")
   @DisplayName("Should omit tone mapping when the source needs none")
