@@ -249,8 +249,9 @@ class FfmpegTranscodeEngineTest {
 
   @Test
   @DisplayName(
-      "Should have an encoder waiting for its recheck only after a hardware encoder is withdrawn")
-  void shouldHaveAnEncoderWaitingForItsRecheckOnlyAfterAHardwareEncoderIsWithdrawn() {
+      "Should have an encoder waiting for its recheck only when a hardware encoder has been"
+          + " withdrawn")
+  void shouldHaveAnEncoderWaitingForItsRecheckOnlyWhenAHardwareEncoderHasBeenWithdrawn() {
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
     var nvenc = executor.encoderBackendOf(request).orElseThrow();
     var waitingBefore = executor.hasWithdrawnEncoders();

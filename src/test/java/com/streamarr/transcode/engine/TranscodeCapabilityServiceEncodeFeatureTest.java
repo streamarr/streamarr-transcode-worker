@@ -128,8 +128,8 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
   }
 
   @Test
-  @DisplayName("Should list no encode feature whose test encode cannot start")
-  void shouldListNoEncodeFeatureWhoseTestEncodeCannotStart() {
+  @DisplayName("Should not list an encode feature when its test encode cannot start")
+  void shouldNotListAnEncodeFeatureWhenItsTestEncodeCannotStart() {
     var service =
         new TranscodeCapabilityService(
             "ffmpeg",
