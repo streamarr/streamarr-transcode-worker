@@ -147,8 +147,8 @@ class TranscodeWorkerAudioLayoutTest {
             ffmpeg -> assertThat(ffmpeg).containsSubsequence("-map", "0:2", "-frames:a", "1"));
     assertThat(launcher.command(fromProto(job.getJobAttemptId())))
         .containsSubsequence("-drc_scale:2", "0", "-target_level:2", "-31", "-i")
-        .containsSequence("-map", "0:2?")
-        .doesNotContain("-drc_scale:a:0", "0:a:0");
+        .containsSequence("-map", "1:2?")
+        .doesNotContain("-drc_scale:a:0", "0:a:0", "1:a:0");
   }
 
   @ParameterizedTest(name = "{0}")
