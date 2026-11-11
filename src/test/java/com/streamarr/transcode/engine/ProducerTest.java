@@ -797,6 +797,32 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
   }
 
+  // The keyframe after 1 s comes one frame late, so segment 1 holds 23 pictures, from 1.042 s to
+  // 2 s: 0.958 s of video in a 1 s interval. The audio ends at 1 s.
+  @Test
+  @DisplayName(
+      "Should refuse a copied segment without copied audio when a later segment follows it and its"
+          + " video is shorter than its interval")
+  void
+      shouldRefuseACopiedSegmentWithoutCopiedAudioWhenALaterSegmentFollowsItAndItsVideoIsShorterThanItsInterval() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(25)
+                .audioFrom(0, oneSecondOfAudioSamples())
+                .build(),
+            TimedFragment.keyframeAt(25_000).videoDuration(1_000).videoSampleCount(23).build(),
+            TimedFragment.keyframeAt(48_000).videoDuration(1_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
   @Test
   @DisplayName("Should keep a copied audio frame intact when it covers the next segment's video")
   void shouldKeepACopiedAudioFrameIntactWhenItCoversTheNextSegmentsVideo() {

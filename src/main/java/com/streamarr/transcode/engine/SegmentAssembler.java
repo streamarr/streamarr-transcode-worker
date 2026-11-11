@@ -377,13 +377,15 @@ final class SegmentAssembler {
     }
 
     // A short copy may end with one final picture after its last audio packet. That still takes
-    // the normal short-copy path; a complete interval without audio needs an audio encode.
+    // the normal short-copy path; a complete interval without audio needs an audio encode, and so
+    // does any segment that a later one follows.
     var start =
         videoSamples.stream()
             .mapToLong(carried -> carried.sample().presentationTime())
             .min()
             .orElseThrow();
     if (videoDecision instanceof VideoDecision.Copy
+        && segment.lastOfTheOutput()
         && new MediaTime(lastPictureEnd - start, new TimeBase(1, timescale))
                 .compareTo(minimumCopyDuration)
             < 0) {
