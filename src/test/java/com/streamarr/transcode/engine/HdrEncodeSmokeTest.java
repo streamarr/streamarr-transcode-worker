@@ -467,8 +467,7 @@ class HdrEncodeSmokeTest {
   }
 
   private static void assumeHevcNvencReshapesOnTheGpu() {
-    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-    capabilities.detectCapabilities();
+    var capabilities = DetectedCapabilities.realCapabilities();
     assumeTrue(
         capabilities
             .resolveEncoder("hevc")
@@ -480,8 +479,7 @@ class HdrEncodeSmokeTest {
   // The tests of a hardware encoder need the host's GPU, so they run only where the worker would
   // send the job to hevc_nvenc.
   private static void assumeHevcNvencLists(EncodeFeature feature) {
-    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-    capabilities.detectCapabilities();
+    var capabilities = DetectedCapabilities.realCapabilities();
     assumeTrue(
         capabilities.workerVerifiedEncoders().stream()
             .anyMatch(
