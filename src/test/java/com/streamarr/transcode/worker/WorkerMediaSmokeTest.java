@@ -6968,7 +6968,8 @@ class WorkerMediaSmokeTest {
   }
 
   // The server lists a copy's starts as its opening keyframes' ticks in the source's time base,
-  // here 0 s, 10 s, 20 s and 30 s, so each segment spans several 3 s slots.
+  // here 0 s, 10 s, 20 s and 30 s, so each segment spans several 3 s slots. Segment 0 starts at 0
+  // and opens at the source's first keyframe, which AAC priming can place after 0.
   @ParameterizedTest(name = "from segment {0}")
   @ValueSource(ints = {0, 2})
   @DisplayName(
@@ -6982,6 +6983,9 @@ class WorkerMediaSmokeTest {
     var starts = exactStarts(source);
     assertThat(starts).as("the source's keyframes 10 s apart open four segments").hasSize(4);
     var times = starts.stream().map(timeBase::times).toList();
+    var openings =
+        Stream.concat(Stream.of(timeBase.times(keyframeTicks(source)[0])), times.stream().skip(1))
+            .toList();
     var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
     job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_COPY);
     job.getExecutionBuilder()
@@ -7003,8 +7007,8 @@ class WorkerMediaSmokeTest {
                 .toList());
     for (var number = startSequenceNumber; number < starts.size(); number++) {
       assertThat(firstVideoSampleOf(uploads, number))
-          .as("segment %d opens at its listed keyframe", number)
-          .isEqualTo(times.get(number));
+          .as("segment %d opens at its keyframe", number)
+          .isEqualTo(openings.get(number));
       assertAudioStartsInsideItsExactInterval(uploads, number, times);
     }
   }
