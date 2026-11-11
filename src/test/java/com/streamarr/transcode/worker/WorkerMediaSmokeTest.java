@@ -9806,8 +9806,9 @@ class WorkerMediaSmokeTest {
   // earliest start of every stream, as ADR 0037 requires; without it, FFmpeg starts the timeline at
   // the earliest mapped stream. framecrc adds the packet flags to every line whose packet is not
   // only a keyframe, and side data after them. A Matroska keyframe's decode time is its cue time,
-  // which equals its presentation time.
-  private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
+  // which equals its presentation time. Each packet is its framecrc line's fields: the stream,
+  // decode time, presentation time, duration, size and checksum, then any flags and side data.
+  private static List<List<String>> muxedPackets(Path source, KeyframePositions positions)
       throws Exception {
     var process =
         new ProcessBuilder(
@@ -9841,10 +9842,17 @@ class WorkerMediaSmokeTest {
         .contains(
             "#tb 0: %d/%d"
                 .formatted(positions.getTimeBaseNumerator(), positions.getTimeBaseDenominator()));
+    return lines.stream()
+        .filter(line -> !line.startsWith("#"))
+        .map(line -> Arrays.stream(line.split(",")).map(String::trim).toList())
+        .toList();
+  }
+
+  private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
+      throws Exception {
     var isMatroska = source.toString().endsWith(".mkv");
     var keyframes = new ArrayList<KeyframeTime>();
-    for (var line : lines.stream().filter(line -> !line.startsWith("#")).toList()) {
-      var fields = Arrays.stream(line.split(",")).map(String::trim).toList();
+    for (var fields : muxedPackets(source, positions)) {
       var flags =
           fields.stream()
               .filter(field -> field.startsWith("F="))
