@@ -10,7 +10,6 @@ import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
-import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -127,7 +126,10 @@ final class ContainerIndexProbe {
   }
 
   private ProbeAttemptReport report(
-      ProbedSource probed, ChosenVideoStream chosen, Listed listed, List<TrackMeasurement> measured)
+      ProbedSource probed,
+      ChosenVideoStream chosen,
+      Listed listed,
+      List<StreamMeasurement> measured)
       throws ExecutionException, InterruptedException {
     if (!isLastKeyframeReadable(probed.source(), chosen, listed)) {
       return packetScanRequired(
