@@ -694,6 +694,30 @@ class TranscodeCapabilityServiceTest {
 
   @Test
   @DisplayName(
+      "Should keep a withdrawn hardware encoder withdrawn and start no test encode when its"
+          + " recheck runs on an interrupted thread")
+  void
+      shouldKeepAWithdrawnHardwareEncoderWithdrawnAndStartNoTestEncodeWhenItsRecheckRunsOnAnInterruptedThread() {
+    var nvencTestEncodes = testEncodes(createProcess("", 0), createProcess("", 0));
+    var service = detectH264Nvenc(nvencTestEncodes);
+    service.withdraw(H264_NVENC);
+    Thread.currentThread().interrupt();
+
+    try {
+      var changed = service.recheckWithdrawnEncoders();
+
+      assertThat(changed).isFalse();
+      assertThat(service.hasWithdrawnEncoders()).isTrue();
+      assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("libx264");
+      assertThat(nvencTestEncodes).hasSize(1);
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should keep a withdrawn hardware encoder withdrawn and restore the interrupt when its"
           + " recheck is interrupted during the test encode")
   void
