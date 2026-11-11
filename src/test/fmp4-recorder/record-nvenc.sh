@@ -51,8 +51,8 @@ SOURCE_SECONDS=35
 SLOT_COUNT=6
 SEGMENT_START_SLOTS=(0 1 2 3 5)
 MEDIA_SEGMENT_COUNT=${#SEGMENT_START_SLOTS[@]}
-# A replacement attempt for segment 3 seeks one slot before its listed start, to 12 s, as the
-# worker's does.
+# A replacement attempt for segment 3 carries the keyframe seek position 12 s, one slot before its
+# listed start, and the worker reads from there.
 REPLACEMENT_START=3
 # The forced keyframe time that the missed-keyframe recording leaves out.
 SKIPPED_FORCED_TIME=18
@@ -211,7 +211,7 @@ level_name() {
 plan_recording() {
   local encoder=$1 rung=$2 variant=$3 preset=${4:-$AUTOMATIC_PRESET}
   local height bitrate level codec_string tag profile tier=() start=0 gop=$GOP_FLOORED recipe=floored
-  local skipped="" replaces="" seek=()
+  local skipped="" replaces="" seek=() seek_position=""
   local NAME_PREFIX="$encoder-$rung-"
   if [[ $preset != "$AUTOMATIC_PRESET" ]]; then
     NAME_PREFIX="$encoder-$rung-$preset-"
@@ -231,9 +231,10 @@ plan_recording() {
   esac
   local video_filter="scale=-2:$height:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=$FRAME_RATE:eof_action=pass"
   if ((start > 0)); then
-    # The worker's encoded replacement decodes from its seek and trims after fps at the first frame
-    # at or after its first segment's start.
-    seek=(-ss "$(($(segment_start "$start") - PERIOD))" -noaccurate_seek)
+    # The worker's encoded replacement decodes from its keyframe seek position and trims after fps
+    # at the first frame at or after its first segment's start.
+    seek_position=$(($(segment_start "$start") - PERIOD))
+    seek=(-ss "$seek_position" -noaccurate_seek)
     video_filter+=",trim=start_pts=$(frames_starting_before "$(segment_start "$start")")"
   fi
   local times
@@ -249,6 +250,7 @@ level=$level
 tier=${tier[1]:-}
 expectedCodecString=$codec_string
 startSequenceNumber=$start
+seekPosition=$seek_position
 mediaSegmentCount=$MEDIA_SEGMENT_COUNT
 segmentStartSlots=$(IFS=,; printf '%s' "${SEGMENT_START_SLOTS[*]}")
 gopFrames=$gop

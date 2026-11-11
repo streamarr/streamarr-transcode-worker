@@ -105,28 +105,33 @@ public class FfmpegTranscodeEngine {
   }
 
   /**
-   * Where a held encode that starts after segment 0 reads from, so that it decodes the video's last
-   * picture even when its seek position lies after the video's last keyframe (ADR 0037, early
-   * ends). Empty when the attempt keeps its own seek position: a keyframe presents between that
-   * position and the first segment's start, or the attempt is no held encode with a seek position.
+   * Where an encode from a later segment that carries a keyframe search time reads from: a seek
+   * position at which its own seek lands at or before the last keyframe of the chosen video that
+   * presents at or before that time, or zero, which reads from the source's start (ADR 0037, seek).
+   * Empty when the attempt carries no search time.
    *
    * @param bytesRead takes the bytes of each packet that the search reads, as it reads them
-   * @throws NoKeyframeBeforeReadBackException when the video has no keyframe before the seek
-   *     position
    * @throws TranscodeException when a scan's FFmpeg cannot start or exits with an error
    */
-  public Optional<Duration> heldPictureReadPosition(
-      TranscodeRequest request, LongConsumer bytesRead) throws InterruptedException {
-    var seekPosition = request.seekPosition();
-    if (seekPosition.isEmpty() || request.startSequenceNumber() == 0 || !holdsLastFrame(request)) {
+  public Optional<Duration> readPosition(TranscodeRequest request, LongConsumer bytesRead)
+      throws InterruptedException {
+    var searchTime = request.readFromLastKeyframePresentingAtOrBefore();
+    if (searchTime.isEmpty()) {
       return Optional.empty();
     }
 
-    var firstSegmentStart =
-        Duration.ofNanos(
-            request
-                .segmentIntervals()
-                .startOf(request.startSequenceNumber(), Duration.ofSeconds(1).toNanos()));
+    var nanosecondsPerSecond = Duration.ofSeconds(1).toNanos();
+    var target =
+        LastKeyframeSearch.Target.builder()
+            .searchTime(searchTime.get())
+            .firstSegmentStart(
+                Duration.ofNanos(
+                    request
+                        .segmentIntervals()
+                        .startOf(request.startSequenceNumber(), nanosecondsPerSecond)))
+            .firstInterval(Duration.ofSeconds(Math.max(1, request.targetSegmentDuration())))
+            .holdsTheLastPicture(holdsLastFrame(request))
+            .build();
     var scan =
         KeyframeScan.builder()
             .commandBuilder(commandBuilder)
@@ -134,7 +139,7 @@ public class FfmpegTranscodeEngine {
             .request(request)
             .bytesRead(bytesRead)
             .build();
-    return LastKeyframeSearch.readPosition(seekPosition.get(), firstSegmentStart, scan);
+    return Optional.of(LastKeyframeSearch.readPosition(target, scan));
   }
 
   private static boolean holdsLastFrame(TranscodeRequest request) {

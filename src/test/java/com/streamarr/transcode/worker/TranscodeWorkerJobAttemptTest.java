@@ -678,7 +678,7 @@ class TranscodeWorkerJobAttemptTest {
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = heldAndPaddedJob();
-    job.getExecutionBuilder().setStartSequenceNumber(10);
+    job.getExecutionBuilder().setStartSequenceNumber(10).getSeekPositionBuilder().setSeconds(54);
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -695,7 +695,7 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(command.get(command.indexOf("-filter_complex") + 1))
           .endsWith(
               "apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
-                  + ",asetpts='PTS-round((0+floor(6*SR/(1024))*(1024))/SR/TB)',atrim=end=85.5"
+                  + ",asetpts='PTS-round((0+floor(5*SR/(1024))*(1024))/SR/TB)',atrim=end=85.5"
                   + ",aformat=sample_fmts=fltp:sample_rates="
                   + "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350"
                   + ":channel_layouts=stereo[filtered_held_audio]");
@@ -752,6 +752,59 @@ class TranscodeWorkerJobAttemptTest {
                   job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(0).setNanos(0);
                   return job;
                 }));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("readsThatTheJobContradicts")
+  @DisplayName(
+      "Should refuse the job as an invalid specification, before any search, when where it reads"
+          + " from breaks the contract")
+  void shouldRefuseTheJobBeforeAnySearchWhenWhereItReadsFromBreaksTheContract(
+      String contradiction, VariantJob.Builder job) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).as("no keyframe scan and no encode").isFalse();
+    }
+  }
+
+  static Stream<Arguments> readsThatTheJobContradicts() {
+    var copy = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX);
+    copy.getExecutionBuilder().setStartSequenceNumber(3);
+    copy.getExecutionBuilder().getSeekPositionBuilder().setSeconds(18);
+    copy.getExecutionBuilder().getReadFromLastKeyframePresentingAtOrBeforeBuilder().setSeconds(17);
+    var fromSegmentZero = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    fromSegmentZero
+        .getExecutionBuilder()
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(17);
+    var both = encodeFromSegment3();
+    both.getExecutionBuilder().getSeekPositionBuilder().setSeconds(16);
+    both.getExecutionBuilder().getReadFromLastKeyframePresentingAtOrBeforeBuilder().setSeconds(17);
+    var negative = encodeFromSegment3();
+    negative
+        .getExecutionBuilder()
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(-1);
+    return Stream.of(
+        Arguments.of("an encode from a later segment carries neither", encodeFromSegment3()),
+        Arguments.of("an encode from a later segment carries both", both),
+        Arguments.of("a stream copy carries a keyframe search time", copy),
+        Arguments.of("an encode from segment 0 carries a keyframe search time", fromSegmentZero),
+        Arguments.of("the keyframe search time is negative", negative));
+  }
+
+  private static VariantJob.Builder encodeFromSegment3() {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setStartSequenceNumber(3);
+    return job;
   }
 
   // A full transcode that holds the last frame and pads its encoded AAC up to an advertised end
@@ -1571,7 +1624,7 @@ class TranscodeWorkerJobAttemptTest {
       TranscodeMode mode, AudioMode audioMode) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(mode);
-    job.getExecutionBuilder().setStartSequenceNumber(3);
+    job.getExecutionBuilder().setStartSequenceNumber(3).getSeekPositionBuilder().setSeconds(12);
     job.getDecisionBuilder()
         .getAudioBuilder()
         .setMode(audioMode)
@@ -1845,7 +1898,11 @@ class TranscodeWorkerJobAttemptTest {
     var first = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     first.getVariantBuilder().setEncoderPreset(EncoderPreset.ENCODER_PRESET_SLOW);
     var replacement = first.clone().setJobAttemptId(toProto(UUID.randomUUID()));
-    replacement.getExecutionBuilder().setStartSequenceNumber(5);
+    replacement
+        .getExecutionBuilder()
+        .setStartSequenceNumber(5)
+        .getSeekPositionBuilder()
+        .setSeconds(24);
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -1872,7 +1929,9 @@ class TranscodeWorkerJobAttemptTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(4)
         .setStartSequenceNumber(2)
-        .setMediaSegmentCount(5);
+        .setMediaSegmentCount(5)
+        .getSeekPositionBuilder()
+        .setSeconds(4);
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2165,12 +2224,18 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // An encode from a later segment carries the server's keyframe position; a stream copy without
+  // one seeks to its first segment's start.
   private static VariantJob.Builder laterSegmentJobOnAThreeSecondGrid(TranscodeMode mode) {
     var job = variantJobBuilder(mode);
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(3)
         .setMediaSegmentCount(4)
         .setStartSequenceNumber(2);
+    if (mode == TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE) {
+      job.getExecutionBuilder().getSeekPositionBuilder().setSeconds(3);
+    }
+
     return job;
   }
 
@@ -2386,11 +2451,12 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // The video's keyframes stop at 10 s and its pictures at 20 s, before segment 4's start at 24 s.
   @Test
   @DisplayName(
       "Should start FFmpeg reading from the keyframe 0.5 s before the video's last keyframe when a"
-          + " held encode's read-back lies after that keyframe")
-  void shouldStartFfmpegReadingFromTheKeyframeBeforeTheLastKeyframeWhenTheReadBackLiesAfterIt()
+          + " held encode's video ends before its first segment")
+  void shouldStartFfmpegReadingFromTheKeyframeBeforeTheLastKeyframeWhenTheVideoEndsBeforeIt()
       throws Exception {
     var source =
         new ScriptedKeyframeSource(ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
@@ -2400,7 +2466,7 @@ class TranscodeWorkerJobAttemptTest {
                 isKeyframeScan(command)
                     ? source.scan(command)
                     : ScriptedProcessLauncher.runningProcessBuilder().build());
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2416,24 +2482,27 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt as a transcode failure, without starting its encode, when a held"
-          + " encode's search finds no keyframe before the read-back")
-  void shouldFailTheAttemptAsATranscodeFailureWhenTheSearchFindsNoKeyframeBeforeTheReadBack()
-      throws Exception {
+      "Should start FFmpeg reading from the source's start when the search finds no keyframe that"
+          + " presents at or before the search time")
+  void shouldStartFfmpegReadingFromTheSourcesStartWhenTheSearchFindsNoKeyframe() throws Exception {
     var source = new ScriptedKeyframeSource(List.of(), 20);
-    var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (command, _) ->
+                isKeyframeScan(command)
+                    ? source.scan(command)
+                    : ScriptedProcessLauncher.runningProcessBuilder().build());
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_FAILED);
-      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
-          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(launcher.commands(fromProto(job.getJobAttemptId())))
-          .allMatch(TranscodeWorkerJobAttemptTest::isKeyframeScan);
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId())).getLast())
+          .as("the encode reads from the source's start")
+          .doesNotContain("-ss");
     }
   }
 
@@ -2446,7 +2515,7 @@ class TranscodeWorkerJobAttemptTest {
     var launcher =
         ScriptedProcessLauncher.forCommands(
             (_, _) -> ScriptedProcess.builder().output(new byte[0]).exitCode(1).build());
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2468,7 +2537,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldRefuseAHeldEncodeFromASeekWithoutAKeyframeScanWhenTheJobBreaksTheContract()
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var job = heldJobReadingBackAfterTheLastKeyframe();
+    var job = heldJobSearchingForItsKeyframe();
     job.getExecutionBuilder().clearAdvertisedEnd();
 
     try (var worker = worker(launcher)) {
@@ -2485,11 +2554,11 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should report the source bytes that the search has read, and no output end, while a held"
-          + " encode searches for the video's last keyframe")
+      "Should report the source bytes that the search has read, and no output end, while an"
+          + " encode searches for the keyframe that it reads from")
   void shouldReportTheSourceBytesThatTheSearchHasReadWhileAHeldEncodeSearches() throws Exception {
     var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2512,12 +2581,12 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should report the attempt stopped and end the scan's FFmpeg when a stop arrives while a"
-          + " held encode searches for the video's last keyframe")
+      "Should report the attempt stopped and end the scan's FFmpeg when a stop arrives while an"
+          + " encode searches for the keyframe that it reads from")
   void shouldReportTheAttemptStoppedAndEndTheScanWhenAStopArrivesDuringTheSearch()
       throws Exception {
     var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2537,13 +2606,13 @@ class TranscodeWorkerJobAttemptTest {
   // The search reads the source like the encode that follows it, so it is playback work.
   @Test
   @DisplayName(
-      "Should close keyframe packet scans while a held encode searches for the video's last"
-          + " keyframe, and reopen them 30 s after a stop ends the search")
+      "Should close keyframe packet scans while an encode searches for the keyframe that it reads"
+          + " from, and reopen them 30 s after a stop ends the search")
   void shouldCloseKeyframePacketScansWhileAHeldEncodeSearchesAndReopenThem30SAfterAStop()
       throws Exception {
     var clock = new SteppedClock();
     var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher, clock)) {
       worker.start("localhost", 1);
@@ -2572,13 +2641,15 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should reopen keyframe packet scans 30 s after a held encode's search finds no keyframe"
-          + " before the read-back")
-  void shouldReopenKeyframePacketScans30SAfterAHeldEncodesSearchFindsNoKeyframe() throws Exception {
+      "Should reopen keyframe packet scans 30 s later when an encode's search for its keyframe"
+          + " fails")
+  void shouldReopenKeyframePacketScans30SLaterWhenAnEncodesSearchForItsKeyframeFails()
+      throws Exception {
     var clock = new SteppedClock();
-    var source = new ScriptedKeyframeSource(List.of(), 20);
-    var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (_, _) -> ScriptedProcess.builder().output(new byte[0]).exitCode(1).build());
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher, clock)) {
       worker.start("localhost", 1);
@@ -2598,13 +2669,13 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should reopen keyframe packet scans in the next session 30 s after the session ends while a"
-          + " held encode searches for the video's last keyframe")
+      "Should reopen keyframe packet scans in the next session 30 s after the session ends while an"
+          + " encode searches for the keyframe that it reads from")
   void shouldReopenKeyframePacketScansInTheNextSession30SAfterTheSessionEndsDuringTheSearch()
       throws Exception {
     var clock = new SteppedClock();
     var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher, clock)) {
       worker.start("localhost", 1);
@@ -2637,7 +2708,7 @@ class TranscodeWorkerJobAttemptTest {
     var source =
         new ScriptedKeyframeSource(ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(10), 20);
     var launcher = ScriptedProcessLauncher.forCommands((command, _) -> source.scan(command));
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2673,7 +2744,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldLaunchNoSearchAndHoldNoCapacityWhenAHeldEncodesStartArrivesAfterItsSessionEnded(
       String ending) throws Exception {
     var launcher = ScriptedProcessLauncher.forCommands((_, _) -> searchPausedAfterTwoPackets());
-    var job = heldJobReadingBackAfterTheLastKeyframe().build();
+    var job = heldJobSearchingForItsKeyframe().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2704,10 +2775,15 @@ class TranscodeWorkerJobAttemptTest {
         .toList();
   }
 
-  // A held encode for segment 4, at 24 s, read back from 14 s.
-  private static VariantJob.Builder heldJobReadingBackAfterTheLastKeyframe() {
+  // A held encode for segment 4, at 24 s, that searches for the last keyframe that presents at or
+  // before 23.5 s.
+  private static VariantJob.Builder heldJobSearchingForItsKeyframe() {
     var job = heldAndPaddedJob();
-    job.getExecutionBuilder().setStartSequenceNumber(4).getSeekPositionBuilder().setSeconds(14);
+    job.getExecutionBuilder()
+        .setStartSequenceNumber(4)
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(23)
+        .setNanos(500_000_000);
     return job;
   }
 

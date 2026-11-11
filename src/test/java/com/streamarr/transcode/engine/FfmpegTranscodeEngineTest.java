@@ -115,6 +115,7 @@ class FfmpegTranscodeEngineTest {
         requestBuilder(TranscodeMode.FULL_TRANSCODE, "h264")
             .attemptId(UUID.randomUUID())
             .startSequenceNumber(recording.startSequenceNumber())
+            .seekPosition(Optional.of(Duration.ofSeconds(24)))
             .build();
     var sink = new RecordingSegmentSink();
 

@@ -7,6 +7,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
@@ -46,15 +47,8 @@ final class KeyframeScan {
   /** A keyframe on the attempt's zero-based timeline. */
   record Keyframe(Duration presentationTime, Duration decodeTime) {}
 
-  /** The first keyframe that presents in the interval; FFmpeg stops reading once it finds one. */
-  Optional<Keyframe> firstKeyframe(Duration from, Duration until) throws InterruptedException {
-    var interval = new Interval(from, until);
-    return read(
-            scanCommand(interval), packet -> packet.isKeyframe() && interval.presents(packet), 1)
-        .stream()
-        .findFirst()
-        .map(VideoPacket::times);
-  }
+  /** What a scan of an interval read of the chosen video stream. */
+  record IntervalScan(List<Keyframe> keyframes, Optional<Duration> lastDecodeTime) {}
 
   /**
    * The decode time of the first video packet that a seek to the position reads, where the job
@@ -68,20 +62,21 @@ final class KeyframeScan {
   }
 
   /**
-   * Every keyframe that decodes in the interval, in decode order; from zero, every keyframe that
-   * decodes before the interval's end. FFmpeg's seek into an MPEG-TS source lands on decode times
-   * and its duration ends at one, so a keyframe that presents in one interval and decodes in the
-   * interval before it reaches only the earlier interval's scan.
+   * Every keyframe that decodes in the interval, in decode order, from zero every keyframe that
+   * decodes before the interval's end, and the latest decode time of any video packet that the scan
+   * read. FFmpeg's seek into an MPEG-TS source lands on decode times and its duration ends at one,
+   * so a keyframe that presents in one interval and decodes in the interval before it reaches only
+   * the earlier interval's scan.
    */
-  List<Keyframe> keyframes(Duration from, Duration until) throws InterruptedException {
+  IntervalScan scan(Duration from, Duration until) throws InterruptedException {
     var interval = new Interval(from, until);
-    return read(
-            scanCommand(interval),
-            packet -> packet.isKeyframe() && interval.decodes(packet),
-            Integer.MAX_VALUE)
-        .stream()
-        .map(VideoPacket::times)
-        .toList();
+    var packets = read(scanCommand(interval), _ -> true, Integer.MAX_VALUE);
+    return new IntervalScan(
+        packets.stream()
+            .filter(packet -> packet.isKeyframe() && interval.decodes(packet))
+            .map(VideoPacket::times)
+            .toList(),
+        packets.stream().map(VideoPacket::decodeTime).max(Comparator.naturalOrder()));
   }
 
   private List<String> scanCommand(Interval interval) {
@@ -207,11 +202,6 @@ final class KeyframeScan {
   }
 
   private record Interval(Duration from, Duration until) {
-
-    boolean presents(VideoPacket packet) {
-      var time = packet.presentationTime();
-      return time.compareTo(from) >= 0 && time.compareTo(until) < 0;
-    }
 
     boolean decodes(VideoPacket packet) {
       var time = packet.decodeTime();

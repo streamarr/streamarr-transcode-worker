@@ -26,6 +26,7 @@ public record TranscodeRequest(
     @NonNull List<Long> segmentStartSlots,
     @NonNull Optional<ExactSegmentStarts> exactSegmentStarts,
     @NonNull Optional<Duration> seekPosition,
+    @NonNull Optional<Duration> readFromLastKeyframePresentingAtOrBefore,
     @NonNull Optional<SourceAudio> sourceAudio,
     @NonNull Optional<Duration> advertisedEnd) {
 
@@ -49,6 +50,12 @@ public record TranscodeRequest(
           "An audio encode in a named layout requires the chosen audio stream's facts");
     }
 
+    if (seekPosition.isPresent() && readFromLastKeyframePresentingAtOrBefore.isPresent()) {
+      throw new IllegalArgumentException(
+          "An attempt reads from a seek position or from the keyframe that it searches for, not"
+              + " both");
+    }
+
     if (advertisedEnd.isEmpty() && holdsOrPads(transcodeDecision)) {
       throw new IllegalArgumentException(
           "Holding the last frame or padding with silence requires the advertised end");
@@ -60,6 +67,7 @@ public record TranscodeRequest(
         .segmentStartSlots(List.of())
         .exactSegmentStarts(Optional.empty())
         .seekPosition(Optional.empty())
+        .readFromLastKeyframePresentingAtOrBefore(Optional.empty())
         .outputFrameRate(Optional.empty())
         .sourceAudio(Optional.empty())
         .advertisedEnd(Optional.empty());

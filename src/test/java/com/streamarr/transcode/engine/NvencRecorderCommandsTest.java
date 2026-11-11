@@ -209,6 +209,7 @@ class NvencRecorderCommandsTest {
             .sessionId(UUID.randomUUID())
             .sourcePath(Path.of("/work/source.mp4"))
             .startSequenceNumber(Integer.parseInt(job.get("startSequenceNumber")))
+            .seekPosition(seekPositionOf(job.get("seekPosition")))
             .mediaSegmentCount(Integer.parseInt(job.get("mediaSegmentCount")))
             .segmentStartSlots(segmentStartSlotsOf(recording))
             .targetSegmentDuration(6)
@@ -227,6 +228,15 @@ class NvencRecorderCommandsTest {
         .filter(preset -> preset.nvencPreset().equals(nvencPreset))
         .findFirst()
         .orElseThrow(() -> new AssertionError("The scale has no NVENC preset " + nvencPreset));
+  }
+
+  // A replacement attempt's keyframe seek position in whole seconds; empty for a first attempt.
+  private static Optional<Duration> seekPositionOf(String seconds) {
+    if (seconds.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(Duration.ofSeconds(Long.parseLong(seconds)));
   }
 
   private static List<Long> segmentStartSlotsOf(PlannedRecording recording) {

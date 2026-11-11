@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -119,5 +121,19 @@ class TranscodeRequestTest {
     assertThatNullPointerException()
         .isThrownBy(() -> builder.seekPosition(null))
         .withMessageContaining("seekPosition");
+  }
+
+  @Test
+  @DisplayName(
+      "Should reject the request when it carries both a seek position and a keyframe search time")
+  void shouldRejectTheRequestWhenItCarriesBothASeekPositionAndAKeyframeSearchTime() {
+    var builder =
+        request(TranscodeMode.FULL_TRANSCODE)
+            .encoderPreset(EncoderPreset.FASTER)
+            .startSequenceNumber(3)
+            .seekPosition(Optional.of(Duration.ofSeconds(16)))
+            .readFromLastKeyframePresentingAtOrBefore(Optional.of(Duration.ofMillis(17_500)));
+
+    assertThatIllegalArgumentException().isThrownBy(builder::build).withMessageContaining("both");
   }
 }
