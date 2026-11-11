@@ -35,6 +35,12 @@ public enum ProducerFailure {
    */
   SHORT_VIDEO_SAMPLE,
   /**
+   * An audio sample arrived after the producer had closed the media segment whose interval holds
+   * its start, so the segment went out, or would go out, without it. FFmpeg wrote the audio long
+   * after the video beside it.
+   */
+  AUDIO_ARRIVED_AFTER_ITS_SEGMENT,
+  /**
    * The output is not fragmented MP4 that the producer can group into media segments, or the timing
    * of the copy of the source's video does not match the copy.
    */
@@ -85,6 +91,7 @@ public enum ProducerFailure {
       case EXCEEDS_SEGMENT_CAP -> SEGMENT_CAP_EXCEEDED;
       case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
       case SHORT_VIDEO_SAMPLE -> SHORT_VIDEO_SAMPLE;
+      case AUDIO_ARRIVED_AFTER_ITS_SEGMENT -> AUDIO_ARRIVED_AFTER_ITS_SEGMENT;
       case OUTPUT_MISMATCH -> OUTPUT_MISMATCH;
       case DOLBY_VISION_CONVERSION_FAILED -> DOLBY_VISION_CONVERSION_FAILED;
       case MULTIPLE_VIDEO_TRACKS, NO_SOUND_TRACK -> NOT_AN_AUDIO_STREAM;

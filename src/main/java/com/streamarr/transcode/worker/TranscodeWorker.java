@@ -1095,6 +1095,7 @@ public final class TranscodeWorker implements AutoCloseable {
           TRUNCATED_OUTPUT,
           SKIPPED_SEGMENT_NUMBER,
           SHORT_VIDEO_SAMPLE,
+          AUDIO_ARRIVED_AFTER_ITS_SEGMENT,
           MALFORMED_OUTPUT,
           OUTPUT_UNREADABLE,
           ENCODER_STALLED,

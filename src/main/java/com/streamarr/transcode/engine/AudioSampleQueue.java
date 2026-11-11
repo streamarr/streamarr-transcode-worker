@@ -14,15 +14,16 @@ import java.util.stream.Stream;
  * sample's start closes, whichever fragment carried it, and tracks how far the audio has certainly
  * arrived. A sample before the attempt's first segment is preroll and is dropped, except that an
  * attempt from segment zero keeps the AAC priming frame, which starts before zero, in segment zero.
- * A sample that arrives after its segment closed is dropped and counted: when encoded audio ends
- * long before the video, the frames still inside FFmpeg's encoding pipeline, and the encoder's last
- * frames, which come out only once the whole input has ended, arrive after the video has run past
- * their segment. A keyframe fragment does not show how far the audio has arrived: FFmpeg can write
- * one without audio past a boundary and the audio before that boundary in the fragment after it.
- * While the audio lasts, an audio sample shows it; once the audio ends, only the video does ({@link
- * VideoProgress}). An attempt that pads its audio with silence drops each sample that starts at or
- * after the advertised end: FFmpeg runs the padding past that end, so that the encoder writes the
- * frame that holds it whole.
+ * A sample that arrives after its segment closed fails the attempt: the segment went out, or would
+ * go out, without it, and the queue cannot tell the source's audio from padding. FFmpeg writes
+ * audio that late when one input feeds a copied video and audio whose end its decoder, filters or
+ * encoder keep back until that input ends, which is why a copy reads its encoded audio from an
+ * input of its own ({@link FfmpegCommandBuilder}). A keyframe fragment does not show how far the
+ * audio has arrived: FFmpeg can write one without audio past a boundary and the audio before that
+ * boundary in the fragment after it. While the audio lasts, an audio sample shows it; once the
+ * audio ends, only the video does ({@link VideoProgress}). An attempt that pads its audio with
+ * silence drops each sample that starts at or after the advertised end: FFmpeg runs the padding
+ * past that end, so that the encoder writes the frame that holds it whole.
  */
 final class AudioSampleQueue {
 
@@ -56,7 +57,7 @@ final class AudioSampleQueue {
    * audio sample starts in segment N, no audio sample of an earlier segment follows.
    *
    * @throws FragmentedMp4Exception when an audio sample starts before the one that arrived before
-   *     it
+   *     it, or arrives after its segment closed
    */
   Optional<Sample> add(Fragment fragment) {
     withoutSoundTrack = fragment.tracks().audio().isEmpty();
@@ -118,8 +119,8 @@ final class AudioSampleQueue {
     held.clear();
   }
 
-  // Holds the sample for its segment unless it is preroll, late or padding past the advertised end;
-  // false when it drops it.
+  // Holds the sample for its segment unless it is preroll or padding past the advertised end; false
+  // when it drops it.
   private boolean tryHold(Fragment fragment, Sample sample) {
     requireNoRegression(sample);
     var timescale = audioTimescaleOf(fragment);
@@ -137,8 +138,15 @@ final class AudioSampleQueue {
     }
 
     if (number < firstOpenNumber) {
-      droppedLateSampleCount++;
-      return false;
+      throw new FragmentedMp4Exception(
+          Reason.AUDIO_ARRIVED_AFTER_ITS_SEGMENT,
+          "audio sample at "
+              + sample.presentationTime()
+              + " in a timescale of "
+              + timescale
+              + " arrived after media segment "
+              + number
+              + " was closed");
     }
 
     held.addLast(new Queued(number, new CarriedSample(fragment, sample)));

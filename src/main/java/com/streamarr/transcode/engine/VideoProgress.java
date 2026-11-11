@@ -16,9 +16,10 @@ package com.streamarr.transcode.engine;
 final class VideoProgress {
 
   // In the recorded outputs an audio sample trails the video written before it by at most 0.162 s,
-  // apart from encoded audio that ends long before the video: the muxer stops holding the video for
-  // it 10 s after its last packet, the encoder's last frames come out only once the whole input has
-  // ended, and the assembler drops the samples that arrive after their segment was delivered.
+  // apart from encoded audio that ends long before the video in a recording made from one input:
+  // the muxer stops holding the video for it 10 s after its last packet, and the encoder's last
+  // frames come out only once the whole input has ended. No margin short of the whole output
+  // covers that audio, and the assembler fails an attempt whose audio arrives after its segment.
   private static final long MARGIN_SECONDS = 1;
 
   private final SegmentIntervals intervals;

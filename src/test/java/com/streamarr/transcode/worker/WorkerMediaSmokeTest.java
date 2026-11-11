@@ -5905,37 +5905,40 @@ class WorkerMediaSmokeTest {
         .isEqualTo(unwithheldUploads.contentOf(unwithheldUploads.names()));
   }
 
+  // FFmpeg counts an encoded audio stream as ended once its filter graph ends, before the encoder
+  // has written the frames queued for it, and then lets the copied video's input run on. The
+  // server pads every audio encode to the advertised end, which keeps the graph running beside the
+  // video. Without padding, thread scheduling decides whether the encoder's last frames arrive
+  // before the worker has delivered segment 1.
   @Test
   @DisplayName(
-      "Should upload every media segment without the audio encoder's last frames when an attempt"
-          + " that encodes its audio reads audio that ends long before the video")
-  void shouldUploadEveryMediaSegmentWithoutTheAudioEncodersLastFramesWhenTheAudioEndsLongBeforeIt()
-      throws Exception {
+      "Should complete only with every audio packet that FFmpeg wrote, and report a failed"
+          + " transcode otherwise, when an attempt that encodes its audio without padding reads"
+          + " audio that ends long before the video")
+  void
+      shouldCompleteOnlyWithEveryAudioPacketThatFfmpegWroteWhenUnpaddedAudioEndsLongBeforeTheVideo()
+          throws Exception {
     var source = audioEndsLongBeforeVideoSource();
     var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
-    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
-    job.getExecutionBuilder().setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
+    var unpadded = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    unpadded.getExecutionBuilder().setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
+    var job = unpadded.build();
 
-    var uploads =
-        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+    var ended = executeToItsEnd(engine(softwareCapabilities(), launcher), source.getParent(), job);
 
-    assertThat(uploads.names())
-        .containsExactlyElementsOf(uploadNames(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT));
     var ffmpegAudio =
         FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root).stream()
             .filter(Packet::isAudio)
             .toList();
-    var uploadedAudio =
-        FfprobePackets.of(uploads.contentOf(uploads.names()), root).stream()
-            .filter(Packet::isAudio)
-            .toList();
-    // The copied video runs ahead of the audio still inside FFmpeg's decoder, filter and encoder,
-    // and the muxer stops holding the video for it 10 s after the audio's last packet. The frames
-    // that come out later, as many as thread scheduling leaves behind, arrive after their segment
-    // was delivered, and the worker drops them: only the end of FFmpeg's audio can be missing.
-    assertThat(uploadedAudio)
-        .isNotEmpty()
-        .containsExactlyElementsOf(ffmpegAudio.subList(0, uploadedAudio.size()));
+    assertThat(ffmpegAudio).isNotEmpty();
+    var expected = Optional.<JobAttemptFailure>empty();
+    if (!audioPacketsOf(ended.uploads()).equals(ffmpegAudio)) {
+      expected = Optional.of(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+    }
+
+    assertThat(ended.failure())
+        .as("the failure of an attempt whose uploads lack audio that FFmpeg wrote, and no other")
+        .isEqualTo(expected);
   }
 
   // The source's AAC ends at 10 s, inside segment 1, and its video at 90 s: FFmpeg writes the
@@ -9910,6 +9913,33 @@ class WorkerMediaSmokeTest {
   }
 
   private record FailedExecution(JobAttemptFailed failure, MediaUploads uploads) {}
+
+  // Runs the job until the worker reports that its attempt completed or failed.
+  private EndedExecution executeToItsEnd(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    try (var controlPlane = new MediaControlPlane(_ -> {});
+        var worker = workerBuilder(sourceRoot).engine(engine).ffprobe(probeExecutor()).build()) {
+      worker.start("127.0.0.1", controlPlane.port());
+      var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
+      controlPlane.responses.onNext(
+          EstablishWorkerSessionResponse.newBuilder()
+              .setStartVariant(
+                  StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(job))
+              .build());
+
+      var failure =
+          controlPlane
+              .completed
+              .handle((_, _) -> Optional.ofNullable(controlPlane.failed.getNow(null)))
+              .get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      return new EndedExecution(
+          failure.map(JobAttemptFailed::getFailure),
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
+    }
+  }
+
+  // An attempt's uploads, and the failure that it reported in place of a completion.
+  private record EndedExecution(Optional<JobAttemptFailure> failure, MediaUploads uploads) {}
 
   private static List<String> uploadNames(int mediaSegmentCount) {
     return Stream.concat(

@@ -239,8 +239,8 @@ class SegmentAssemblerTest {
 
   @Test
   @DisplayName(
-      "Should drop the padded audio that starts at or after the advertised end, without counting"
-          + " it late, when an attempt pads its audio with silence")
+      "Should drop the padded audio that starts at or after the advertised end, without refusing"
+          + " it as late, when an attempt pads its audio with silence")
   void shouldDropThePaddedAudioThatStartsAtOrAfterTheAdvertisedEndWhenAnAttemptPadsItsAudio()
       throws IOException {
     var output =
@@ -261,7 +261,6 @@ class SegmentAssemblerTest {
     assertThat(audioStartsOf(output, closed.getLast()))
         .as("segment 1 up to the advertised end at 1.5 s; the last sample keeps its full length")
         .containsExactly(48_000L, 60_000L);
-    assertThat(assembler.droppedLateAudioSampleCount()).isZero();
   }
 
   @Test
