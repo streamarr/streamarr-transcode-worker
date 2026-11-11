@@ -37,7 +37,6 @@ final class AudioSampleQueue {
   private boolean withoutSoundTrack;
   // Before any audio sample, none has run backwards.
   private long lastPresentationTime = Long.MIN_VALUE;
-  private long droppedLateSampleCount;
 
   /**
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence; empty
@@ -104,11 +103,6 @@ final class AudioSampleQueue {
     while (!held.isEmpty() && held.peekLast().number() > number) {
       held.removeLast();
     }
-  }
-
-  /** The audio samples dropped because they arrived after their segment closed. */
-  long droppedLateSampleCount() {
-    return droppedLateSampleCount;
   }
 
   Stream<Fragment> heldFragments() {

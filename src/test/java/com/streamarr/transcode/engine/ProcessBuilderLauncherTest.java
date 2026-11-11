@@ -200,7 +200,7 @@ class ProcessBuilderLauncherTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertCarriesTheRecordedSamples(sink.acceptedBytes(), recording(ENCODED_RECORDING));
   }
 
