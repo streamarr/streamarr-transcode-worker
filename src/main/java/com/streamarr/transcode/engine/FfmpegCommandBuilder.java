@@ -384,11 +384,16 @@ public class FfmpegCommandBuilder {
   // beside its audio, and its framecrc stays with the first input.
   private static SourceStreamInputs sourceStreamInputs(
       TranscodeRequest request, EncoderInput input) {
-    if (readsAudioFromItsOwnInput(request, input) && !holdsLastFrame(request)) {
+    if (copiesVideoBesideAudioOfItsOwnInput(request, input)) {
       return new SourceStreamInputs(input.sourceInputIndex(), AUDIO_INPUT);
     }
 
     return new SourceStreamInputs(input.sourceInputIndex(), input.sourceInputIndex());
+  }
+
+  private static boolean copiesVideoBesideAudioOfItsOwnInput(
+      TranscodeRequest request, EncoderInput input) {
+    return readsAudioFromItsOwnInput(request, input) && !holdsLastFrame(request);
   }
 
   // The exclusions undo both maps of a named stream that is no audio stream, and the PCM encoder
