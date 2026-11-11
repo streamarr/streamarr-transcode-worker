@@ -6032,34 +6032,14 @@ class WorkerMediaSmokeTest {
       throws Exception {
     var matroska = seekableSources.resolve("counted-audio-ends-long-before-video.mkv");
     if (!generatedSeekableSources.contains(matroska)) {
-      var samples = seekableSources.resolve("counted-audio.s32le");
-      var counted =
-          ByteBuffer.allocate(COUNTED_AUDIO_SAMPLES * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-      IntStream.rangeClosed(1, COUNTED_AUDIO_SAMPLES).forEach(count -> counted.putInt(count << 8));
-      Files.write(samples, counted.array());
-      runFfmpeg(
-          List.of(
-              "-f",
-              "lavfi",
-              "-i",
-              "testsrc=size=64x36:rate=24:duration=60",
-              "-f",
-              "s32le",
-              "-ar",
-              String.valueOf(COUNTED_AUDIO_SAMPLE_RATE),
-              "-ac",
-              "1",
-              "-i",
-              samples.toString(),
-              "-c:v",
-              "libx264",
-              "-g",
-              "48",
-              "-c:a",
-              "flac",
-              "-sample_fmt",
-              "s32"),
-          matroska);
+      var arguments =
+          Stream.of(
+                  List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=60"),
+                  countedAudioInput(),
+                  List.of("-c:v", "libx264", "-g", "48", "-c:a", "flac", "-sample_fmt", "s32"))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, matroska);
       generatedSeekableSources.add(matroska);
     }
 
@@ -6070,6 +6050,29 @@ class WorkerMediaSmokeTest {
     }
 
     return source;
+  }
+
+  // The input that reads the counted samples: 10 s of signed 32-bit little-endian mono PCM at
+  // 48 kHz whose sample n holds n + 1 in its upper 24 bits.
+  private static synchronized List<String> countedAudioInput() throws Exception {
+    var samples = seekableSources.resolve("counted-audio.s32le");
+    if (!generatedSeekableSources.contains(samples)) {
+      var counted =
+          ByteBuffer.allocate(COUNTED_AUDIO_SAMPLES * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+      IntStream.rangeClosed(1, COUNTED_AUDIO_SAMPLES).forEach(count -> counted.putInt(count << 8));
+      Files.write(samples, counted.array());
+      generatedSeekableSources.add(samples);
+    }
+
+    return List.of(
+        "-f",
+        "s32le",
+        "-ar",
+        String.valueOf(COUNTED_AUDIO_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-i",
+        samples.toString());
   }
 
   /**
