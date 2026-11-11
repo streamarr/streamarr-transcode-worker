@@ -20,6 +20,8 @@ import static com.streamarr.transcode.probe.EbmlElements.header;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
@@ -50,8 +52,10 @@ import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -112,6 +116,24 @@ class FfprobeExecutorKeyframeTest {
          "time_base":"1/90000","has_b_frames":2,"disposition":{"attached_pic":0}},
         {"index":1,"codec_type":"audio","codec_name":"aac","id":"0x101","time_base":"1/90000",
          "disposition":{"attached_pic":0}}]}
+      """;
+  private static final String TWO_AUDIO_STREAMS =
+      """
+      {"format":{"format_name":"mpegts","start_time":"0.000000"},
+       "streams":[
+        {"index":0,"codec_type":"video","codec_name":"h264","time_base":"1/90000",
+         "has_b_frames":2},
+        {"index":1,"codec_type":"audio","codec_name":"aac","sample_rate":"48000",
+         "time_base":"1/48000"},
+        {"index":2,"codec_type":"subtitle","codec_name":"dvb_subtitle","time_base":"1/90000"},
+        {"index":3,"codec_type":"audio","codec_name":"mp2","sample_rate":"44100",
+         "time_base":"1/1000"}]}
+      """;
+  private static final String AVI_STREAMS_WITHOUT_REORDERING =
+      """
+      {"format":{"format_name":"avi","start_time":"0.000000"},
+       "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                   "time_base":"1/24","has_b_frames":0}]}
       """;
   private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
   private static final String NO_PACKETS =
@@ -817,6 +839,326 @@ class FfprobeExecutorKeyframeTest {
                 .build());
   }
 
+  // ffprobe states no sample rate for the fixture's audio stream, so the scan copies the video
+  // stream alone. The last packet presents at 396,000 ticks of 1/90000 s for 3,750 ticks, and the
+  // container starts at 1.460111 s: 399,750 / 90,000 s - 1.460111 s = 2.981555667 s.
+  @Test
+  @DisplayName(
+      "Should report where the chosen video stream ends on the keyframes' timeline when a packet"
+          + " scan reads its packets")
+  void shouldReportWhereTheChosenVideoStreamEndsOnTheKeyframesTimelineWhenAPacketScanReadsIt() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0,     126000,     133500,     3750,      100, 0x00000000
+                0,     388500,     396000,     3750,      100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsExactly(entry(0, Duration.ofNanos(2_981_555_667L)));
+    assertThat(ffprobe.packetScanArguments())
+        .containsSubsequence("-copyts", "-map", "0:0", "-c", "copy", "-f", "framecrc")
+        .containsOnlyOnce("-map");
+  }
+
+  // The source's streams 1 and 3 are audio and stream 2 is a subtitle, so FFmpeg's output streams
+  // 1 and 2 are the source's streams 1 and 3. The video ends at 4 s, the first audio stream at
+  // 6.016 s and the second at 5.015 s, each in its own time base.
+  @Test
+  @DisplayName(
+      "Should report where the chosen video stream and each audio stream ends when a packet scan"
+          + " reads a source with two audio streams")
+  void shouldReportWhereTheChosenVideoStreamAndEachAudioStreamEndsWhenAScanReadsTwoAudioStreams() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(TWO_AUDIO_STREAMS)
+            .packetScan(
+                """
+                #tb 0: 1/90000
+                #tb 1: 1/48000
+                #tb 2: 1/1000
+                0,          0,          0,     3750,      100, 0x00000000
+                1,          0,          0,     1024,      100, 0x00000000
+                2,          0,          0,       23,      100, 0x00000000
+                1,     287744,     287744,     1024,      100, 0x00000000
+                0,     356250,     356250,     3750,      100, 0x00000000, F=0x0
+                2,       4992,       4992,       23,      100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report))
+        .containsExactly(
+            entry(0, Duration.ofSeconds(4)),
+            entry(1, Duration.ofMillis(6_016)),
+            entry(3, Duration.ofMillis(5_015)));
+    assertThat(ffprobe.packetScanArguments())
+        .containsSubsequence("-map", "0:0", "-map", "0:1", "-map", "0:3", "-c", "copy");
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(1);
+  }
+
+  // FFmpeg refuses to write an audio stream whose sample rate it does not know, which would fail
+  // the whole scan. Without a time base, the scan could not place the stream's end.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "a sample rate of zero | \"sample_rate\":\"0\",\"time_base\":\"1/48000\"",
+        "no sample rate | \"time_base\":\"1/48000\"",
+        "no time base | \"sample_rate\":\"48000\""
+      })
+  @DisplayName("Should leave an audio stream out of the packet scan when FFmpeg cannot copy it")
+  void shouldLeaveAnAudioStreamOutOfThePacketScanWhenFfmpegCannotCopyIt(
+      String description, String audioFields) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mpegts","start_time":"0.000000"},
+                 "streams":[
+                  {"index":0,"codec_type":"video","codec_name":"h264","time_base":"1/90000",
+                   "has_b_frames":2},
+                  {"index":1,"codec_type":"audio","codec_name":"aac",%s}]}
+                """
+                    .formatted(audioFields))
+            .packetScan("0, 0, 0, 3750, 100, 0x00000000\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsOnlyKeys(0);
+    assertThat(ffprobe.packetScanArguments()).containsOnlyOnce("-map");
+  }
+
+  // The packets come in decode order. The second packet presents last, at 144,750 ticks for 3,750
+  // ticks, and the two B-frames after it present earlier: 148,500 / 90,000 s - 1.460111 s.
+  @Test
+  @DisplayName(
+      "Should end the scanned stream at the packet that presents last when later packets present"
+          + " before it")
+  void shouldEndTheScannedStreamAtThePacketThatPresentsLastWhenLaterPacketsPresentBeforeIt() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0,     126000,     133500,     3750,      100, 0x00000000
+                0,     129750,     144750,     3750,      100, 0x00000000, F=0x0
+                0,     133500,     137250,     3750,      100, 0x00000000, F=0x0
+                0,     137250,     141000,     3750,      100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsExactly(entry(0, Duration.ofNanos(189_889_000)));
+  }
+
+  // The pinned FFmpeg printed these four lines for the tail of an H.264 MPEG-TS stream with
+  // B-frames, after the PES header of the packet that presents last lost its presentation time.
+  // FFmpeg fills the packet's decode time, 478,500 ticks, from the packets before it and prints no
+  // presentation time, and the fMP4 muxer writes the packet at its decode time. The stream then
+  // ends where the packet before it ends, at 489,750 ticks, in the scan and in a copy:
+  // 489,750 / 90,000 s - 1.460111 s.
+  @Test
+  @DisplayName(
+      "Should count a packet at its decode time when it has no presentation time in a stream that"
+          + " reorders frames")
+  void shouldCountAPacketAtItsDecodeTimeWhenItHasNoPresentationTimeInAStreamThatReordersFrames() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0,     126000,     133500,     3750,      100, 0x00000000
+                0,     471000,     486000,     3750,      100, 0x00000000, F=0x0
+                0,     474750,     478500,     3750,      100, 0x00000000, F=0x0
+                0,     478500, -9223372036854775808,     3750,      100, 0x00000000, F=0x0
+                0,     482250,     482250,     3750,      100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsExactly(entry(0, Duration.ofNanos(3_981_555_667L)));
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(1);
+  }
+
+  // The time base is 1/24 and the container starts at zero. The last packet decodes at 18 ticks for
+  // one tick and has no presentation time, so the stream ends at 19 / 24 s.
+  @Test
+  @DisplayName(
+      "Should end the scanned stream by its last packet's decode time when that packet has no"
+          + " presentation time")
+  void shouldEndTheScannedStreamByItsLastPacketsDecodeTimeWhenThatPacketHasNoPresentationTime() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(AVI_STREAMS_WITHOUT_REORDERING)
+            .packetScan(
+                """
+                0, 0, 0, 1, 100, 0x00000000
+                0, 18, -9223372036854775808, 1, 100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("avi.avi"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsExactly(entry(0, Duration.ofNanos(791_666_667)));
+  }
+
+  // The end of a packet without a positive duration is unknown, and the scan never guesses one.
+  // FFmpeg's Matroska demuxer prints 0 for a block without a duration.
+  @ParameterizedTest
+  @CsvSource({"0", "-42"})
+  @DisplayName(
+      "Should report the keyframe positions without the stream's end when the packet that presents"
+          + " last has no positive duration")
+  void
+      shouldReportKeyframePositionsWithoutStreamsEndWhenPacketThatPresentsLastHasNoPositiveDuration(
+          long duration) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan(
+                """
+                0, 0, 0, 42, 100, 0x00000000
+                0, 2917, 2917, %d, 100, 0x00000000
+                """
+                    .formatted(duration))
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).isEmpty();
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(2);
+  }
+
+  // An earlier packet without a duration hides nothing: the packet that presents last ends the
+  // stream, at 2,959 ticks of 1/1000 s, 23 ms after the container's start.
+  @Test
+  @DisplayName(
+      "Should end the scanned stream at the packet that presents last when an earlier packet has no"
+          + " duration")
+  void shouldEndTheScannedStreamAtThePacketThatPresentsLastWhenAnEarlierPacketHasNoDuration() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan(
+                """
+                0, 0, 0, 0, 100, 0x00000000
+                0, 2917, 2917, 42, 100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsExactly(entry(0, Duration.ofMillis(2_982)));
+  }
+
+  // A packet with neither time has no place on the timeline. An end beyond the long range, or
+  // beyond the 315,576,000,000 s that the contract's duration holds, cannot be reported.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "a packet with neither a presentation time nor a decode time"
+            + " | 0, -9223372036854775808, -9223372036854775808, 3750, 100, 0x00000000, F=0x0",
+        "a packet whose end exceeds the long range"
+            + " | 0, 129750, 9223372036854775806, 3750, 100, 0x00000000, F=0x0",
+        "a packet whose end exceeds the contract's duration range"
+            + " | 0, 129750, 9223372036854772057, 3750, 100, 0x00000000, F=0x0"
+      })
+  @DisplayName(
+      "Should report the keyframe positions without the stream's end when the end of a scanned"
+          + " packet is unknown")
+  void shouldReportTheKeyframePositionsWithoutTheStreamsEndWhenTheEndOfAScannedPacketIsUnknown(
+      String description, String packetWithoutAnEnd) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                "0, 126000, 133500, 3750, 100, 0x00000000\n"
+                    + packetWithoutAnEnd
+                    + "\n0, 189750, 197250, 3750, 100, 0x00000000\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).isEmpty();
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(2);
+  }
+
+  // The video's unknown end leaves the audio stream's end in place: each stream ends on its own.
+  @Test
+  @DisplayName("Should report the audio stream's end when only the video stream's end is unknown")
+  void shouldReportTheAudioStreamsEndWhenOnlyTheVideoStreamsEndIsUnknown() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(TWO_AUDIO_STREAMS)
+            .packetScan(
+                """
+                0,          0,          0,        0,      100, 0x00000000
+                1,     287744,     287744,     1024,      100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsExactly(entry(1, Duration.ofMillis(6_016)));
+  }
+
+  // The container starts at 10 s and the stream's only packet ends at 3,750 ticks of 1/90000 s,
+  // before that start. The contract carries a positive end only.
+  @Test
+  @DisplayName(
+      "Should report the keyframe positions without the stream's end when the stream ends before"
+          + " the container's start")
+  void shouldReportKeyframePositionsWithoutStreamsEndWhenStreamEndsBeforeTheContainersStart() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mpegts","start_time":"10.000000"},
+                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                             "time_base":"1/90000","has_b_frames":2}]}
+                """)
+            .packetScan("0, 0, 0, 3750, 100, 0x00000000\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).isEmpty();
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("Should fail the packet scan when FFmpeg prints a packet of a stream it did not map")
+  void shouldFailThePacketScanWhenFfmpegPrintsAPacketOfAStreamItDidNotMap() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0, 126000, 133500, 3750, 100, 0x00000000
+                1, 126000, 133500, 3750, 100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
   @Test
   @DisplayName(
       "Should take each keyframe's presentation time from its decode time when the scanned stream"
@@ -1243,6 +1585,27 @@ class FfprobeExecutorKeyframeTest {
             });
   }
 
+  // The AVI file's video ends at 97 ticks of 1/24 s, as its duration_ts states, and its audio at
+  // 155 ticks of 32/1225 s. The raw HEVC stream's last packet presents at 216,000 ticks of
+  // 1/1200000 s for 24,000 ticks.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordedStreamEnds")
+  @DisplayName("Should end each scanned stream where the recorded packet scan's last packet ends")
+  void shouldEndEachScannedStreamWhereTheRecordedPacketScansLastPacketEnds(
+      String recording, Map<Integer, Duration> expectedEnds) {
+    var report = recordedScan(recording).executor().probe(Path.of(recording), packetScanRequest());
+
+    assertThat(scannedEnds(report)).isEqualTo(expectedEnds);
+  }
+
+  private static Stream<Arguments> recordedStreamEnds() {
+    return Stream.of(
+        arguments(
+            "avi.avi",
+            Map.of(0, Duration.ofNanos(4_041_666_667L), 1, Duration.ofNanos(4_048_979_592L))),
+        arguments("hevc-pir.hevc", Map.of(0, Duration.ofMillis(200))));
+  }
+
   @Test
   @DisplayName(
       "Should report the keyframes unavailable when ffprobe does not say whether the scanned stream"
@@ -1311,13 +1674,15 @@ class FfprobeExecutorKeyframeTest {
                   {"index":1,"codec_type":"video","codec_name":"h264","time_base":"1/90000",
                    "has_b_frames":2,"disposition":{"attached_pic":0}}]}
                 """)
-            .packetScan("1, 0, 0, 3750, 100, 0x00000000\n")
+            .packetScan("0, 0, 0, 3750, 100, 0x00000000\n")
             .build();
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
+    // FFmpeg numbers its output streams from 0, so the mapped video stream's packets are stream 0.
     assertThat(report.result().getMedia().getKeyframes().getPositions().getStreamIndex())
         .isEqualTo(1);
+    assertThat(ffprobe.packetScanArguments()).containsSubsequence("-map", "0:1", "-c", "copy");
   }
 
   @Test
@@ -1726,6 +2091,18 @@ class FfprobeExecutorKeyframeTest {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
   }
 
+  // The end that the scan reports for each source stream, by stream index, in the report's order.
+  private static Map<Integer, Duration> scannedEnds(ProbeAttemptReport report) {
+    var ends = new LinkedHashMap<Integer, Duration>();
+    for (var end : report.result().getMedia().getStreamEndsList()) {
+      ends.put(
+          end.getStreamIndex(),
+          Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()));
+    }
+
+    return ends;
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"mp4-h264-aac-ac3.mp4", "mov-hevc-aac.mov"})
   @DisplayName(
@@ -1852,7 +2229,13 @@ class FfprobeExecutorKeyframeTest {
       String packetScan,
       String packetScanDiagnostics,
       int packetScanExitCode,
-      boolean cancelAfterStreams) {
+      boolean cancelAfterStreams,
+      List<String> packetScanArguments) {
+
+    // The arguments of the packet scan that the executor ran, which this fake collects.
+    ScriptedFfprobe {
+      packetScanArguments = new ArrayList<>();
+    }
 
     FfprobeExecutor executor() {
       return new FfprobeExecutor(new ObjectMapper(), this::answer);
@@ -1871,6 +2254,7 @@ class FfprobeExecutorKeyframeTest {
 
       if (command.tool() == ProbeCommand.ProbeTool.FFMPEG) {
         assertThat(packetScan).as("a scripted packet scan").isNotNull();
+        packetScanArguments.addAll(arguments);
         return new CompletedProcess(packetScan, packetScanExitCode, false)
             .withDiagnostics(packetScanDiagnostics == null ? "" : packetScanDiagnostics);
       }

@@ -22,7 +22,8 @@ import tools.jackson.databind.JsonNode;
  * Adds the keyframe positions of the chosen video stream to a successful probe result, found by
  * copying every packet of that stream through FFmpeg. FFmpeg prints one framecrc line per packet,
  * and the scan keeps only the keyframes, so its memory grows with the keyframe count rather than
- * the packet count.
+ * the packet count. The scan copies each audio stream's packets beside the video's, and reports
+ * where the chosen video stream and each audio stream ends (ADR 0037, early ends).
  */
 @RequiredArgsConstructor
 final class KeyframePacketScan {
@@ -67,29 +68,10 @@ final class KeyframePacketScan {
 
     var stream = chosen.get().description();
     var timeBase = timeBase(stream);
-    var keyframes = new PacketKeyframes(timeRule(probed, stream));
+    var scanned = scannedStreams(probed, chosen.get().streamIndex(), timeBase);
+    var keyframes = new PacketKeyframes(timeRule(probed, stream), scanned.size());
     var diagnostics = new DemuxingDiagnostics();
-    // -copyts keeps each packet's time from the source; the report subtracts the start time.
-    var exitCode =
-        ffmpeg.run(
-            List.of(
-                "-nostdin",
-                "-hide_banner",
-                "-nostats",
-                "-v",
-                "error",
-                "-copyts",
-                "-i",
-                probed.source().toString(),
-                "-map",
-                "0:" + chosen.get().streamIndex(),
-                "-c",
-                "copy",
-                "-f",
-                "framecrc",
-                "-"),
-            keyframes,
-            diagnostics);
+    var exitCode = ffmpeg.run(arguments(probed, scanned), keyframes, diagnostics);
     if (keyframes.isMissingTime()) {
       return unavailable(
           probed,
@@ -120,8 +102,75 @@ final class KeyframePacketScan {
         .timeBase(timeBase)
         .source(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN)
         .keyframes(keyframes.times())
+        .streamEnds(streamEnds(scanned, keyframes))
         .build()
         .report();
+  }
+
+  /** One stream that the scan copies: its index in the source and its time base. */
+  private record ScannedStream(int index, TimeBase timeBase) {}
+
+  /**
+   * The streams that the scan copies, in the order of FFmpeg's output streams: the chosen video
+   * stream, then each audio stream. FFmpeg refuses to write an audio stream whose sample rate it
+   * does not know, and that would fail the whole scan, so the scan leaves such a stream out. It
+   * also leaves out an audio stream without a readable time base, whose end it could not place.
+   */
+  private static List<ScannedStream> scannedStreams(
+      ProbedSource probed, int chosenVideoStream, TimeBase videoTimeBase) {
+    var scanned = new ArrayList<ScannedStream>();
+    scanned.add(new ScannedStream(chosenVideoStream, videoTimeBase));
+    for (var stream : probed.ffprobeOutput().path("streams")) {
+      var audioTimeBase = ProbeTimeline.timeBase(stream, "time_base");
+      if (isCopiedAudio(stream) && audioTimeBase.isPresent()) {
+        scanned.add(new ScannedStream(stream.path("index").asInt(), audioTimeBase.get()));
+      }
+    }
+
+    return scanned;
+  }
+
+  private static boolean isCopiedAudio(JsonNode stream) {
+    return FfprobeJson.text(stream, "codec_type").filter("audio"::equals).isPresent()
+        && stream.path("index").isIntegralNumber()
+        && FfprobeJson.number(stream, "sample_rate", Long::parseLong)
+            .filter(rate -> rate > 0)
+            .isPresent();
+  }
+
+  // -copyts keeps each packet's time from the source; the report subtracts the start time.
+  private static List<String> arguments(ProbedSource probed, List<ScannedStream> scanned) {
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-nostdin",
+                "-hide_banner",
+                "-nostats",
+                "-v",
+                "error",
+                "-copyts",
+                "-i",
+                probed.source().toString()));
+    for (var stream : scanned) {
+      arguments.add("-map");
+      arguments.add("0:" + stream.index());
+    }
+
+    arguments.addAll(List.of("-c", "copy", "-f", "framecrc", "-"));
+    return arguments;
+  }
+
+  private static List<ScannedStreamEnd> streamEnds(
+      List<ScannedStream> scanned, PacketKeyframes packets) {
+    var ends = new ArrayList<ScannedStreamEnd>();
+    for (var output = 0; output < scanned.size(); output++) {
+      var stream = scanned.get(output);
+      packets
+          .streamEnd(output)
+          .ifPresent(end -> ends.add(new ScannedStreamEnd(stream.index(), stream.timeBase(), end)));
+    }
+
+    return ends;
   }
 
   private static ProbeAttemptReport unavailable(
@@ -179,16 +228,24 @@ final class KeyframePacketScan {
 
   /**
    * Collects the keyframes from FFmpeg's framecrc packet lines, such as {@code 0, -1024, 0, 512,
-   * 3109, 0x5e1c1fb1}: the stream, decode time, presentation time, duration, size and checksum.
-   * Flags and side data may follow, such as {@code F=0x0}.
+   * 3109, 0x5e1c1fb1}: the output stream, decode time, presentation time, duration, size and
+   * checksum. Flags and side data may follow, such as {@code F=0x0}. Output stream 0 is the chosen
+   * video stream, and the scan keeps only the end of every other output stream.
    */
-  @RequiredArgsConstructor
   private static final class PacketKeyframes implements PacketLines {
 
     private final TimeRule rule;
     private final List<KeyframeTime> times = new ArrayList<>();
+    private final List<StreamEnd> streamEnds = new ArrayList<>();
     private boolean missingTime;
     private boolean keyframeNotAfterPrevious;
+
+    PacketKeyframes(TimeRule rule, int outputStreamCount) {
+      this.rule = rule;
+      for (var output = 0; output < outputStreamCount; output++) {
+        streamEnds.add(new StreamEnd());
+      }
+    }
 
     /**
      * A keyframe without a time, or one whose times are not both after the previous keyframe's,
@@ -202,11 +259,17 @@ final class KeyframePacketScan {
       }
 
       var packet = Packet.parse(line);
-      if (!packet.isKeyframe()) {
+      if (packet.outputStream() >= streamEnds.size()) {
+        throw new PacketScanException(
+            "FFmpeg printed a packet of a stream that the scan did not map");
+      }
+
+      streamEnds.get(packet.outputStream()).extendBy(packet);
+      if (packet.outputStream() != 0 || !packet.isKeyframe()) {
         return true;
       }
 
-      var time = keyframeTime(packet.pts(), packet.dts());
+      var time = keyframeTime(timesOf(packet));
       if (time.isEmpty()) {
         missingTime = true;
         times.clear();
@@ -223,14 +286,18 @@ final class KeyframePacketScan {
       return true;
     }
 
-    private Optional<KeyframeTime> keyframeTime(OptionalLong pts, OptionalLong dts) {
-      var packetTimes =
-          switch (rule) {
-            case AS_REPORTED -> new PacketTimes(pts, dts);
-            case DECODE_AT_PRESENTATION -> new PacketTimes(pts, pts);
-            case EQUAL_WHEN_ONE_IS_MISSING ->
-                new PacketTimes(pts.isPresent() ? pts : dts, dts.isPresent() ? dts : pts);
-          };
+    private PacketTimes timesOf(Packet packet) {
+      var pts = packet.pts();
+      var dts = packet.dts();
+      return switch (rule) {
+        case AS_REPORTED -> new PacketTimes(pts, dts);
+        case DECODE_AT_PRESENTATION -> new PacketTimes(pts, pts);
+        case EQUAL_WHEN_ONE_IS_MISSING ->
+            new PacketTimes(pts.isPresent() ? pts : dts, dts.isPresent() ? dts : pts);
+      };
+    }
+
+    private static Optional<KeyframeTime> keyframeTime(PacketTimes packetTimes) {
       if (packetTimes.presentation().isEmpty() || packetTimes.decode().isEmpty()) {
         return Optional.empty();
       }
@@ -251,11 +318,58 @@ final class KeyframePacketScan {
     List<KeyframeTime> times() {
       return times;
     }
+
+    /** The end of the output stream's packets, in ticks from the demuxer's zero, when known. */
+    OptionalLong streamEnd(int outputStream) {
+      return streamEnds.get(outputStream).ticks();
+    }
+  }
+
+  /**
+   * Where one stream's packets end: the latest sum of a packet's time and its duration. A packet's
+   * time is its presentation time. FFmpeg's stream copy passes a packet without a presentation time
+   * on with its decode time, which FFmpeg fills from the packets before it, and the fMP4 muxer
+   * writes the packet at that time, so the packet counts at its decode time. The end is unknown
+   * when a packet has neither time, when a packet's end exceeds the long range, or when the packet
+   * that presents last has no positive duration: that packet's end is then unknown, and the scan
+   * never guesses one.
+   */
+  private static final class StreamEnd {
+
+    private long latestEnd = Long.MIN_VALUE;
+    private long latestTime = Long.MIN_VALUE;
+    private boolean latestPacketHasDuration;
+    private boolean isUnknown;
+
+    void extendBy(Packet packet) {
+      var time = packet.pts().isPresent() ? packet.pts() : packet.dts();
+      var duration = Math.max(0, packet.duration());
+      if (time.isEmpty() || time.getAsLong() > Long.MAX_VALUE - duration) {
+        isUnknown = true;
+        return;
+      }
+
+      if (time.getAsLong() >= latestTime) {
+        latestTime = time.getAsLong();
+        latestPacketHasDuration = duration > 0;
+      }
+
+      latestEnd = Math.max(latestEnd, time.getAsLong() + duration);
+    }
+
+    OptionalLong ticks() {
+      if (isUnknown || !latestPacketHasDuration) {
+        return OptionalLong.empty();
+      }
+
+      return OptionalLong.of(latestEnd);
+    }
   }
 
   private record PacketTimes(OptionalLong presentation, OptionalLong decode) {}
 
-  private record Packet(OptionalLong pts, OptionalLong dts, int flags) {
+  private record Packet(
+      int outputStream, OptionalLong pts, OptionalLong dts, long duration, int flags) {
 
     static Packet parse(String line) {
       var fields = Arrays.stream(line.split(",")).map(String::strip).toList();
@@ -270,7 +384,12 @@ final class KeyframePacketScan {
               .findFirst()
               .map(field -> Integer.decode(field.substring("F=".length())))
               .orElse(KEYFRAME_FLAG);
-      return new Packet(time(fields.get(2)), time(fields.get(1)), flags);
+      return new Packet(
+          Integer.parseInt(fields.get(0)),
+          time(fields.get(2)),
+          time(fields.get(1)),
+          Long.parseLong(fields.get(3)),
+          flags);
     }
 
     boolean isKeyframe() {
