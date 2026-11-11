@@ -295,10 +295,14 @@ class WorkerMediaSmokeTest {
   private static final int COUNTED_AUDIO_SEGMENT_COUNT = 20;
   private static final int COUNTED_AUDIO_ADVERTISED_END_SAMPLES =
       COUNTED_AUDIO_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
-  // The counted MPEG-TS sources' 11.5 s of video and 10 s of audio start 0.5 s apart and end by
-  // 12 s, in four segments of 3 s.
-  private static final int COUNTED_TRANSPORT_STREAM_SEGMENT_COUNT = 4;
-  private static final int COUNTED_TRANSPORT_STREAM_VIDEO_MILLIS = 11_500;
+  // The counted MPEG-TS and MPEG-PS sources' 11.5 s of video and 10 s of audio start 0.5 s apart
+  // and end by 12 s, in four segments of 3 s.
+  private static final int COUNTED_MPEG_SOURCE_SEGMENT_COUNT = 4;
+  private static final int COUNTED_MPEG_SOURCE_VIDEO_MILLIS = 11_500;
+  // 10 ms at 48 kHz.
+  private static final int MPEG_PS_STAMP_TOLERANCE_SAMPLES = 480;
+  // One tick of the 90 kHz clock of MPEG-TS and MPEG-PS timestamps, rounded up.
+  private static final Duration MPEG_TICK = Duration.ofNanos(11_112);
   private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
   // FFmpeg's FLAC encoder codes 4,608 samples a frame at 48 kHz, less than 0.1 s.
   private static final int FLAC_SAMPLES_PAST_THE_END_AT_MOST = 4_800;
@@ -5802,22 +5806,23 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
-  // FFmpeg starts the timeline of an MPEG-TS input at the earliest start among the streams that
-  // the input's outputs use. The one input used the video and the audio. The audio's input uses
-  // both as well, its video through the null output, and the video's input, which uses the video
-  // alone, takes its timeline from the audio's input. Had the audio's input taken the timeline of
-  // the video's, audio that starts first would lose its first 0.5 s, and every stream would lie
-  // 0.5 s early. Without the null output, the same would happen to video that starts first.
+  // FFmpeg starts the timeline of an MPEG-TS or MPEG-PS input at the earliest start among the
+  // streams that the input's outputs use. The one input used the video and the audio. The audio's
+  // input uses both as well, its video through the null output, and the video's input, which uses
+  // the video alone, takes its timeline from the audio's input. Had the audio's input taken the
+  // timeline of the video's, audio that starts first would lose its first 0.5 s, and every stream
+  // would lie 0.5 s early. Without the null output, the same would happen to video that starts
+  // first.
   @ParameterizedTest(name = "{0} starts first")
-  @CsvSource({"audio, 0, 500", "video, 500, 0"})
+  @EnumSource(FirstStream.class)
   @DisplayName(
       "Should deliver every source audio sample once, and both streams at their own times, when a"
           + " copy encodes the audio of an MPEG-TS source whose streams start 0.5 s apart")
   void
       shouldDeliverBothStreamsAtTheirOwnTimesWhenACopyEncodesAudioOfAnMpegTsSourceWhoseStreamsStartApart(
-          String firstStream, int audioStartMillis, int videoStartMillis) throws Exception {
-    var source = countedTransportStreamSource(firstStream);
-    var job = countedTransportStreamJob(source);
+          FirstStream firstStream) throws Exception {
+    var source = countedMpegSource(MpegContainer.MPEG_TS, firstStream);
+    var job = countedMpegSourceJob(source);
 
     var completion =
         executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
@@ -5825,55 +5830,48 @@ class WorkerMediaSmokeTest {
     var uploads = completion.uploads();
     var delivered =
         DeliveredAudio.of(playable(uploads.contentOf(uploads.names())))
-            .startingAt(audioStartMillis * COUNTED_AUDIO_SAMPLE_RATE / 1_000);
+            .startingAt(firstStream.audioStartSample());
     assertThat(delivered.sourceSamples(0, COUNTED_AUDIO_SAMPLES))
         .as("the source's samples, counted from the audio's start")
         .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES, 0, 0));
     assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
     assertThat(firstVideoSampleOf(uploads, 0))
         .as("the video's first keyframe")
-        .isEqualTo(new BigFraction(videoStartMillis, 1_000));
-    assertThat(completion.report().getStreamEndsList())
-        .filteredOn(end -> end.getStreamIndex() == 0)
-        .extracting(
-            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .isEqualTo(new BigFraction(firstStream.videoStartMillis, 1_000));
+    assertThat(streamEnd(completion, job.getDecision().getVideo().getStreamIndex()))
         .as("the end of the video's 11.5 s")
-        .containsExactly(
-            Duration.ofMillis(videoStartMillis + COUNTED_TRANSPORT_STREAM_VIDEO_MILLIS));
-    assertThat(completion.report().getStreamEndsList())
-        .filteredOn(end -> end.getStreamIndex() == 1)
-        .extracting(
-            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .isEqualTo(
+            Duration.ofMillis(firstStream.videoStartMillis + COUNTED_MPEG_SOURCE_VIDEO_MILLIS));
+    assertThat(streamEnd(completion, job.getDecision().getAudio().getStreamIndex()))
         .as("the end of the audio's 10 s, which Blu-ray PCM rounds up to a whole 5 ms frame")
-        .singleElement(InstanceOfAssertFactories.DURATION)
         .isBetween(
-            Duration.ofMillis(audioStartMillis + 10_000),
-            Duration.ofMillis(audioStartMillis + 10_005));
+            Duration.ofMillis(firstStream.audioStartMillis + 10_000L),
+            Duration.ofMillis(firstStream.audioStartMillis + 10_005L));
   }
 
   // The replacement attempt for segment 2 seeks both inputs 3 s into the source, one segment
   // before its first, and must count both from the same zero as the start attempt. Its first FLAC
   // frame starts less than one frame of 2,400 samples after segment 2's start.
   @ParameterizedTest(name = "{0} starts first")
-  @CsvSource({"audio, 0, 500", "video, 500, 0"})
+  @EnumSource(FirstStream.class)
   @DisplayName(
       "Should deliver both streams at their own times, with every source audio sample from its"
           + " first frame on, when a replacement attempt for segment 2 seeks into an MPEG-TS source"
           + " whose streams start 0.5 s apart, copies it and encodes its audio")
   void
       shouldDeliverBothStreamsAtTheirOwnTimesWhenAReplacementSeeksIntoAnMpegTsSourceWhoseStreamsStartApart(
-          String firstStream, int audioStartMillis, int videoStartMillis) throws Exception {
-    var source = countedTransportStreamSource(firstStream);
-    var job = countedTransportStreamJob(source);
+          FirstStream firstStream) throws Exception {
+    var source = countedMpegSource(MpegContainer.MPEG_TS, firstStream);
+    var job = countedMpegSourceJob(source);
     job.getExecutionBuilder().setStartSequenceNumber(2);
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
     assertThat(uploads.names()).containsExactly("init.mp4", "segment2.m4s", "segment3.m4s");
-    var audioStart = audioStartMillis * COUNTED_AUDIO_SAMPLE_RATE / 1_000;
     var delivered =
-        DeliveredAudio.of(playable(uploads.contentOf(uploads.names()))).startingAt(audioStart);
-    var segmentStart = 2 * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE - audioStart;
+        DeliveredAudio.of(playable(uploads.contentOf(uploads.names())))
+            .startingAt(firstStream.audioStartSample());
+    var segmentStart = firstStream.segmentTwosStartSample();
     var firstSample = delivered.firstTime();
     assertThat(firstSample)
         .as("the first delivered sample, less than one FLAC frame after segment 2's start")
@@ -5884,53 +5882,170 @@ class WorkerMediaSmokeTest {
     assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
     assertThat(firstVideoSampleOf(uploads, 2))
         .as("the first keyframe at or after 6 s, of one every 2 s from the video's start")
-        .isEqualTo(new BigFraction(6_000L + videoStartMillis, 1_000));
+        .isEqualTo(new BigFraction(6_000L + firstStream.videoStartMillis, 1_000));
   }
 
-  // The copy of a counted MPEG-TS source that encodes its audio to FLAC and pads it to 12 s, in
-  // four segments of 3 s.
-  private static VariantJob.Builder countedTransportStreamJob(Path source) {
+  // An MPEG-PS source starts its timeline as an MPEG-TS source does (see the tests above). Its
+  // DVD PCM keeps every sample's value, but FFmpeg's MPEG-PS demuxer gives this source's packets
+  // times up to 6 ms from their first samples' own times, and an encode keeps those times. The
+  // source's samples are therefore counted in the order they play, and each must play within 10 ms
+  // of its own time, far less than the 0.5 s between the streams' starts by which a wrong timeline
+  // would move them.
+  @ParameterizedTest(name = "{0} starts first")
+  @EnumSource(FirstStream.class)
+  @DisplayName(
+      "Should play every source audio sample once, in order and near its own time, and the video"
+          + " at its own time, when a copy encodes the audio of an MPEG-PS source whose streams"
+          + " start 0.5 s apart")
+  void
+      shouldPlayEverySourceAudioSampleInOrderAndTheVideoAtItsTimeWhenACopyEncodesAudioOfAnMpegPsSourceWhoseStreamsStartApart(
+          FirstStream firstStream) throws Exception {
+    var source = countedMpegSource(MpegContainer.MPEG_PS, firstStream);
+    var job = countedMpegSourceJob(source);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var uploads = completion.uploads();
+    var delivered =
+        DeliveredAudio.of(playable(uploads.contentOf(uploads.names())))
+            .startingAt(firstStream.audioStartSample());
+    assertThat(delivered.sourceSamplesInPlayOrder(0, COUNTED_AUDIO_SAMPLES))
+        .as("the source's samples in the order the delivered audio plays them")
+        .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES, 0, 0));
+    assertThat(delivered.soundingSampleCount())
+        .as("the delivered samples that are not digital silence")
+        .isEqualTo(COUNTED_AUDIO_SAMPLES);
+    assertThat(delivered.largestDistanceFromSourceTime())
+        .as("the largest distance, in samples, between a sample's time and its source time")
+        .isLessThan(MPEG_PS_STAMP_TOLERANCE_SAMPLES);
+    assertThat(firstVideoSampleOf(uploads, 0))
+        .as("the video's first keyframe")
+        .isEqualTo(new BigFraction(firstStream.videoStartMillis, 1_000));
+    var videoEnd =
+        Duration.ofMillis(firstStream.videoStartMillis + COUNTED_MPEG_SOURCE_VIDEO_MILLIS);
+    assertThat(streamEnd(completion, job.getDecision().getVideo().getStreamIndex()))
+        .as("the end of the video's 11.5 s, whose last picture the muxer stamped up to a tick late")
+        .isBetween(videoEnd, videoEnd.plus(MPEG_TICK));
+    assertThat(streamEnd(completion, job.getDecision().getAudio().getStreamIndex()))
+        .as("the end of the audio's 10 s, as the source's stamps place it")
+        .isBetween(
+            Duration.ofMillis(firstStream.audioStartMillis + 10_000L),
+            Duration.ofMillis(firstStream.audioStartMillis + 10_010L));
+  }
+
+  // The end that the attempt's completion reports for the source stream with this index.
+  private static Duration streamEnd(CompletedExecution completion, int streamIndex) {
+    var ends =
+        completion.report().getStreamEndsList().stream()
+            .filter(end -> end.getStreamIndex() == streamIndex)
+            .map(
+                end ->
+                    Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+            .toList();
+    assertThat(ends).as("the ends reported for source stream %d", streamIndex).hasSize(1);
+    return ends.getFirst();
+  }
+
+  // The copy of a counted MPEG source that encodes its audio to FLAC and pads it to 12 s, in four
+  // segments of 3 s. It names each stream by the index that a probe of the source reads, as the
+  // server does: an MPEG-PS demuxer numbers the streams in the order of their first packets.
+  private static VariantJob.Builder countedMpegSourceJob(Path source) throws Exception {
     var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
-    paddedToSlots(job, COUNTED_TRANSPORT_STREAM_SEGMENT_COUNT);
+    paddedToSlots(job, COUNTED_MPEG_SOURCE_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setStreamIndex(firstStreamIndexOf(source, "v"));
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(firstStreamIndexOf(source, "a"));
     return job;
   }
 
+  // The index of the source's first stream of the type that an ffprobe stream specifier names.
+  // ffprobe lists an MPEG-TS source's streams once in its program and once more on their own.
+  private static int firstStreamIndexOf(Path source, String streamType) throws Exception {
+    var streams =
+        ffprobe(
+            List.of("-select_streams", streamType + ":0", "-show_entries", "stream=index"), source);
+    return Integer.parseInt(streams.lines().findFirst().orElseThrow());
+  }
+
+  // Where each stream of a counted MPEG source starts, in milliseconds on the timeline whose zero
+  // is the earlier start.
+  private enum FirstStream {
+    AUDIO(0, 500),
+    VIDEO(500, 0);
+
+    private final int audioStartMillis;
+    private final int videoStartMillis;
+
+    FirstStream(int audioStartMillis, int videoStartMillis) {
+      this.audioStartMillis = audioStartMillis;
+      this.videoStartMillis = videoStartMillis;
+    }
+
+    int audioStartSample() {
+      return audioStartMillis * COUNTED_AUDIO_SAMPLE_RATE / 1_000;
+    }
+
+    // Segment 2's start at 6 s, in samples from the audio's start.
+    int segmentTwosStartSample() {
+      return 2 * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE - audioStartSample();
+    }
+  }
+
+  // The containers whose timestamps may jump, each with the 24-bit PCM codec that it carries and
+  // keeps every sample's value in: Blu-ray PCM in MPEG-TS in its Blu-ray mode, and DVD PCM in an
+  // MPEG-PS source of the DVD kind.
+  private enum MpegContainer {
+    MPEG_TS("m2ts", List.of("-c:a", "pcm_bluray", "-f", "mpegts", "-mpegts_m2ts_mode", "1")),
+    MPEG_PS("vob", List.of("-c:a", "pcm_dvd", "-f", "vob"));
+
+    private final String extension;
+    private final List<String> audioCodecAndFormat;
+
+    MpegContainer(String extension, List<String> audioCodecAndFormat) {
+      this.extension = extension;
+      this.audioCodecAndFormat = audioCodecAndFormat;
+    }
+  }
+
   // 11.5 s of H.264 at 64x36 and 24 fps with a keyframe every 2 s and no B-frames, beside the
-  // counted audio as 24-bit mono Blu-ray PCM, which keeps every sample's value and which MPEG-TS
-  // carries in its Blu-ray mode. The stream that does not start first starts 0.5 s after the other,
-  // delayed in a stream copy, whose packets -itsoffset moves.
-  private static synchronized Path countedTransportStreamSource(String firstStream)
-      throws Exception {
-    var bluRayTransportStream = List.of("-f", "mpegts", "-mpegts_m2ts_mode", "1");
+  // counted audio as 24-bit mono PCM. The stream that does not start first starts 0.5 s after the
+  // other, delayed in a stream copy, whose packets -itsoffset moves.
+  private static synchronized Path countedMpegSource(
+      MpegContainer container, FirstStream firstStream) throws Exception {
     var startingTogether = seekableSources.resolve("counted-audio-starts-with-video.m2ts");
     if (!generatedSeekableSources.contains(startingTogether)) {
       var arguments =
           Stream.of(
                   List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=11.5"),
                   countedAudioInput(),
-                  List.of("-c:v", "libx264", "-g", "48", "-bf", "0", "-c:a", "pcm_bluray"),
-                  bluRayTransportStream)
+                  List.of("-c:v", "libx264", "-g", "48", "-bf", "0"),
+                  MpegContainer.MPEG_TS.audioCodecAndFormat)
               .flatMap(List::stream)
               .toList();
       runFfmpeg(arguments, startingTogether);
       generatedSeekableSources.add(startingTogether);
     }
 
-    var source = seekableSources.resolve("counted-audio-and-" + firstStream + "-first.m2ts");
+    var source =
+        seekableSources.resolve(
+            "counted-audio-and-"
+                + firstStream.name().toLowerCase(Locale.ROOT)
+                + "-first."
+                + container.extension);
     if (!generatedSeekableSources.contains(source)) {
       var onTime = List.of("-i", startingTogether.toString());
       var delayed = List.of("-itsoffset", "0.5", "-i", startingTogether.toString());
       var videoThenAudio =
           switch (firstStream) {
-            case "audio" -> Stream.of(delayed, onTime);
-            case "video" -> Stream.of(onTime, delayed);
-            default -> throw new IllegalArgumentException(firstStream);
+            case AUDIO -> Stream.of(delayed, onTime);
+            case VIDEO -> Stream.of(onTime, delayed);
           };
       var arguments =
           Stream.concat(
                   videoThenAudio,
                   Stream.of(
-                      List.of("-map", "0:v", "-map", "1:a", "-c", "copy"), bluRayTransportStream))
+                      List.of("-map", "0:v", "-map", "1:a", "-c:v", "copy"),
+                      container.audioCodecAndFormat))
               .flatMap(List::stream)
               .toList();
       runFfmpeg(arguments, source);
@@ -5975,9 +6090,10 @@ class WorkerMediaSmokeTest {
   /**
    * The delivered audio's decoded samples by the time each one plays at, in samples: each decoded
    * frame's samples follow its own presentation time, so a frame that is absent leaves its times
-   * without a sample instead of moving the samples after it.
+   * without a sample instead of moving the samples after it. It keeps the decoded samples in the
+   * order they play as well.
    */
-  private record DeliveredAudio(int[] byTime, BitSet delivered, long deliveredTwice) {
+  private record DeliveredAudio(int[] byTime, BitSet delivered, long deliveredTwice, int[] played) {
 
     static DeliveredAudio of(Path media) throws Exception {
       var decoded = media.resolveSibling(media.getFileName() + ".s32le");
@@ -5989,17 +6105,21 @@ class WorkerMediaSmokeTest {
               .lines()
               .map(DecodedFrame::parse)
               .toList();
+      var played = new int[samples.remaining()];
+      samples.get(played);
       var byTime = new int[frames.stream().mapToInt(DecodedFrame::end).max().orElse(0)];
       var delivered = new BitSet();
       var deliveredTwice = 0L;
-      for (var time : frames.stream().flatMapToInt(DecodedFrame::times).toArray()) {
+      var times = frames.stream().flatMapToInt(DecodedFrame::times).toArray();
+      assertThat(times.length).as("the samples of the decoded frames").isEqualTo(played.length);
+      for (var index = 0; index < times.length; index++) {
+        var time = times[index];
         deliveredTwice += delivered.get(time) ? 1 : 0;
         delivered.set(time);
-        byTime[time] = samples.get();
+        byTime[time] = played[index];
       }
 
-      assertThat(samples.hasRemaining()).as("decoded samples beyond the decoded frames").isFalse();
-      return new DeliveredAudio(byTime, delivered, deliveredTwice);
+      return new DeliveredAudio(byTime, delivered, deliveredTwice, played);
     }
 
     // The delivered audio on a timeline whose zero is this time, where the source's audio starts.
@@ -6007,7 +6127,8 @@ class WorkerMediaSmokeTest {
       return new DeliveredAudio(
           Arrays.copyOfRange(byTime, time, byTime.length),
           delivered.get(time, Math.max(time, delivered.length())),
-          deliveredTwice);
+          deliveredTwice,
+          played);
     }
 
     // The time of the first delivered sample.
@@ -6032,6 +6153,37 @@ class WorkerMediaSmokeTest {
               .filter(time -> delivered.get(time) && byTime[time] == 0)
               .count();
       return new SilentSamples(silent, absent, until - from - absent - silent);
+    }
+
+    // How many of the counted source's samples in a range follow one another unchanged in the
+    // order the delivered audio plays its samples that are not digital silence, are absent from
+    // that order, or hold another value.
+    SourceSamples sourceSamplesInPlayOrder(int from, int until) {
+      var sounding = sounding().toArray();
+      var compared = Math.min(sounding.length, until - from);
+      var unchanged =
+          IntStream.range(0, compared)
+              .filter(index -> sounding[index] == (from + index + 1) << 8)
+              .count();
+      return new SourceSamples(unchanged, until - from - compared, compared - unchanged);
+    }
+
+    long soundingSampleCount() {
+      return sounding().count();
+    }
+
+    // The largest distance, in samples, between the time of a delivered sample that is not digital
+    // silence and the time of the source sample that it holds.
+    int largestDistanceFromSourceTime() {
+      return delivered.stream()
+          .filter(time -> byTime[time] != 0)
+          .map(time -> Math.abs((byTime[time] >> 8) - 1 - time))
+          .max()
+          .orElse(0);
+    }
+
+    private IntStream sounding() {
+      return Arrays.stream(played).filter(sample -> sample != 0);
     }
   }
 
