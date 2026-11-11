@@ -140,8 +140,8 @@ fill_boundaries() {  # LIST ARGS...
 #   decode-only reads from the seek without FFmpeg's exact seek (-noaccurate_seek), as an encoded replacement attempt does.
 #   duration=D  reads only the source's first D seconds.
 #   skip=T      leaves the time T out of the forced keyframe times.
-#   audio-input reads the audio from a second input of the source, seeked as the first, as a copy that
-#               encodes its audio does.
+#   audio-input reads the audio from a second input of the source, seeked as the first, and places the
+#               first input on its timeline, as a copy that encodes its audio does.
 run() {
   local kind=$1 name=$2; shift 2
   local start=0 seek=() decode_only=() common=("${COMMON_PIPE[@]}") maps=(-map 0:0 -map 0:a:0)
@@ -162,12 +162,13 @@ run() {
     shift
   done
   local src=$1; shift 2
-  local second_input=(); [ "$audio_input" = yes ] && second_input=(-isync 0 "${seek[@]}" -i "$src")
+  local sync=() second_input=()
+  [ "$audio_input" = yes ] && sync=(-isync 1) && second_input=("${seek[@]}" -i "$src")
   local count; count=$(segment_count "$src" "$seconds")
   fill_boundaries "$(boundaries "$start" "$count" "$skip")" "$@"
   if [ "$kind" = pipe ]; then
     # -map -0:s: the worker excludes subtitle streams; these sources have none.
-    local command=("${FF[@]}" -y "${seek[@]}" "${decode_only[@]}" "${duration[@]}" -i "$src" "${second_input[@]}" "${maps[@]}" -map -0:s "${common[@]}" \
+    local command=("${FF[@]}" -y "${sync[@]}" "${seek[@]}" "${decode_only[@]}" "${duration[@]}" -i "$src" "${second_input[@]}" "${maps[@]}" -map -0:s "${common[@]}" \
       "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
     printf '%s\n' "${command[@]}" > "out/$name.args"
     echo "$count" > "out/$name.count"

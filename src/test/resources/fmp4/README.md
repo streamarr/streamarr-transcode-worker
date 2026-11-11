@@ -91,8 +91,8 @@ ffmpeg -hide_banner -nostdin -loglevel error
                            -c:a copy -bsf:a aac_adtstoasc -b:a 0
   copy with encoded audio (16): -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
           -c:a aac -ac 1 -b:a 8k
-          with the audio from a second input of the source: -isync 0 [-ss S] -i SRC after the
-          first input, and -map 1:a:0 in place of -map 0:a:0
+          with the audio from a second input of the source: -isync 1 before the first input,
+          [-ss S] -i SRC after it, and -map 1:a:0 in place of -map 0:a:0
   x264:   -c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10
           -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass
           -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k

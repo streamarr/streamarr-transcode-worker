@@ -468,20 +468,14 @@ class FfmpegCommandBuilderAudioLayoutTest {
     void shouldPassTheDecodersOptionsToTheAudiosInputAloneWhenACopyEncodesDolbyAudio() {
       var cmd = command(encode("aac", "5.1"), source("ac3", "5.1(side)"));
 
-      assertThat(cmd.subList(0, cmd.indexOf("-isync")))
+      var firstInputsEnd = cmd.indexOf("/media/movie.mkv") + 1;
+      assertThat(cmd.subList(0, firstInputsEnd))
           .as("the first input")
-          .containsExactly("ffmpeg", "-y", "-i", "/media/movie.mkv");
-      assertThat(cmd.subList(cmd.indexOf("-isync"), cmd.indexOf("-map")))
+          .containsExactly("ffmpeg", "-y", "-isync", "1", "-i", "/media/movie.mkv");
+      assertThat(cmd.subList(firstInputsEnd, cmd.indexOf("-map")))
           .as("the audio's input")
           .containsExactly(
-              "-isync",
-              "0",
-              "-drc_scale:a:0",
-              "0",
-              "-target_level:a:0",
-              "-31",
-              "-i",
-              "/media/movie.mkv");
+              "-drc_scale:a:0", "0", "-target_level:a:0", "-31", "-i", "/media/movie.mkv");
     }
 
     @Test

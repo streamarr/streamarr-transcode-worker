@@ -3722,12 +3722,14 @@ class FfmpegCommandBuilderTest {
   }
 
   // A copy from a later segment that encodes its audio seeks one segment period before its first
-  // segment's start.
+  // segment's start. FFmpeg starts an input's timeline at the earliest start among the streams
+  // that the input's outputs use: the audio's input uses the video and the audio, as the one input
+  // did, and -isync places the video's input, which uses the video alone, on that timeline.
   @Test
   @DisplayName(
-      "Should read the encoded audio from a second input of the source, seeked as the first and"
-          + " placed on its timeline, when a copy encodes its audio")
-  void shouldReadTheEncodedAudioFromASecondInputSeekedAsTheFirstWhenACopyEncodesItsAudio() {
+      "Should read the encoded audio from a second input of the source, seeked as the first, and"
+          + " place the first input on the second's timeline when a copy encodes its audio")
+  void shouldReadTheEncodedAudioFromASecondInputAndPlaceTheFirstOnItsTimelineWhenACopyEncodesIt() {
     var cmd =
         command(request(TranscodeMode.AUDIO_TRANSCODE).startSequenceNumber(5).build(), "copy");
 
@@ -3735,12 +3737,12 @@ class FfmpegCommandBuilderTest {
         .startsWith(
             "ffmpeg",
             "-y",
+            "-isync",
+            "1",
             "-ss",
             "24",
             "-i",
             "/media/movie.mkv",
-            "-isync",
-            "0",
             "-ss",
             "24",
             "-i",
@@ -3784,7 +3786,8 @@ class FfmpegCommandBuilderTest {
   }
 
   // A Matroska demuxer that discards the video seeks by the audio and drops audio blocks after a
-  // seek, so the audio's input keeps its video in use, as the one input did.
+  // seek, and an MPEG-TS input that uses the audio alone starts its timeline at the audio's start,
+  // so the audio's input keeps its video in use, as the one input did.
   @Test
   @DisplayName(
       "Should keep the audio input's video in use through a copy to FFmpeg's null muxer when a"
