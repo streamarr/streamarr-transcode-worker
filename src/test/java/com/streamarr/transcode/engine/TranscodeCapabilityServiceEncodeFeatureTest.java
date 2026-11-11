@@ -120,7 +120,61 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         Arguments.of(
             "the 10-bit test writes a truncated moov",
             EncodeFeature.TEN_BIT,
-            TestEncodeOutput.of(truncatedMoov())));
+            TestEncodeOutput.of(truncatedMoov())),
+        Arguments.of(
+            "the 10-bit test writes a sample entry without its decoder configuration record",
+            EncodeFeature.TEN_BIT,
+            TestEncodeOutput.of(HevcCopies.initializationSegment(box("hvc1", new byte[78])))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass libx265 its level, tier and colour parameters and libsvtav1 its colour"
+          + " parameters when a feature's test encode runs with a software encoder")
+  void shouldPassEachSoftwareEncoderItsOwnParametersWhenAFeaturesTestEncodeRunsWithIt() {
+    var commands = new ArrayList<List<String>>();
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              commands.add(List.copyOf(command.command()));
+              return resolve(command, test -> TestEncodeOutput.faithful(test).process());
+            });
+
+    service.detectCapabilities();
+
+    var featureTests = commands.stream().filter(command -> command.contains("pipe:1")).toList();
+    assertThat(featureTests)
+        .filteredOn(command -> command.contains("libx265"))
+        .hasSize(EncodeFeature.values().length)
+        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-svtav1-params"))
+        .extracting(command -> parametersAfter("-x265-params", command))
+        .allSatisfy(
+            parameters -> assertThat(parameters).matches("level-idc=\\d+:high-tier=0(:.+)?"))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).doesNotContain("transfer="))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).contains("transfer=arib-std-b67"))
+        .filteredOn(parameters -> parameters.contains("transfer=smpte2084"))
+        .hasSize(2);
+    assertThat(featureTests)
+        .filteredOn(command -> command.contains("libsvtav1"))
+        .hasSize(EncodeFeature.values().length)
+        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-x265-params"))
+        .extracting(command -> parametersAfter("-svtav1-params", command))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).isEmpty())
+        .satisfiesOnlyOnce(
+            parameters -> assertThat(parameters).contains("transfer-characteristics=arib-std-b67"))
+        .filteredOn(parameters -> parameters.contains("transfer-characteristics=smpte2084"))
+        .hasSize(2);
+  }
+
+  // The value that follows the option in the command; empty when the command lacks the option.
+  private static String parametersAfter(String option, List<String> command) {
+    var index = command.indexOf(option);
+    if (index < 0) {
+      return "";
+    }
+
+    return command.get(index + 1);
   }
 
   @Test
