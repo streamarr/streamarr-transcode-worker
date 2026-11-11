@@ -16,7 +16,6 @@ import static org.awaitility.Awaitility.await;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
-import com.streamarr.transcode.engine.FfmpegRecordings.DroppedAudioSample;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.SourceEnd.EndedEarly;
@@ -190,10 +189,15 @@ class ProducerTest {
   }
 
   static Stream<Recording> recordingsThatComplete() {
-    return recordings().filter(recording -> recording.failure().isEmpty());
+    return recordingsWhoseAudioArrivesInTime().filter(recording -> recording.failure().isEmpty());
   }
 
-  static Stream<Recording> recordingsThatDropAudio() {
+  // The producer fails the others before it delivers every segment that expected.json lists.
+  static Stream<Recording> recordingsWhoseAudioArrivesInTime() {
+    return recordings().filter(recording -> recording.droppedAudioSamples().isEmpty());
+  }
+
+  static Stream<Recording> recordingsWhoseAudioArrivesLate() {
     return recordings().filter(recording -> !recording.droppedAudioSamples().isEmpty());
   }
 
@@ -273,7 +277,7 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordings")
+  @MethodSource("recordingsWhoseAudioArrivesInTime")
   @DisplayName("Should deliver FFmpeg's own samples when it rebuilds the media segments")
   void shouldDeliverFfmpegsOwnSamplesWhenItRebuildsTheMediaSegments(Recording recording) {
     deliverEverySegmentOf(recording);
@@ -720,32 +724,29 @@ class ProducerTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
   }
 
-  // FFmpeg flushes an audio encoder only once the whole input has ended, so the encoder's last
-  // frames of audio that ends long before the video arrive after their segment was delivered.
+  // Recorded from one input: FFmpeg flushes an audio encoder only once the whole input has ended,
+  // so the encoder's last frames of audio that ends long before the video arrive after their
+  // segment was delivered.
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsThatDropAudio")
+  @MethodSource("recordingsWhoseAudioArrivesLate")
   @DisplayName(
-      "Should deliver every media segment without the audio samples that arrive after their segment"
-          + " was delivered, and count them, when the audio ends long before the video")
-  void
-      shouldDeliverEveryMediaSegmentWithoutTheLateAudioSamplesAndCountThemWhenTheAudioEndsLongBeforeTheVideo(
-          Recording recording) {
+      "Should fail the attempt, after the segments it delivered, when the audio encoder's last"
+          + " frames arrive after their segment was delivered")
+  void shouldFailTheAttemptWhenTheAudioEncodersLastFramesArriveAfterTheirSegmentWasDelivered(
+      Recording recording) {
     var outcome = deliverEverySegmentOf(recording);
 
     assertThat(outcome)
-        .isEqualTo(
-            new Completed(recording.droppedAudioSamples().size(), NOTHING_READ_FROM_THE_SOURCE));
-    assertThat(mediaSegmentNames())
-        .extracting(ProducerTest::numberOf)
-        .containsExactlyElementsOf(
-            recording.segments().stream().map(SegmentSummary::number).toList());
-    var delivered = Mp4Samples.read(sink.acceptedBytes());
-    assertThat(delivered.samplesOf(delivered.audioTrack()))
-        .extracting(Sample::presentationTime)
-        .doesNotContainAnyElementsOf(
-            recording.droppedAudioSamples().stream()
-                .map(DroppedAudioSample::presentationTime)
-                .toList());
+        .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+        .extracting(Failed::reason)
+        .isEqualTo(ProducerFailure.AUDIO_ARRIVED_AFTER_ITS_SEGMENT);
+    var everySegment = recording.segments().stream().map(SegmentSummary::number).toList();
+    var delivered = mediaSegmentNames().stream().map(ProducerTest::numberOf).toList();
+    assertThat(delivered)
+        .as("the segments delivered before the first late sample arrived, its own among them")
+        .contains(recording.droppedAudioSamples().getFirst().segmentNumber())
+        .hasSizeLessThan(everySegment.size())
+        .isEqualTo(everySegment.subList(0, delivered.size()));
   }
 
   @Test
@@ -859,12 +860,12 @@ class ProducerTest {
     assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
   }
 
+  // The video runs a margin past segment 0's end before its last audio sample arrives.
   @Test
   @DisplayName(
-      "Should drop and count an audio sample and complete the attempt when the sample arrives"
+      "Should fail the attempt, after the segments it delivered, when an audio sample arrives"
           + " after the segment whose interval holds its start was delivered")
-  void
-      shouldDropAndCountAnAudioSampleAndCompleteTheAttemptWhenItArrivesAfterItsSegmentWasDelivered() {
+  void shouldFailTheAttemptWhenAnAudioSampleArrivesAfterItsSegmentWasDelivered() {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
@@ -875,14 +876,11 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).start();
 
-    assertThat(producer.outcome())
-        .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(1, NOTHING_READ_FROM_THE_SOURCE));
-    assertThat(sink.acceptedNames())
-        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.AUDIO_ARRIVED_AFTER_ITS_SEGMENT);
+    assertThat(failure.detail()).contains("media segment 0");
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
-    assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
-    assertThat(audioDecodeTimesOf("segment2.m4s")).isEmpty();
   }
 
   @Test

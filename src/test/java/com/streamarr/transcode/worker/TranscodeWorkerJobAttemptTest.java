@@ -2272,13 +2272,12 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should complete the attempt with every media segment when its encoded audio's last frames"
-          + " arrive after their media segment was delivered")
-  void
-      shouldCompleteTheAttemptWithEveryMediaSegmentWhenItsEncodedAudiosLastFramesArriveAfterTheirMediaSegmentWasDelivered()
-          throws Exception {
+      "Should report a failed transcode, after the segments it uploaded, when the attempt's"
+          + " encoded audio's last frames arrive after their media segment was delivered")
+  void shouldReportAFailedTranscodeWhenItsEncodedAudiosLastFramesArriveAfterTheirMediaSegment()
+      throws Exception {
     var recording = recording("17-encode-audio-ends-long-before-video.fmp4");
-    assertThat(recording.droppedAudioSamples()).isNotEmpty();
+    var lateSample = recording.droppedAudioSamples().getFirst();
     var job = variantJobBuilder();
     job.getExecutionBuilder().setMediaSegmentCount(recording.mediaSegmentCount());
 
@@ -2287,10 +2286,16 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
-      assertThat(connection.uploads())
-          .extracting(upload -> upload.metadata().getSegmentName())
-          .containsExactlyElementsOf(uploadNames(recording));
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      var uploaded =
+          connection.uploads().stream().map(upload -> upload.metadata().getSegmentName()).toList();
+      assertThat(uploaded)
+          .as("the segments uploaded before the first late sample arrived, its own among them")
+          .contains("segment" + lateSample.segmentNumber() + ".m4s")
+          .hasSizeLessThan(uploadNames(recording).size())
+          .isEqualTo(uploadNames(recording).subList(0, uploaded.size()));
     }
   }
 

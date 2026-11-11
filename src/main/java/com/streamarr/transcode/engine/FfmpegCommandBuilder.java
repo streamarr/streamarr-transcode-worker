@@ -528,7 +528,8 @@ public class FfmpegCommandBuilder {
   //
   // FFmpeg counts an encoded audio stream as ended once its filter graph ends, before the encoder
   // has written the frames queued for it. apad keeps that graph running up to the advertised end.
-  // Without padding, the video's input runs on while the encoder writes its last frames.
+  // Without padding, the video's input runs on while the encoder writes its last frames, and the
+  // producer fails an attempt whose audio then arrives after its segment (AudioSampleQueue).
   //
   // The held encode reads its audio from a second input for tpad, which repeats the last picture
   // once its input ends: read from the audio's input, the video ended only once all of the audio
