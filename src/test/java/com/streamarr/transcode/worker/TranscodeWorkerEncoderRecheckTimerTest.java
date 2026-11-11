@@ -46,7 +46,8 @@ import org.junit.jupiter.api.io.TempDir;
 // ADR 0037: the worker reports how far each active attempt's output has reached, and each report
 // that advances restarts the server's stall clock. ADR 0044: while a hardware encoder is withdrawn,
 // the worker runs its test encode again. No GPU runs here: the scripted test encode stays running
-// until the test lets it exit, as an FFmpeg that waits on an unresponsive driver does.
+// until the test lets it exit or the worker stops it, as an FFmpeg that waits on an unresponsive
+// driver does.
 @Tag("UnitTest")
 @DisplayName("Transcode Worker Encoder Recheck Timer Tests")
 @Timeout(value = 1, unit = TimeUnit.MINUTES)
@@ -62,6 +63,8 @@ class TranscodeWorkerEncoderRecheckTimerTest {
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   // Three of the worker's progress intervals, and well inside the test encode's 10 s deadline.
   private static final Duration PROGRESS_LIMIT = Duration.ofSeconds(3);
+  // Well inside the test encode's 10 s deadline, after which the recheck ends it on its own.
+  private static final Duration STOP_LIMIT = Duration.ofSeconds(5);
 
   @TempDir Path tempDir;
 
@@ -86,11 +89,7 @@ class TranscodeWorkerEncoderRecheckTimerTest {
         ScriptedProcessLauncher.forCommands(
             (command, _) -> {
               if (command.contains("h264_nvenc")) {
-                return ScriptedProcess.builder()
-                    .output(new byte[0])
-                    .exitCode(1)
-                    .stderr(DEVICE_LOST)
-                    .build();
+                return nvencLosingItsDevice();
               }
 
               return ScriptedProcess.builder()
@@ -133,6 +132,28 @@ class TranscodeWorkerEncoderRecheckTimerTest {
               PROGRESS_LIMIT)
           .isTrue();
     }
+  }
+
+  // Every session path ends in close(), so the close is what keeps a recheck from outliving its
+  // session.
+  @Test
+  @DisplayName(
+      "Should stop the running test encode of a withdrawn hardware encoder when the worker closes")
+  void shouldStopTheRunningTestEncodeOfAWithdrawnHardwareEncoderWhenTheWorkerCloses()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.forCommands((_, _) -> nvencLosingItsDevice());
+    ScriptedProcess testEncode;
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      nvencTestEncodeStaysRunning.set(true);
+      startVariant(runtime.connection(), encodeJob());
+      testEncode = runningNvencTestEncode.get(EVENT_LIMIT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    assertThat(testEncode.onExit())
+        .as("the test encode ended within %s of the close, before its own deadline", STOP_LIMIT)
+        .succeedsWithin(STOP_LIMIT);
   }
 
   // The worker's progress timer is wall-clock time that no fake drives, so nothing but the session
@@ -225,6 +246,10 @@ class TranscodeWorkerEncoderRecheckTimerTest {
     }
 
     return "";
+  }
+
+  private static ScriptedProcess nvencLosingItsDevice() {
+    return ScriptedProcess.builder().output(new byte[0]).exitCode(1).stderr(DEVICE_LOST).build();
   }
 
   private static VariantJob encodeJob() {
