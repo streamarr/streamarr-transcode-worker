@@ -6010,12 +6010,18 @@ class WorkerMediaSmokeTest {
   }
 
   // A job that encodes the counted source's mono audio to FLAC, which keeps every sample's value,
-  // and pads it to the advertised end, holding the last frame too when it encodes the video: the
-  // jobs that the server sends.
+  // and pads it to the advertised end, holding the last frame too when it encodes the video. It
+  // names the source's audio stream and the output's layout, as the server does for every audio
+  // encode, which maps that stream alone and encodes 2,400 samples a frame.
   private static VariantJob.Builder countedAudioJob(Path source, TranscodeMode mode) {
     var job = seekableSourceJob(source, mode);
     paddedTo(job, COUNTED_AUDIO_SEGMENT_COUNT);
-    job.getDecisionBuilder().getAudioBuilder().setCodec("flac").setChannels(1);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(1)
+        .setStreamIndex(1)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO);
     if (mode == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE) {
       job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
     }
