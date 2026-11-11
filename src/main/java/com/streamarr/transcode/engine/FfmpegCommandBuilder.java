@@ -24,7 +24,7 @@ public class FfmpegCommandBuilder {
   // output's audio trails its video when the input's does not.
   private static final String MAX_INTERLEAVE_DELTA_MICROSECONDS = "10000000";
   // The second input of a held encode that encodes its audio, and its filter graph's outputs.
-  private static final int HELD_AUDIO_INPUT = 1;
+  private static final int AUDIO_INPUT = 1;
   private static final String HELD_VIDEO_LABEL = "[held_video]";
   private static final String HELD_AUDIO_LABEL = "[held_audio]";
   private static final String FILTERED_HELD_AUDIO_LABEL = "[filtered_held_audio]";
@@ -332,7 +332,7 @@ public class FfmpegCommandBuilder {
     }
 
     addFragmentedMp4Output(cmd);
-    addSourceStreamsOutput(cmd, decision, input);
+    addSourceStreamsOutput(cmd, decision, sourceStreamInputs(input));
     if (readsAudioFromItsOwnInput(job.request(), input)) {
       addAudioInputsVideoInUse(cmd, decision);
     }
@@ -367,12 +367,15 @@ public class FfmpegCommandBuilder {
   // PCM as the framecrc's third stream: a decoder discards trailing padding that only side data
   // records, which no packet's duration shows.
   private static void addSourceStreamsOutput(
-      List<String> cmd, TranscodeDecision decision, EncoderInput input) {
-    var source = input.sourceInputIndex();
-    cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
-    addSourceAudioStreams(cmd, decision.audioDecision(), source);
+      List<String> cmd, TranscodeDecision decision, SourceStreamInputs inputs) {
+    cmd.addAll(List.of("-map", inputs.video() + ":" + decision.videoDecision().streamIndex()));
+    addSourceAudioStreams(cmd, decision.audioDecision(), inputs.audio());
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", FRAMECRC, FLUSH_PACKETS, "1", "pipe:2"));
+  }
+
+  private static SourceStreamInputs sourceStreamInputs(EncoderInput input) {
+    return new SourceStreamInputs(input.sourceInputIndex(), input.sourceInputIndex());
   }
 
   // The exclusions undo both maps of a named stream that is no audio stream, and the PCM encoder
@@ -548,7 +551,7 @@ public class FfmpegCommandBuilder {
         List.of(
             "-filter_complex",
             "["
-                + HELD_AUDIO_INPUT
+                + AUDIO_INPUT
                 + ":"
                 + decision.audioDecision().sourceStreamSpecifier()
                 + "]"
@@ -602,7 +605,7 @@ public class FfmpegCommandBuilder {
   private static void addAudioInputsVideoInUse(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(
         List.of(
-            "-map", HELD_AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(), "-c", "copy"));
+            "-map", AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(), "-c", "copy"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "null", "-"));
   }
@@ -1742,6 +1745,9 @@ public class FfmpegCommandBuilder {
   }
 
   private record ForcedKeyframes(@NonNull String times, boolean reachesLastBoundary) {}
+
+  // The inputs whose packets of the chosen source streams the framecrc output copies.
+  private record SourceStreamInputs(int video, int audio) {}
 
   /**
    * What the encoding FFmpeg reads its video from: the source, or the copy of the source's video
