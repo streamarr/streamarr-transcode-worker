@@ -6111,7 +6111,7 @@ class WorkerMediaSmokeTest {
       var delivered = new BitSet();
       var deliveredTwice = 0L;
       var times = frames.stream().flatMapToInt(DecodedFrame::times).toArray();
-      assertThat(times.length).as("the samples of the decoded frames").isEqualTo(played.length);
+      assertThat(times).as("the sample times of the decoded frames").hasSameSizeAs(played);
       for (var index = 0; index < times.length; index++) {
         var time = times[index];
         deliveredTwice += delivered.get(time) ? 1 : 0;
