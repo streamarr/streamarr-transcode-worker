@@ -2,7 +2,10 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
@@ -18,7 +21,8 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Sends the probe reports of one worker session, each in a report call of its own on a virtual
  * thread (ADR 0062). It keeps at most the report calls open that the server accepts from the worker
- * at once, and its other reports wait in a {@link ProbeReportQueue}. A report whose call ends
+ * at once, and its other reports wait in a {@link ProbeReportQueue}. Of those calls it keeps as
+ * many as the playback probe capacity for the reports of playback probes. A report whose call ends
  * without the server's answer is logged and discarded, and one event tells the server that the
  * probe attempt ended without a report: the worker never sends a report twice, and the server runs
  * the probe again. A probe attempt that the server canceled has no report, so {@link #discard}
@@ -37,7 +41,8 @@ final class ProbeReportSender implements AutoCloseable {
   private final Duration readinessTimeout;
   private final Duration acknowledgementTimeout;
   private final ProbeReportQueue waiting = new ProbeReportQueue();
-  private final Set<ProbeReportCall> open = new HashSet<>();
+  // Each open call with the order in which its report waited.
+  private final Map<ProbeReportCall, ProbeReportQueue.Order> open = new HashMap<>();
   // The open calls that a cancel command ended. The event that answers the command stands for the
   // end of each of them.
   private final Set<ProbeReportCall> canceledByServer = new HashSet<>();
@@ -90,7 +95,7 @@ final class ProbeReportSender implements AutoCloseable {
   synchronized void discard(@NonNull UUID probeAttemptId) {
     waiting.discard(probeAttemptId);
     var canceled = new CancellationException("The server canceled the probe attempt");
-    open.stream()
+    open.keySet().stream()
         .filter(call -> call.probeAttemptId().equals(probeAttemptId))
         .forEach(
             call -> {
@@ -107,25 +112,37 @@ final class ProbeReportSender implements AutoCloseable {
     waiting.moveToCanceled(probeAttemptId);
   }
 
-  // Holds this monitor.
+  // Holds this monitor. The reports of playback probes go first and may take every free call.
   private void openWaiting() {
-    for (var order : ProbeReportQueue.Order.values()) {
-      openWaiting(order);
-    }
+    openWaiting(ProbeReportQueue.Order.PLAYBACK, limit);
+    openWaiting(ProbeReportQueue.Order.OTHER, mostCallsOfOtherReports());
   }
 
-  // Holds this monitor.
-  private void openWaiting(ProbeReportQueue.Order order) {
-    while (limit == 0 || open.size() < limit) {
+  // Holds this monitor. Opens the waiting reports of this order while a call is free and the order
+  // holds fewer calls than its most; a limit of 0 bounds neither.
+  private void openWaiting(ProbeReportQueue.Order order, long most) {
+    while (limit == 0 || (open.size() < limit && callsOf(order) < most)) {
       var next = waiting.poll(order);
       if (next.isEmpty()) {
         return;
       }
 
       var call = new ProbeReportCall(next.get(), readinessTimeout, acknowledgementTimeout);
-      open.add(call);
+      open.put(call, order);
       executor.execute(() -> send(call));
     }
+  }
+
+  // Holds this monitor.
+  private int callsOf(ProbeReportQueue.Order order) {
+    return Collections.frequency(open.values(), order);
+  }
+
+  // Of its limit, the worker keeps as many calls as the playback probe capacity for the reports of
+  // playback probes (ADR 0062). A limit that leaves nothing beside them still gives the other
+  // reports one call.
+  private long mostCallsOfOtherReports() {
+    return Math.max(1, limit - ProbeCapacities.PLAYBACK_PROBE_CAPACITY);
   }
 
   // The event leaves after this object's monitor is released, because sending it takes the worker
@@ -204,7 +221,7 @@ final class ProbeReportSender implements AutoCloseable {
     shutdown = true;
     waiting.clear();
     var sessionEnded = new CancellationException("The worker session ended");
-    open.forEach(call -> call.cancel(sessionEnded));
+    open.keySet().forEach(call -> call.cancel(sessionEnded));
     executor.shutdownNow();
   }
 

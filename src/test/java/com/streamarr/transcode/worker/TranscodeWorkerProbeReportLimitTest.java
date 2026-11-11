@@ -12,10 +12,13 @@ import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime.Connection;
+import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime.ReportCall;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -23,7 +26,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Worker Probe Report Limit Tests")
@@ -41,13 +46,16 @@ class TranscodeWorkerProbeReportLimitTest {
         """);
   }
 
-  @Test
+  @ParameterizedTest(name = "a limit of {0} lets the other reports hold {1}")
+  @CsvSource({"1, 1", "2, 1", "3, 1", "24, 22"})
   @DisplayName(
-      "Should keep at most the report calls open that the server accepts at once and make the"
-          + " other reports wait")
-  void shouldKeepAtMostTheReportCallsOpenThatTheServerAcceptsAtOnce() throws Exception {
-    var runtime = acceptingReportCalls(2);
-    var requests = List.of(background(), background(), background(), background());
+      "Should let the reports of probes without playback priority hold at most the limit less the"
+          + " playback probe capacity of report calls at once, and at least one")
+  void shouldLetTheOtherReportsHoldAtMostTheLimitLessThePlaybackProbeCapacityOfReportCalls(
+      int limit, int most) throws Exception {
+    var runtime = acceptingReportCalls(limit);
+    var requests =
+        Stream.generate(TranscodeWorkerProbeReportLimitTest::background).limit(most + 2L).toList();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
@@ -57,19 +65,110 @@ class TranscodeWorkerProbeReportLimitTest {
         probe(runtime, request);
       }
 
-      for (var call : connection.awaitReportCalls(2)) {
-        call.awaitSentWhole();
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .containsExactlyInAnyOrderElementsOf(idsOf(requests.subList(0, most)));
+      connection.releaseReportAnswers();
+      assertThat(connection.reports()).hasSameSizeAs(requests);
+    }
+  }
+
+  @ParameterizedTest(name = "a limit of {0}")
+  @ValueSource(ints = {1, 2, 3, 24})
+  @DisplayName(
+      "Should keep at most the report calls open that the server accepts at once, let the reports"
+          + " of playback probes take every one of them and make the other reports wait")
+  void shouldKeepAtMostTheReportCallsOpenThatTheServerAcceptsAtOnce(int limit) throws Exception {
+    var runtime = acceptingReportCalls(limit);
+    var playback =
+        Stream.generate(TranscodeWorkerProbeReportLimitTest::playback).limit(limit + 1L).toList();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdReportAnswers();
+      for (var request : playback) {
+        probe(runtime, request);
       }
 
-      assertThat(connection.reportCalls()).as("two reports wait for a call").hasSize(2);
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .as("one report waits for a call")
+          .containsExactlyInAnyOrderElementsOf(idsOf(playback.subList(0, limit)));
       connection.releaseReportAnswers();
-      assertThat(connection.reports()).hasSize(4);
-      assertThat(connection.mostReportCallsOpenAtOnce()).isEqualTo(2);
+      assertThat(connection.reports()).hasSameSizeAs(playback);
+      assertThat(connection.mostReportCallsOpenAtOnce()).isEqualTo(limit);
+    }
+  }
+
+  @ParameterizedTest(name = "a limit of {0} keeps {2} beside the {1} of the other reports")
+  @CsvSource({"1, 1, 0", "2, 1, 1", "3, 1, 2", "24, 22, 2"})
+  @DisplayName(
+      "Should keep the report calls beyond the other reports' most for the reports of playback"
+          + " probes")
+  void shouldKeepTheReportCallsBeyondTheOtherReportsMostForTheReportsOfPlaybackProbes(
+      int limit, int otherMost, int kept) throws Exception {
+    var runtime = acceptingReportCalls(limit);
+    var others =
+        Stream.generate(TranscodeWorkerProbeReportLimitTest::background)
+            .limit(otherMost + 1L)
+            .toList();
+    var playback =
+        Stream.generate(TranscodeWorkerProbeReportLimitTest::playback).limit(kept + 1L).toList();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdReportAnswers();
+      for (var request : others) {
+        probe(runtime, request);
+      }
+
+      for (var request : playback) {
+        probe(runtime, request);
+      }
+
+      var open = new ArrayList<>(idsOf(others.subList(0, otherMost)));
+      open.addAll(idsOf(playback.subList(0, kept)));
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .containsExactlyInAnyOrderElementsOf(open);
+      assertThat(connection.mostReportCallsOpenAtOnce()).isEqualTo(otherMost + kept);
     }
   }
 
   @Test
-  @DisplayName("Should open every report call at once when the server states no limit")
+  @DisplayName(
+      "Should keep a freed report call for the reports of playback probes when only other reports"
+          + " wait")
+  void shouldKeepAFreedReportCallForTheReportsOfPlaybackProbesWhenOnlyOtherReportsWait()
+      throws Exception {
+    var runtime = acceptingReportCalls(3);
+    var open = background();
+    var waiting = background();
+    var playback = playback();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdReportAnswers();
+      probe(runtime, open);
+      probe(runtime, waiting);
+      probe(runtime, playback);
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .containsExactlyInAnyOrderElementsOf(idsOf(List.of(open, playback)));
+
+      answer(connection, playback);
+
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .as("the other report waits although two report calls are free")
+          .containsExactlyElementsOf(idsOf(List.of(open)));
+      answer(connection, open);
+      assertThat(attemptsOf(connection.reportCallsAwaitingAnswers()))
+          .containsExactlyElementsOf(idsOf(List.of(waiting)));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should open every report call at once and keep none when the server states no limit")
   void shouldOpenEveryReportCallAtOnceWhenTheServerStatesNoLimit() throws Exception {
     var runtime = acceptingReportCalls(0);
 
@@ -111,12 +210,12 @@ class TranscodeWorkerProbeReportLimitTest {
   }
 
   @Test
-  @DisplayName("Should send the reports of probes with playback priority before the other reports")
-  void shouldSendTheReportsOfProbesWithPlaybackPriorityBeforeTheOtherReports() throws Exception {
+  @DisplayName("Should send the reports of playback probes before the other reports")
+  void shouldSendTheReportsOfPlaybackProbesBeforeTheOtherReports() throws Exception {
     var runtime = acceptingReportCalls(1);
     var open = background();
     var other = background();
-    var playback = requestBuilder().setPriority(ProbePriority.PROBE_PRIORITY_PLAYBACK).build();
+    var playback = playback();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
@@ -213,6 +312,10 @@ class TranscodeWorkerProbeReportLimitTest {
     return requestBuilder().setPriority(ProbePriority.PROBE_PRIORITY_BACKGROUND).build();
   }
 
+  private static ProbeRequest playback() {
+    return requestBuilder().setPriority(ProbePriority.PROBE_PRIORITY_PLAYBACK).build();
+  }
+
   // Runs the probe to its end, which hands its report over.
   private static void probe(ScriptedWorkerRuntime runtime, ProbeRequest request) throws Exception {
     start(runtime.connection(), request);
@@ -239,6 +342,22 @@ class TranscodeWorkerProbeReportLimitTest {
   }
 
   private static Uuid[] idsOf(ProbeRequest... requests) {
-    return List.of(requests).stream().map(ProbeRequest::getProbeAttemptId).toArray(Uuid[]::new);
+    return idsOf(List.of(requests)).toArray(Uuid[]::new);
+  }
+
+  private static List<Uuid> idsOf(List<ProbeRequest> requests) {
+    return requests.stream().map(ProbeRequest::getProbeAttemptId).toList();
+  }
+
+  private static List<Uuid> attemptsOf(List<ReportCall> calls) {
+    return calls.stream().map(call -> call.metadata().getProbeAttemptId()).toList();
+  }
+
+  // Answers the report call of this probe attempt, which awaits its answer, as the server does
+  // when it accepts the whole report.
+  private static void answer(Connection connection, ProbeRequest request) {
+    connection.reportCallsAwaitingAnswers().stream()
+        .filter(call -> call.metadata().getProbeAttemptId().equals(request.getProbeAttemptId()))
+        .forEach(call -> call.answerWithAcceptedLength(call.content().length));
   }
 }

@@ -48,6 +48,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 import java.util.function.Predicate;
 
 public final class ScriptedWorkerRuntime implements WorkerRuntime {
@@ -322,6 +323,20 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       reportThreads.awaitIdle();
     }
 
+    /**
+     * Waits until every report that the worker has begun to send has ended or awaits its answer,
+     * and returns the report calls that await their answers, in the order the worker opened them.
+     * While the test withholds the answers, these are the report calls that the worker keeps open.
+     */
+    public List<ReportCall> reportCallsAwaitingAnswers() {
+      reportThreads.awaitAtMostUnfinished(() -> awaitingAnswers().size());
+      return awaitingAnswers();
+    }
+
+    private List<ReportCall> awaitingAnswers() {
+      return reportCalls().stream().filter(ReportCall::awaitsAcknowledgement).toList();
+    }
+
     /** Whether the worker has shut down the threads that send this session's reports. */
     public boolean hasJoinedReportThreads() {
       return reportThreads.isTerminated();
@@ -424,6 +439,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     private ReportCall newReportCall() {
       var report = new ReportCall(reportReadiness, openReportCalls, () -> reportAnswersWithheld);
+      report.whenSentWhole(reportThreads::signal);
       if (refusingNextReport) {
         refusingNextReport = false;
         report.refuseOnTheFirstMessage(reportRefusal());
@@ -608,16 +624,25 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       notifyAll();
     }
 
-    // The test's own timeout interrupts a wait for a report that never ends.
-    private synchronized void awaitIdle() {
+    private void awaitIdle() {
+      awaitAtMostUnfinished(() -> 0);
+    }
+
+    // Waits until at most this many report threads have yet to finish; the supplier is read again
+    // after every signal. The test's own timeout interrupts a wait that never ends.
+    private synchronized void awaitAtMostUnfinished(IntSupplier most) {
       try {
-        while (unfinished > 0) {
+        while (unfinished > most.getAsInt()) {
           wait();
         }
       } catch (InterruptedException interruption) {
         Thread.currentThread().interrupt();
         throw new AssertionError("Interrupted while a probe report was still being sent");
       }
+    }
+
+    private synchronized void signal() {
+      notifyAll();
     }
 
     @Override
@@ -864,6 +889,10 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** Waits until the worker has sent the whole upload. */
     public void awaitSentWhole() throws InterruptedException, ExecutionException {
       sentWhole.get();
+    }
+
+    void whenSentWhole(Runnable action) {
+      sentWhole.thenRun(action);
     }
 
     @Override
