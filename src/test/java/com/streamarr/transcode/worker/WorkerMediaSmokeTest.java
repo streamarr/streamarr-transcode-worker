@@ -9633,12 +9633,19 @@ class WorkerMediaSmokeTest {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
   }
 
+  // Each pass serves one read of the FIFO and then waits for that reader to exit. An open for
+  // writing returns while any process still holds the FIFO for reading. Without the wait the next
+  // pass would open against the reader just served and its write would fail once that reader
+  // exits. A reader that opens the FIFO before the failed pass closes it reads the end of an empty
+  // file.
   private static void serveUntilThePacketScanOpens(
       Path fifo, byte[] media, CompletableFuture<ProcessHandle> scanReady) {
     while (!Thread.currentThread().isInterrupted()) {
+      var reader = Optional.<ProcessHandle>empty();
       // Opening a FIFO for writing waits for a reader.
       try (var output = Files.newOutputStream(fifo)) {
-        var scan = packetScanProcess(fifo);
+        reader = processesNaming(fifo).findFirst();
+        var scan = reader.filter(WorkerMediaSmokeTest::isPacketScan);
         if (scan.isPresent()) {
           scanReady.complete(scan.get());
           new CountDownLatch(1).await();
@@ -9648,24 +9655,29 @@ class WorkerMediaSmokeTest {
       } catch (InterruptedException _) {
         Thread.currentThread().interrupt();
       } catch (IOException _) {
-        // A reader that stops early closes the pipe; the next read opens it again.
+        // A reader that exits before the write closes the pipe.
       }
+
+      reader.ifPresent(process -> process.onExit().join());
     }
   }
 
   private static Optional<ProcessHandle> packetScanProcess(Path source) {
+    return processesNaming(source).filter(WorkerMediaSmokeTest::isPacketScan).findFirst();
+  }
+
+  private static Stream<ProcessHandle> processesNaming(Path source) {
     return ProcessHandle.current()
         .descendants()
-        .filter(
-            process ->
-                process
-                    .info()
-                    .arguments()
-                    .map(List::of)
-                    .filter(arguments -> arguments.contains("framecrc"))
-                    .filter(arguments -> arguments.contains(source.toString()))
-                    .isPresent())
-        .findFirst();
+        .filter(process -> argumentsOf(process).contains(source.toString()));
+  }
+
+  private static boolean isPacketScan(ProcessHandle process) {
+    return argumentsOf(process).contains("framecrc");
+  }
+
+  private static List<String> argumentsOf(ProcessHandle process) {
+    return process.info().arguments().map(List::of).orElse(List.of());
   }
 
   private static ProbeRequest keyframeRequest() {
