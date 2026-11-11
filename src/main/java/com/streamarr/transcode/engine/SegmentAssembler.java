@@ -379,16 +379,9 @@ final class SegmentAssembler {
     // A short copy may end with one final picture after its last audio packet. That still takes
     // the normal short-copy path; a complete interval without audio needs an audio encode, and so
     // does any segment that a later one follows.
-    var start =
-        videoSamples.stream()
-            .mapToLong(carried -> carried.sample().presentationTime())
-            .min()
-            .orElseThrow();
     if (videoDecision instanceof VideoDecision.Copy
         && segment.lastOfTheOutput()
-        && new MediaTime(lastPictureEnd - start, new TimeBase(1, timescale))
-                .compareTo(intervalOf(segment.sequenceNumber(), timescale))
-            < 0) {
+        && endsBeforeItsIntervalsEnd(segment, lastPictureEnd, timescale)) {
       return;
     }
 
@@ -396,16 +389,25 @@ final class SegmentAssembler {
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
   }
 
-  // How long the segment's own interval lasts. The last listed segment of a job without an
-  // advertised end runs to the end of the media, so the job's shortest interval stands for it.
-  private MediaTime intervalOf(int sequenceNumber, long timescale) {
-    var end = intervals.endOf(sequenceNumber, timescale);
-    if (end.isEmpty()) {
-      return minimumCopyDuration;
+  // Whether the segment's last picture ends before its own interval does, wherever its first
+  // picture starts: a keyframe can come late, and a picture can be presented before the keyframe
+  // it follows. The last listed segment of a job without an advertised end runs to the end of the
+  // media and has no interval end, so its video is measured against the job's shortest interval.
+  private boolean endsBeforeItsIntervalsEnd(
+      AwaitingSegment segment, long lastPictureEnd, long timescale) {
+    var intervalEnd = intervals.endOf(segment.sequenceNumber(), timescale);
+    if (intervalEnd.isPresent()) {
+      return lastPictureEnd < intervalEnd.getAsLong();
     }
 
-    return new MediaTime(
-        end.getAsLong() - intervals.startOf(sequenceNumber, timescale), new TimeBase(1, timescale));
+    var start =
+        segment.videoSamples().stream()
+            .mapToLong(carried -> carried.sample().presentationTime())
+            .min()
+            .orElseThrow();
+    return new MediaTime(lastPictureEnd - start, new TimeBase(1, timescale))
+            .compareTo(minimumCopyDuration)
+        < 0;
   }
 
   private Set<Fragment> heldFragments() {

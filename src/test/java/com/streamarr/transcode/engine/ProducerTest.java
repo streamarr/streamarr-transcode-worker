@@ -823,6 +823,62 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // The keyframe after 1 s comes one frame late, and the output ends with segment 1: its 23
+  // pictures run from 1.042 s to its interval's end at 2 s. The audio ends at 1 s.
+  @Test
+  @DisplayName(
+      "Should refuse a copy's last segment without copied audio when its video reaches its"
+          + " interval's end from a late keyframe")
+  void
+      shouldRefuseACopysLastSegmentWithoutCopiedAudioWhenItsVideoReachesItsIntervalsEndFromALateKeyframe() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(25)
+                .audioFrom(0, oneSecondOfAudioSamples())
+                .build(),
+            TimedFragment.keyframeAt(25_000).videoDuration(1_000).videoSampleCount(23).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The output ends with segment 1. Its keyframe is presented at 1 s, and the picture that follows
+  // it in the fragment is presented before it, at 0.958 s. Its video ends at 1.958 s, one picture
+  // before its interval's end. The audio ends at 1 s.
+  @Test
+  @DisplayName(
+      "Should complete a short copy when its silent last segment ends inside its interval and holds"
+          + " a picture presented before that interval's start")
+  void
+      shouldCompleteAShortCopyWhenItsSilentLastSegmentEndsInsideItsIntervalAndHoldsAPicturePresentedBeforeThatIntervalsStart() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(23)
+                .audioFrom(0, oneSecondOfAudioSamples())
+                .build(),
+            TimedFragment.keyframeAt(22_000)
+                .firstCompositionOffset(2_000)
+                .videoDuration(1_000)
+                .videoSampleCount(2)
+                .build(),
+            TimedFragment.frameAt(25_000).videoDuration(1_000).videoSampleCount(22).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
   // Exact starts at 0 s, 1.083 s, 2 s and 3 s: segment 1's interval, 0.917 s, is the shortest. The
   // copy ends in segment 2, whose 1 s interval holds 0.958 s of video after the audio's end.
   @Test
@@ -5163,9 +5219,9 @@ class ProducerTest {
   /**
    * One fragment of a 1 s period: one-byte video samples back to back from this time in the 24 kHz
    * video timescale, one unless given, each lasting one second unless given, the first a keyframe
-   * or not, and a keyframe at the given position after it, if any; then one-byte audio samples back
-   * to back from their start in the 48 kHz audio timescale, lasting as given, followed in the mdat
-   * by any padding given.
+   * or not, presented this long after its decode time when given, and a keyframe at the given
+   * position after it, if any; then one-byte audio samples back to back from their start in the 48
+   * kHz audio timescale, lasting as given, followed in the mdat by any padding given.
    */
   @Builder
   private record TimedFragment(
@@ -5173,6 +5229,7 @@ class ProducerTest {
       long videoDuration,
       int videoSampleCount,
       boolean keyframe,
+      int firstCompositionOffset,
       OptionalInt keyframeInside,
       long audioStart,
       List<Integer> audioDurations,
@@ -5205,6 +5262,10 @@ class ProducerTest {
 
       if (keyframeInside.isEmpty() && keyframe) {
         video.firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS);
+      }
+
+      if (firstCompositionOffset != 0) {
+        video.compositionOffset(firstCompositionOffset);
       }
 
       if (audioDurations.isEmpty()) {
