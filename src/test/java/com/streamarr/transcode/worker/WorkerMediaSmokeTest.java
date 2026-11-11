@@ -218,6 +218,19 @@ class WorkerMediaSmokeTest {
   // 64x36 variant needs H.264 level 1.1.
   private static final H264Source SEEKABLE_SOURCE = new H264Source("avc1.F4000A", 11);
 
+  // The numbered-picture source's libx264 encode: High at level 3.0. Its 320x180 variant at 24 fps
+  // and 500 kb/s needs H.264 level 1.3.
+  private static final H264Source NUMBERED_PICTURE_SOURCE = new H264Source("avc1.64001E", 13);
+  private static final int NUMBERED_PICTURE_WIDTH = 320;
+  private static final int NUMBERED_PICTURE_HEIGHT = 180;
+  private static final int NUMBERED_PICTURE_RATE = 24;
+  // Two pictures more than the 144 of two 3 s periods, so that segment 2 holds two pictures.
+  private static final int NUMBERED_PICTURE_COUNT = 146;
+  // A picture's number in binary: eight stripes across the picture's top 36 rows, the lowest bit
+  // on the left, white for one.
+  private static final int NUMBER_STRIPES = 8;
+  private static final int NUMBER_STRIPE_HEIGHT = 36;
+
   // The levels that a 64x36 variant at 24 fps and up to 100 kb/s needs: H.264 1.1, because High
   // allows 80 kb/s at level 1.0, H.265 1.0 and AV1 2.0.
   private static final Map<String, Integer> TINY_VARIANT_LEVELS =
@@ -3791,6 +3804,232 @@ class WorkerMediaSmokeTest {
   private static List<Mp4Samples.Sample> videoSamples(byte[] media) {
     var movie = Mp4Samples.read(media);
     return movie.samplesOf(movie.videoTrack());
+  }
+
+  // Segment 2 holds the source's last two pictures, a keyframe and the picture after it, which no
+  // encoder reorders, while the attempt from the start reorders pictures. The server sends an MP4
+  // source's keyframe as its presentation time: segment 2's own keyframe at 6 s for a copy, and
+  // for an encode the keyframe at 4 s, the last one at least 0.5 s before segment 2.
+  @ParameterizedTest(name = "{0}, reading from {1} s")
+  @CsvSource({"TRANSCODE_MODE_REMUX, 6", "TRANSCODE_MODE_VIDEO_TRANSCODE, 4"})
+  @DisplayName(
+      "Should show each numbered picture at its source time when a replacement attempt starts on"
+          + " a last segment of two pictures")
+  void
+      shouldShowEachNumberedPictureAtItsSourceTimeWhenAReplacementAttemptStartsOnALastSegmentOfTwoPictures(
+          TranscodeMode mode, int keyframeSeconds) throws Exception {
+    var source = numberedPictureSource();
+    var fromStart = numberedPictureJob(source, mode);
+    var replacement = numberedPictureJob(source, mode);
+    replacement.getExecutionBuilder().setStartSequenceNumber(REPLACEMENT_START_SEQUENCE_NUMBER);
+    setSeekPosition(replacement.getExecutionBuilder(), BigDecimal.valueOf(keyframeSeconds));
+
+    var fromStartUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), fromStart.build());
+    var replacementUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), replacement.build());
+
+    assertThat(replacementUploads.names())
+        .containsExactly("init.mp4", segmentName(REPLACEMENT_START_SEQUENCE_NUMBER));
+    var fromStartMedia = fromStartUploads.contentOf(fromStartUploads.names());
+    var replacementMedia = replacementUploads.contentOf(replacementUploads.names());
+    assertThat(deepestReorderingDelay(fromStartMedia))
+        .as("the reordering delay of the attempt from the start, in ticks")
+        .isPositive();
+    assertThat(deepestReorderingDelay(replacementMedia))
+        .as("the reordering delay of the replacement attempt's two pictures, in ticks")
+        .isZero();
+    assertThat(shownPictures(fromStartMedia))
+        .as("the pictures of the attempt from the start")
+        .containsExactlyElementsOf(numberedPicturesFrom(0));
+    assertThat(shownPictures(replacementMedia))
+        .as("the pictures of the replacement attempt's segment 2")
+        .containsExactlyElementsOf(
+            numberedPicturesFrom(
+                REPLACEMENT_START_SEQUENCE_NUMBER * SLOT_SECONDS * NUMBERED_PICTURE_RATE));
+  }
+
+  // The rule of FFmpeg's reader that the reading of shown pictures corrects for, and the reason
+  // two outputs are never compared by the times FFmpeg reads: a segment that reorders no picture
+  // reads at its own times alone, and later by the upload's delay behind the segments before it.
+  @Test
+  @DisplayName(
+      "Should read every presentation time later by the deepest reordering delay of the media"
+          + " when FFmpeg reads an upload whole or its last segment alone")
+  void
+      shouldReadEveryPresentationTimeLaterByTheDeepestReorderingDelayOfTheMediaWhenFfmpegReadsAnUploadWholeOrItsLastSegmentAlone()
+          throws Exception {
+    var source = numberedPictureSource();
+    var job = numberedPictureJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var whole = uploads.contentOf(uploads.names());
+    var lastSegmentAlone =
+        uploads.contentOf(List.of("init.mp4", segmentName(REPLACEMENT_START_SEQUENCE_NUMBER)));
+    var delay = deepestReorderingDelay(whole);
+    assertThat(delay).as("the reordering delay of the whole upload, in ticks").isPositive();
+    assertThat(deepestReorderingDelay(lastSegmentAlone))
+        .as("the reordering delay of the last segment, in ticks")
+        .isZero();
+    assertThat(sortedVideoPresentationTicksThatFfprobeReads(whole))
+        .as("the whole upload's presentation times as ffprobe reads them")
+        .containsExactlyElementsOf(
+            sortedVideoPresentationTicks(whole).stream().map(time -> time + delay).toList());
+    assertThat(sortedVideoPresentationTicksThatFfprobeReads(lastSegmentAlone))
+        .as("the last segment's presentation times as ffprobe reads them alone")
+        .containsExactlyElementsOf(sortedVideoPresentationTicks(lastSegmentAlone));
+  }
+
+  private static List<ShownPicture> numberedPicturesFrom(int first) {
+    return IntStream.range(first, NUMBERED_PICTURE_COUNT)
+        .mapToObj(
+            number -> new ShownPicture(new BigFraction(number, NUMBERED_PICTURE_RATE), number))
+        .toList();
+  }
+
+  // A picture's number and the time in seconds at which the output's bytes present it.
+  private record ShownPicture(BigFraction presentationTime, int number) {}
+
+  // The output's pictures in the order the decoder returns them, each at the presentation time
+  // that the bytes give its own sample: ADR 0037's decode time plus composition offset. FFmpeg
+  // hands the decoder each sample's time later by the deepest reordering delay of the media, so
+  // the bytes' time is that time less the delay.
+  private List<ShownPicture> shownPictures(byte[] media) throws Exception {
+    var file = playable(media);
+    var timescale = Mp4Samples.read(media).videoTrack().timescale();
+    var delay = deepestReorderingDelay(media);
+    var times =
+        ffprobe(List.of("-select_streams", "v:0", "-show_entries", "frame=pts"), file)
+            .lines()
+            .map(line -> Long.parseLong(line.replace(",", "").strip()))
+            .map(ticks -> new BigFraction(ticks - delay, timescale))
+            .toList();
+    var numbers = decodedPictureNumbers(file);
+    assertThat(times)
+        .as("one decoded picture for each video sample")
+        .hasSameSizeAs(videoSamples(media));
+    assertThat(numbers).as("one number for each decoded picture").hasSameSizeAs(times);
+    return IntStream.range(0, times.size())
+        .mapToObj(index -> new ShownPicture(times.get(index), numbers.get(index)))
+        .toList();
+  }
+
+  // The video samples' presentation times in ticks, as the bytes carry them, in ascending order.
+  private static List<Long> sortedVideoPresentationTicks(byte[] media) {
+    return videoSamples(media).stream().map(Mp4Samples.Sample::presentationTime).sorted().toList();
+  }
+
+  private List<Long> sortedVideoPresentationTicksThatFfprobeReads(byte[] media) throws Exception {
+    return FfprobePackets.of(media, root).stream()
+        .filter(Packet::isVideo)
+        .map(Packet::pts)
+        .sorted()
+        .toList();
+  }
+
+  // The longest time by which a video sample decodes after it presents, in ticks: minus the most
+  // negative composition offset, and zero for an output that reorders no picture.
+  private static long deepestReorderingDelay(byte[] media) {
+    return videoSamples(media).stream()
+        .mapToLong(sample -> sample.decodeTime() - sample.presentationTime())
+        .max()
+        .orElseThrow();
+  }
+
+  // The numbers of the media's decoded pictures, in the order the decoder returns them.
+  private List<Integer> decodedPictureNumbers(Path media) throws Exception {
+    var pictures = Files.createTempFile(root, "pictures", ".gray");
+    runFfmpeg(
+        List.of(
+            "-i",
+            media.toString(),
+            "-map",
+            "0:v:0",
+            "-fps_mode",
+            "passthrough",
+            "-pix_fmt",
+            "gray",
+            "-f",
+            "rawvideo"),
+        pictures);
+    var luma = Files.readAllBytes(pictures);
+    var pictureSize = NUMBERED_PICTURE_WIDTH * NUMBERED_PICTURE_HEIGHT;
+    assertThat(luma.length % pictureSize).as("whole decoded pictures").isZero();
+    return IntStream.range(0, luma.length / pictureSize)
+        .mapToObj(picture -> pictureNumber(luma, picture * pictureSize))
+        .toList();
+  }
+
+  // The number that the stripes of the picture at the offset code, read in the middle of each.
+  private static int pictureNumber(byte[] luma, int pictureStart) {
+    var stripeWidth = NUMBERED_PICTURE_WIDTH / NUMBER_STRIPES;
+    var middleRow = pictureStart + NUMBER_STRIPE_HEIGHT / 2 * NUMBERED_PICTURE_WIDTH;
+    return IntStream.range(0, NUMBER_STRIPES)
+        .filter(bit -> (luma[middleRow + bit * stripeWidth + stripeWidth / 2] & 0xFF) > 127)
+        .map(bit -> 1 << bit)
+        .sum();
+  }
+
+  // 146 pictures of a moving test pattern at 24 fps, each under the stripes of its number, as
+  // H.264 in MP4. A keyframe every 2 s opens segment 2 on picture 144, and two B-frames between
+  // the other pictures make a copy reorder its pictures.
+  private static synchronized Path numberedPictureSource() throws Exception {
+    var stripeWidth = NUMBERED_PICTURE_WIDTH / NUMBER_STRIPES;
+    var stripes =
+        IntStream.range(0, NUMBER_STRIPES)
+            .mapToObj(
+                bit ->
+                    "drawbox=x=%d:y=0:w=%d:h=%d:color=white:t=fill:enable='bitand(n,%d)'"
+                        .formatted(bit * stripeWidth, stripeWidth, NUMBER_STRIPE_HEIGHT, 1 << bit))
+            .collect(Collectors.joining(","));
+    var pictures =
+        "testsrc2=size=%dx%d:rate=%d,format=yuv420p,drawbox=x=0:y=0:w=%d:h=%d:color=black:t=fill,%s"
+            .formatted(
+                NUMBERED_PICTURE_WIDTH,
+                NUMBERED_PICTURE_HEIGHT,
+                NUMBERED_PICTURE_RATE,
+                NUMBERED_PICTURE_WIDTH,
+                NUMBER_STRIPE_HEIGHT,
+                stripes);
+    return buildFixtureOnce(
+        seekableSources.resolve("numbered-pictures.mp4"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    pictures,
+                    "-frames:v",
+                    String.valueOf(NUMBERED_PICTURE_COUNT),
+                    "-c:v",
+                    "libx264",
+                    "-profile:v",
+                    "high",
+                    "-level:v",
+                    "3.0",
+                    "-x264-params",
+                    "keyint=48:min-keyint=48:scenecut=0:bframes=2:b-adapt=0"),
+                output));
+  }
+
+  // The numbered-picture source at its own size and frame rate on 3 s periods, without audio.
+  private static VariantJob.Builder numberedPictureJob(Path source, TranscodeMode mode) {
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, NUMBERED_PICTURE_SOURCE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder()
+        .setWidth(NUMBERED_PICTURE_WIDTH)
+        .setHeight(NUMBERED_PICTURE_HEIGHT)
+        .setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(REPLACEMENT_START_SEQUENCE_NUMBER + 1)
+        .setOutputFrameRate(
+            Fraction.newBuilder().setNumerator(NUMBERED_PICTURE_RATE).setDenominator(1));
+    return job;
   }
 
   @ParameterizedTest(name = "{0} source, {1}, from segment {2}")
