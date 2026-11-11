@@ -521,10 +521,16 @@ public class FfmpegCommandBuilder {
   // the encoded audio, a copied video therefore ran on once the audio's packets stopped, and that
   // audio came out only at the end of the file, after the worker had delivered the segments it
   // belongs to. A copy that encodes its audio reads the audio from a second input of the source
-  // instead, seeked as the first and placed on its timeline by -isync, and every output takes its
-  // audio from that input (sourceStreamInputs), so the first input feeds only video and FFmpeg
-  // holds it back while the audio trails. The audio's input keeps its video in use
-  // (addAudioInputsVideoInUse).
+  // instead, seeked as the first, and every output takes its audio from that input
+  // (sourceStreamInputs), so the first input feeds only video and FFmpeg holds it back while the
+  // audio trails. The audio's input keeps its video in use (addAudioInputsVideoInUse).
+  //
+  // For a format whose timestamps may jump, such as MPEG-TS, FFmpeg starts an input's timeline at
+  // the earliest start among the streams that the input's outputs use. The audio's input uses the
+  // video and the audio, as the one input did, so its timeline is the one input's, and -isync
+  // places the first input, which uses the video alone, on it. Placed the other way round, both
+  // inputs would count from the video's start, and audio that starts before the video would lose
+  // that lead.
   //
   // FFmpeg counts an encoded audio stream as ended once its filter graph ends, before the encoder
   // has written the frames queued for it. apad keeps that graph running up to the advertised end.
@@ -546,19 +552,16 @@ public class FfmpegCommandBuilder {
 
     if (holdsLastFrame(request)) {
       addSourceInput(cmd, request);
-      addAudioInput(cmd, request);
+      cmd.addAll(List.of("-isync", String.valueOf(EncoderInput.SOURCE.sourceInputIndex())));
+      addSourceInput(cmd, request);
       return;
     }
 
+    cmd.addAll(List.of("-isync", String.valueOf(AUDIO_INPUT)));
     addSeekArgs(cmd, request);
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
-    addAudioInput(cmd, request);
-    addStreamSelection(cmd, request.transcodeDecision(), AUDIO_INPUT);
-  }
-
-  private void addAudioInput(List<String> cmd, TranscodeRequest request) {
-    cmd.addAll(List.of("-isync", String.valueOf(EncoderInput.SOURCE.sourceInputIndex())));
     addSourceInput(cmd, request);
+    addStreamSelection(cmd, request.transcodeDecision(), AUDIO_INPUT);
   }
 
   // An encode that holds no frame keeps the one input. The held encode names its audio as the
@@ -646,9 +649,12 @@ public class FfmpegCommandBuilder {
   }
 
   // A Matroska demuxer that discards the video after a seek drops every audio block until one
-  // passes the seek's cue, laced frames that reach past the first segment's start among them. The
-  // audio's input keeps its video in use, as the one input did, through a copy to FFmpeg's null
-  // muxer, which writes nothing and, like every output, no metadata of the source.
+  // passes the seek's cue, laced frames that reach past the first segment's start among them. And
+  // an input of a format whose timestamps may jump starts its timeline at the earliest start among
+  // the streams in use, which must stay the earlier of the video's and the audio's for a copy
+  // (addSourceInputsAndStreamSelection). The audio's input keeps its video in use, as the one
+  // input did, through a copy to FFmpeg's null muxer, which writes nothing and, like every output,
+  // no metadata of the source.
   private static void addAudioInputsVideoInUse(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(
         List.of("-map", AUDIO_INPUT + ":" + decision.videoDecision().streamIndex(), "-c", "copy"));
