@@ -20,11 +20,15 @@ import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime.Connection;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime.ReportCall;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -32,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 
@@ -281,6 +286,156 @@ class TranscodeWorkerProbeAttemptEndedWithoutReportTest {
       } finally {
         process.finish();
       }
+    }
+  }
+
+  @ParameterizedTest(name = "the report call {0}")
+  @EnumSource(EndWithoutAnswer.class)
+  @DisplayName(
+      "Should discard the report, send one event and open no second report call when the report"
+          + " call ends without the server's answer")
+  void shouldDiscardTheReportAndSendOneEventWhenTheReportCallEndsWithoutTheServersAnswer(
+      EndWithoutAnswer end) throws Exception {
+    var request = requestBuilder().build();
+    var configuration =
+        end.bounds
+            .apply(
+                workerConfigurationBuilder()
+                    .availableSlots(2)
+                    .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir)))
+            .build();
+
+    try (var worker =
+        workerBuilder(tempDir).configuration(configuration).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      end.preparation.accept(connection);
+      start(connection, request);
+      runtime.probes().drain();
+      end.ending.end(connection.awaitReportCalls(1).getFirst());
+
+      assertThat(reportCallsOnceNothingIsLeftToSend(connection))
+          .as("the worker sends no report twice")
+          .hasSize(1);
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId());
+      assertThat(worker.hasAcceptedSession()).isTrue();
+    }
+  }
+
+  private enum EndWithoutAnswer {
+    IS_REFUSED_WITH_A_STATUS(bounds -> bounds, Connection::refuseNextReport, _ -> {}),
+    LOSES_ITS_TRANSPORT(
+        bounds -> bounds,
+        Connection::withholdReportAnswers,
+        call -> {
+          call.awaitSentWhole();
+          call.failTransport();
+        }),
+    IS_NOT_READY_WITHIN_THE_UPLOAD_READINESS_TIMEOUT(
+        bounds -> bounds.uploadReadinessTimeout(Duration.ofMillis(200)),
+        Connection::withholdReportReadiness,
+        _ -> {}),
+    IS_NOT_ANSWERED_WITHIN_THE_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT(
+        bounds -> bounds.uploadAcknowledgementTimeout(Duration.ofMillis(200)),
+        Connection::withholdReportAnswers,
+        _ -> {}),
+    IS_ANSWERED_WITH_ANOTHER_LENGTH(
+        bounds -> bounds,
+        Connection::withholdReportAnswers,
+        call -> {
+          call.awaitSentWhole();
+          call.answerWithAcceptedLength(call.content().length - 1L);
+        });
+
+    private final UnaryOperator<TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder>
+        bounds;
+    private final Consumer<Connection> preparation;
+    private final Ending ending;
+
+    EndWithoutAnswer(
+        UnaryOperator<TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder> bounds,
+        Consumer<Connection> preparation,
+        Ending ending) {
+      this.bounds = bounds;
+      this.preparation = preparation;
+      this.ending = ending;
+    }
+
+    @Override
+    public String toString() {
+      return name().toLowerCase(Locale.ROOT).replace('_', ' ');
+    }
+  }
+
+  // What the scripted server does to the open report call so that it ends without an answer;
+  // nothing when a refusal or one of the worker's bounds ends the call.
+  @FunctionalInterface
+  private interface Ending {
+    void end(ReportCall call) throws Exception;
+  }
+
+  @Test
+  @DisplayName("Should send no event when the server answers the report call")
+  void shouldSendNoEventWhenTheServerAnswersTheReportCall() throws Exception {
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      start(connection, request);
+      runtime.probes().drain();
+
+      assertThat(connection.reports()).hasSize(1);
+      assertThat(connection.attemptsEndedWithoutReport()).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should answer a cancel command with an event of its own when the attempt's report call has"
+          + " already ended without the server's answer")
+  void shouldAnswerACancelCommandWithAnEventOfItsOwnWhenTheReportCallHasEndedWithoutAnAnswer()
+      throws Exception {
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseNextReport();
+      start(connection, request);
+      runtime.probes().drain();
+      connection.awaitReportThreads();
+
+      cancel(connection, request);
+
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId(), request.getProbeAttemptId());
+      assertThat(reportCallsOnceNothingIsLeftToSend(connection)).hasSize(1);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should send no event on either worker session when a report call is open as its worker"
+          + " session closes and another worker session follows")
+  void shouldSendNoEventOnEitherWorkerSessionWhenAReportCallIsOpenAsItsWorkerSessionCloses()
+      throws Exception {
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var old = runtime.connection();
+      var call = openReportCallThatAwaits("answer", request);
+
+      worker.close();
+      worker.start("localhost", 1);
+      var replacement = runtime.connection();
+      call.failTransport();
+
+      assertThat(call.wasCancelled()).isTrue();
+      assertThat(old.attemptsEndedWithoutReport()).isEmpty();
+      assertThat(replacement.attemptsEndedWithoutReport()).isEmpty();
     }
   }
 

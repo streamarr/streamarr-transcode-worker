@@ -84,6 +84,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.Builder;
@@ -229,15 +230,17 @@ public final class TranscodeWorker implements AutoCloseable {
     channel = runtime.openChannel(configuration, InetSocketAddress.createUnresolved(host, port));
     var accepted = new CompletableFuture<WorkerSessionAccepted>();
     var sessionRequests = new AtomicReference<StreamObserver<EstablishWorkerSessionRequest>>();
+    Consumer<UUID> endedWithoutReport =
+        attemptId -> sendEndedWithoutReport(sessionRequests.get(), attemptId);
     probeSession =
         WorkerProbeSession.builder()
             .ffprobe(ffprobe)
             .sources(sources)
-            .endedWithoutReport(
-                attemptId -> sendEndedWithoutReport(sessionRequests.get(), attemptId))
+            .endedWithoutReport(endedWithoutReport)
             .reports(
                 ProbeReportSender.builder()
                     .opener(call -> openProbeReport(sessionRequests.get(), call))
+                    .endedWithoutReport(endedWithoutReport)
                     .executor(runtime.newProbeReportScope())
                     .readinessTimeout(configuration.uploadReadinessTimeout())
                     .acknowledgementTimeout(configuration.uploadAcknowledgementTimeout())

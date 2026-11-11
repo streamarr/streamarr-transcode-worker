@@ -71,7 +71,7 @@ The server states three limits on a probe report as well, and the worker checks 
 
 The two upload timeouts also bound a report call. The worker sends a message of the report only when the call is ready for it, and waits at most `TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT` for each message. After the last message it waits at most `TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT` for the server's answer. A segment upload's acknowledgement timeout runs from its first message. A report call's runs from its last, so no bound covers a whole probe report, and a large report that keeps advancing never times out.
 
-The worker never sends a probe report twice. When a report call fails, the worker logs the failure with the probe attempt and discards the report. The worker session stays open, and the server runs the probe again.
+The worker never sends a probe report twice. A report call ends without the server's answer when the server refuses the call, when the transport fails, when one of the two timeouts passes, or when the answer names another length than the report's. The worker then logs the failure with the probe attempt, discards the report and sends one `ProbeAttemptEndedWithoutReport` event for the attempt, so the server no longer counts the probe. The worker session stays open, and the server runs the probe again. A report call that the server answered sends no event.
 
 ## Encoders
 

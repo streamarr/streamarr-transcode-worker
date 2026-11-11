@@ -752,6 +752,15 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       refuse(refusal);
     }
 
+    // Closes the open call with this status and without an answer, as a failed transport does.
+    void failNow(Status status) {
+      if (!tryClose()) {
+        return;
+      }
+
+      responses.onClose(status, new Metadata());
+    }
+
     /** Whether the server refused the upload. */
     public synchronized boolean wasRefused() {
       return refusal.isPresent();
@@ -981,6 +990,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** Refuses the open call, as when the server no longer expects the attempt's report. */
     public void refuse() {
       refuseNow(reportRefusal());
+    }
+
+    /** Ends the open call as a transport that failed before the server answered does. */
+    public void failTransport() {
+      failNow(Status.UNAVAILABLE.withDescription("The transport of the report call failed"));
     }
 
     @Override

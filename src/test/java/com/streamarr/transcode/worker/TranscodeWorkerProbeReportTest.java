@@ -530,6 +530,8 @@ class TranscodeWorkerProbeReportTest {
 
         assertThat(old.reportCalls()).isEmpty();
         assertThat(replacement.reportCalls()).isEmpty();
+        assertThat(old.attemptsEndedWithoutReport()).isEmpty();
+        assertThat(replacement.attemptsEndedWithoutReport()).isEmpty();
       } finally {
         old.releaseReportThreads();
       }

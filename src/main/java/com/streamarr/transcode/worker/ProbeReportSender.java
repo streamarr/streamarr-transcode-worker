@@ -9,6 +9,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.NonNull;
@@ -17,21 +18,29 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Sends the probe reports of one worker session, each in a report call of its own on a virtual
  * thread (ADR 0062). It keeps at most the report calls open that the server accepts from the worker
- * at once, and its other reports wait in a {@link ProbeReportQueue}. A report whose call fails is
- * logged and discarded: the worker never sends a report twice, and the server runs the probe again.
- * This object's monitor guards the waiting reports and the open calls, and no thread waits under
- * it, so a probe's thread, the control stream's thread and a holder of the worker monitor can each
- * hand over a report or shut the sender down without waiting for the server.
+ * at once, and its other reports wait in a {@link ProbeReportQueue}. A report whose call ends
+ * without the server's answer is logged and discarded, and one event tells the server that the
+ * probe attempt ended without a report: the worker never sends a report twice, and the server runs
+ * the probe again. A probe attempt that the server canceled has no report, so {@link #discard}
+ * drops its waiting report or ends its open call. This object's monitor guards the waiting reports
+ * and the open calls, and no thread waits under it, so a probe's thread, the control stream's
+ * thread and a holder of the worker monitor can each hand over a report, discard one or shut the
+ * sender down without waiting for the server. The event takes the worker monitor, so a report
+ * thread sends it only after it has released this object's monitor.
  */
 @Slf4j
 final class ProbeReportSender implements AutoCloseable {
 
   private final ProbeReportCall.Opener opener;
+  private final Consumer<UUID> endedWithoutReport;
   private final ExecutorService executor;
   private final Duration readinessTimeout;
   private final Duration acknowledgementTimeout;
   private final ProbeReportQueue waiting = new ProbeReportQueue();
   private final Set<ProbeReportCall> open = new HashSet<>();
+  // The open calls that a cancel command ended. The event that answers the command stands for the
+  // end of each of them.
+  private final Set<ProbeReportCall> canceledByServer = new HashSet<>();
   // The most calls open at once; 0 until the server states a limit, and when it states none.
   private long limit;
   private boolean shutdown;
@@ -39,10 +48,12 @@ final class ProbeReportSender implements AutoCloseable {
   @Builder(access = AccessLevel.PACKAGE)
   private ProbeReportSender(
       @NonNull ProbeReportCall.Opener opener,
+      @NonNull Consumer<UUID> endedWithoutReport,
       @NonNull ExecutorService executor,
       @NonNull Duration readinessTimeout,
       @NonNull Duration acknowledgementTimeout) {
     this.opener = opener;
+    this.endedWithoutReport = endedWithoutReport;
     this.executor = executor;
     this.readinessTimeout = readinessTimeout;
     this.acknowledgementTimeout = acknowledgementTimeout;
@@ -73,15 +84,19 @@ final class ProbeReportSender implements AutoCloseable {
 
   /**
    * Discards the report of a probe attempt that the server canceled: a waiting report never opens a
-   * report call, and an open report call ends. The caller answers the cancel command with the
-   * event, so this method waits for nothing.
+   * report call, and an open report call ends without an event of its own. The caller answers the
+   * cancel command with the event, so this method waits for nothing.
    */
   synchronized void discard(@NonNull UUID probeAttemptId) {
     waiting.discard(probeAttemptId);
     var canceled = new CancellationException("The server canceled the probe attempt");
     open.stream()
         .filter(call -> call.probeAttemptId().equals(probeAttemptId))
-        .forEach(call -> call.cancel(canceled));
+        .forEach(
+            call -> {
+              canceledByServer.add(call);
+              call.cancel(canceled);
+            });
   }
 
   /**
@@ -113,7 +128,21 @@ final class ProbeReportSender implements AutoCloseable {
     }
   }
 
+  // The event leaves after this object's monitor is released, because sending it takes the worker
+  // monitor.
   private void send(ProbeReportCall call) {
+    var withoutAnswer = true;
+    try {
+      withoutAnswer = endsWithoutAnswer(call);
+    } finally {
+      if (ended(call, withoutAnswer)) {
+        endedWithoutReport.accept(call.probeAttemptId());
+      }
+    }
+  }
+
+  // Returns whether the call opened and then ended without the server's answer.
+  private boolean endsWithoutAnswer(ProbeReportCall call) {
     try {
       if (!call.send(opener)) {
         log.debug(
@@ -121,21 +150,24 @@ final class ProbeReportSender implements AutoCloseable {
                 + " server canceled the attempt before the report call opened",
             call.probeAttemptId());
       }
+
+      return false;
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       logDiscarded(call, e);
+      return true;
     } catch (ExecutionException | TimeoutException | RuntimeException e) {
       logDiscarded(call, e);
-    } finally {
-      ended(call);
+      return true;
     }
   }
 
-  // A shutdown cancels the open calls, which is no failure of theirs.
+  // A shutdown and a cancel command each cancel open calls, which is no failure of theirs.
   private void logDiscarded(ProbeReportCall call, Exception failure) {
-    if (hasShutDown()) {
+    if (wasCanceled(call)) {
       log.debug(
-          "Discarding the report of probe attempt {}: its worker session has ended",
+          "Discarding the report of probe attempt {}: its worker session has ended, or the server"
+              + " canceled the attempt",
           call.probeAttemptId());
       return;
     }
@@ -146,15 +178,22 @@ final class ProbeReportSender implements AutoCloseable {
         failure);
   }
 
-  private synchronized boolean hasShutDown() {
-    return shutdown;
+  private synchronized boolean wasCanceled(ProbeReportCall call) {
+    return shutdown || canceledByServer.contains(call);
   }
 
-  private synchronized void ended(ProbeReportCall call) {
+  // Frees the call's place and decides in the same section whether the call's end sends the
+  // event. A cancel command therefore either finds the call open, and its event then stands for
+  // the call's end, or finds no call, and the call's end has decided for itself.
+  private synchronized boolean ended(ProbeReportCall call, boolean withoutAnswer) {
     open.remove(call);
-    if (!shutdown) {
-      openWaiting();
+    var answeredByCancel = canceledByServer.remove(call);
+    if (shutdown) {
+      return false;
     }
+
+    openWaiting();
+    return withoutAnswer && !answeredByCancel;
   }
 
   /**
