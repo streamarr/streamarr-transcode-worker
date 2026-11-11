@@ -74,8 +74,8 @@ final class ProbeReportSender implements AutoCloseable {
   }
 
   /**
-   * Takes a probe attempt's report to send, which waits in this order while the sender holds its
-   * limit of open calls. A sender that has shut down discards the report.
+   * Takes a probe attempt's report to send, which waits in this order while no report call is free
+   * for it. A sender that has shut down discards the report.
    */
   synchronized void submit(
       @NonNull ProbeAttemptReport report, @NonNull ProbeReportQueue.Order order) {
@@ -102,14 +102,6 @@ final class ProbeReportSender implements AutoCloseable {
               canceledByServer.add(call);
               call.cancel(canceled);
             });
-  }
-
-  /**
-   * Moves this probe attempt's report, when it still waits, to the reports of canceled probes. The
-   * server ends the worker session when a canceled probe's report is late.
-   */
-  synchronized void sendFirst(@NonNull UUID probeAttemptId) {
-    waiting.moveToCanceled(probeAttemptId);
   }
 
   // Holds this monitor. The reports of playback probes go first and may take every free call.

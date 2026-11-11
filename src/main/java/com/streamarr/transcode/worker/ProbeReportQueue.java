@@ -11,16 +11,16 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * The probe reports that wait for a report call, in the order in which the worker sends them: the
- * reports of canceled probes first, then the reports of probes with playback priority, then every
- * other report, and first in, first out within each of the three (ADR 0062). The owner's monitor
- * guards a queue.
+ * The probe reports that wait for a report call, in the two orders in which the worker sends them:
+ * the reports of playback probes, and every other report, first in, first out within each (ADR
+ * 0062). The owner's monitor guards a queue.
  */
 final class ProbeReportQueue {
 
-  /** Where a report waits; an earlier constant goes first. */
+  /**
+   * Where a report waits: with the reports of playback probes, which go first, or with the others.
+   */
   enum Order {
-    CANCELED,
     PLAYBACK,
     OTHER
   }
@@ -51,30 +51,6 @@ final class ProbeReportQueue {
                 reports.removeIf(
                     report ->
                         fromProto(report.getResult().getProbeAttemptId()).equals(probeAttemptId)));
-  }
-
-  /**
-   * Moves this probe attempt's report, when it waits behind the canceled probes' reports, to the
-   * end of them.
-   */
-  void moveToCanceled(UUID probeAttemptId) {
-    remove(waiting.get(Order.PLAYBACK), probeAttemptId)
-        .or(() -> remove(waiting.get(Order.OTHER), probeAttemptId))
-        .ifPresent(report -> add(report, Order.CANCELED));
-  }
-
-  private static Optional<ProbeAttemptReport> remove(
-      Deque<ProbeAttemptReport> reports, UUID probeAttemptId) {
-    var remaining = reports.iterator();
-    while (remaining.hasNext()) {
-      var report = remaining.next();
-      if (fromProto(report.getResult().getProbeAttemptId()).equals(probeAttemptId)) {
-        remaining.remove();
-        return Optional.of(report);
-      }
-    }
-
-    return Optional.empty();
   }
 
   void clear() {
