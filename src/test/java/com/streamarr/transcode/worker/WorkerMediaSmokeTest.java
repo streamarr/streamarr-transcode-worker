@@ -7821,6 +7821,8 @@ class WorkerMediaSmokeTest {
       throws Exception {
     var source = exactStartMpegTsSourceWithAudio();
     var starts = exactStarts(source);
+    var mpegTsTick = new BigFraction(1, MPEG_TS_TICKS_PER_SECOND);
+    var times = starts.stream().map(mpegTsTick::times).toList();
     var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
     job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_COPY);
 
@@ -7830,12 +7832,12 @@ class WorkerMediaSmokeTest {
     assertThat(firstVideoSampleOf(uploads, 0))
         .as("segment 0 opens at the first keyframe, after the AAC priming that starts the timeline")
         .isGreaterThan(new BigFraction(0, 1));
-    assertAudioStartsInsideItsExactInterval(uploads, 0, starts);
+    assertAudioStartsInsideItsExactInterval(uploads, 0, times);
     for (var number = 1; number < starts.size(); number++) {
       assertThat(firstVideoSampleOf(uploads, number))
           .as("segment %d opens at its listed keyframe", number)
-          .isEqualTo(new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND));
-      assertAudioStartsInsideItsExactInterval(uploads, number, starts);
+          .isEqualTo(times.get(number));
+      assertAudioStartsInsideItsExactInterval(uploads, number, times);
     }
   }
 
@@ -7914,17 +7916,14 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
-  // Segment 0's audio may start before zero with the AAC priming frame; the last segment's audio
-  // runs to the end of the media.
+  // Each segment's exact start in seconds. Segment 0's audio may start before zero with the AAC
+  // priming frame; the last segment's audio runs to the end of the media.
   private static void assertAudioStartsInsideItsExactInterval(
-      MediaUploads uploads, int number, List<Long> starts) {
+      MediaUploads uploads, int number, List<BigFraction> starts) {
     var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
     var audioTimescale = movie.audioTrack().timescale();
-    var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
-    var end =
-        Optional.of(number + 1)
-            .filter(next -> next < starts.size())
-            .map(next -> new BigFraction(starts.get(next), MPEG_TS_TICKS_PER_SECOND));
+    var start = starts.get(number);
+    var end = Optional.of(number + 1).filter(next -> next < starts.size()).map(starts::get);
     assertThat(movie.samplesOf(movie.audioTrack()))
         .extracting(sample -> new BigFraction(sample.presentationTime(), audioTimescale))
         .as("segment %d's audio starts inside its exact interval", number)
