@@ -361,7 +361,10 @@ final class SegmentAssembler {
     }
 
     var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
-    var audioTail = copiedAudioTail.or(audio::prerollTail);
+    // The audio after the output's last segment's interval was dropped, because no keyframe opened
+    // the interval it belongs to; it still shows how far the copied audio reaches beside the
+    // segment's pictures past its interval.
+    var audioTail = audio.discardedTail().or(() -> copiedAudioTail.or(audio::prerollTail));
     if (audioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
       return;
     }

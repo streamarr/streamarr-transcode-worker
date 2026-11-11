@@ -733,6 +733,36 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
   }
 
+  // The encoder missed the keyframe at 1 s, and the output ends at 1.083 s before any later one,
+  // so segment 0 is the output's last and its 26 pictures run two frames past its interval. The
+  // copied audio lasts as long, but its samples from 1 s on belong to segment 1, which no keyframe
+  // opened.
+  @Test
+  @DisplayName(
+      "Should deliver the output's last segment when its encoded video runs past its interval"
+          + " without a keyframe and the copied audio lasts as long")
+  void
+      shouldDeliverTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioLastsAsLong() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(26)
+                .audioFrom(0, audioSamples(52, 1_000))
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("recordingsWhoseAudioLastsAsLongAsTheirVideo")
   @DisplayName(

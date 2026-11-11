@@ -38,6 +38,7 @@ final class AudioSampleQueue {
   private long lastPresentationTime = Long.MIN_VALUE;
   private long droppedLateSampleCount;
   private Optional<AudioTail> prerollTail = Optional.empty();
+  private Optional<AudioTail> discardedTail = Optional.empty();
 
   /**
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence; empty
@@ -102,8 +103,16 @@ final class AudioSampleQueue {
   /** Drops the samples held for segments after this one. */
   void discardAfter(long number) {
     while (!held.isEmpty() && held.peekLast().number() > number) {
-      held.removeLast();
+      var dropped = held.removeLast().sample();
+      discardedTail = discardedTail.or(() -> Optional.of(tailOf(dropped)));
     }
+  }
+
+  /**
+   * Where the latest sample that {@link #discardAfter} dropped ends; empty when it dropped none.
+   */
+  Optional<AudioTail> discardedTail() {
+    return discardedTail;
   }
 
   /** The audio samples dropped because they arrived after their segment closed. */
@@ -182,6 +191,10 @@ final class AudioSampleQueue {
 
   private static long audioTimescaleOf(Fragment fragment) {
     return fragment.tracks().audio().orElseThrow().timescale();
+  }
+
+  private static AudioTail tailOf(CarriedSample carried) {
+    return AudioTail.of(carried.sample(), audioTimescaleOf(carried.fragment()));
   }
 
   private record Queued(long number, CarriedSample sample) {}
