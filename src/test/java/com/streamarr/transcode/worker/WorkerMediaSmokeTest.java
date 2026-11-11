@@ -6967,48 +6967,45 @@ class WorkerMediaSmokeTest {
     };
   }
 
+  // The server lists a copy's starts as its opening keyframes' ticks in the source's time base,
+  // here 0 s, 10 s, 20 s and 30 s, so each segment spans several 3 s slots.
   @ParameterizedTest(name = "from segment {0}")
   @ValueSource(ints = {0, 2})
   @DisplayName(
-      "Should upload every listed segment, each opening at the source keyframe in its first slot"
-          + " with only its listed interval's audio, when a copy's job merges 3 s slots between"
-          + " keyframes 10 s apart")
-  void shouldUploadEveryListedSegmentWhenACopysJobMergesSlotsBetweenKeyframesTenSecondsApart(
-      int startSequenceNumber) throws Exception {
+      "Should upload every listed segment, each opening at its listed keyframe with only its listed"
+          + " interval's audio, when a copy's keyframes lie 10 s apart on 3 s slots")
+  void
+      shouldUploadEveryListedSegmentOpeningAtItsListedKeyframeWhenACopysKeyframesLieTenSecondsApart(
+          int startSequenceNumber) throws Exception {
     var source = tenSecondKeyframeSource();
-    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    var timeBase = videoTimeBase(source);
+    var starts = exactStarts(source);
+    assertThat(starts).as("the source's keyframes 10 s apart open four segments").hasSize(4);
+    var times = starts.stream().map(timeBase::times).toList();
+    var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
+    job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_COPY);
     job.getExecutionBuilder()
-        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
-        .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartTicks(tenSecondKeyframeSegmentStartSeconds())
-        .setSegmentStartTimeBase(WHOLE_SECONDS)
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder()
+                .setNumerator(timeBase.numerator().intValueExact())
+                .setDenominator(timeBase.denominator().intValueExact()))
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(
-            TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
+            Math.toIntExact(new BigFraction(1, 1).ticksIn(times.get(startSequenceNumber))));
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
     assertThat(uploads.names())
         .containsExactlyElementsOf(
-            uploadNames(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size()).stream()
+            uploadNames(starts.size()).stream()
                 .filter(
                     name -> !name.startsWith("segment") || numberOf(name) >= startSequenceNumber)
                 .toList());
-    for (var number = startSequenceNumber;
-        number < TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size();
-        number++) {
-      var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
-      var firstSlot = listedInterval(number, movie.videoTrack().timescale());
-      var video = movie.samplesOf(movie.videoTrack()).getFirst();
-      assertThat(video.isSync()).as("segment %d opens at a keyframe", number).isTrue();
-      assertThat(video.presentationTime())
-          .as("segment %d opens in its first slot", number)
-          .isBetween(firstSlot.start(), firstSlot.start() + SLOT_SECONDS * firstSlot.timescale());
-      var audioInterval = listedInterval(number, movie.audioTrack().timescale());
-      assertThat(movie.samplesOf(movie.audioTrack()))
-          .as("segment %d's audio starts inside its listed interval", number)
-          .isNotEmpty()
-          .allMatch(sample -> audioInterval.interval().holds(sample.presentationTime()));
+    for (var number = startSequenceNumber; number < starts.size(); number++) {
+      assertThat(firstVideoSampleOf(uploads, number))
+          .as("segment %d opens at its listed keyframe", number)
+          .isEqualTo(times.get(number));
+      assertAudioStartsInsideItsExactInterval(uploads, number, times);
     }
   }
 
@@ -8162,10 +8159,10 @@ class WorkerMediaSmokeTest {
       from = Long.MIN_VALUE;
     }
 
-    return new ListedInterval(start, timescale, new AudioInterval(from, end));
+    return new ListedInterval(start, new AudioInterval(from, end));
   }
 
-  private record ListedInterval(long start, long timescale, AudioInterval interval) {}
+  private record ListedInterval(long start, AudioInterval interval) {}
 
   // The seekable source's frames and noise for 35 s with a keyframe every 240 frames, 10 s at
   // 24 fps, which libx264 with the default keyint=250 also leaves for a static scene: on 3 s slots,
