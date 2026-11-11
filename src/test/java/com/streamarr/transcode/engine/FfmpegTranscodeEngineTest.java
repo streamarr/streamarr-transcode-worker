@@ -9,8 +9,11 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
+import com.streamarr.transcode.engine.SourceEnd.EndedEarly;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.Mp4Samples;
+import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -18,13 +21,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 @Tag("UnitTest")
 @DisplayName("FFmpeg Transcode Engine Tests")
@@ -78,6 +84,11 @@ class FfmpegTranscodeEngineTest {
 
   private static TranscodeRequest.TranscodeRequestBuilder requestBuilder(
       TranscodeMode mode, String codecFamily) {
+    return requestBuilder(mode, codecFamily, stereoAac().build());
+  }
+
+  private static TranscodeRequest.TranscodeRequestBuilder requestBuilder(
+      TranscodeMode mode, String codecFamily, AudioDecision audio) {
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())
         .sourcePath(Path.of("/media/movie.mkv"))
@@ -88,19 +99,22 @@ class FfmpegTranscodeEngineTest {
                 .transcodeMode(mode)
                 .videoCodecFamily(codecFamily)
                 .videoDecision(VideoDecisionFixtures.forMode(mode))
-                .audioDecision(
-                    AudioDecision.builder()
-                        .mode(AudioMode.TRANSCODE)
-                        .codec("aac")
-                        .channels(2)
-                        .bitrate(128_000L)
-                        .build())
+                .audioDecision(audio)
                 .subtitleDecision(SubtitleDecisions.EXCLUDED)
                 .build())
         .encoderPreset(EncoderPreset.FASTER)
         .width(1920)
         .height(1080)
         .bitrate(5_000_000L);
+  }
+
+  // An encode of the source's first audio stream to stereo AAC, which names no stream.
+  private static AudioDecision.AudioDecisionBuilder stereoAac() {
+    return AudioDecision.builder()
+        .mode(AudioMode.TRANSCODE)
+        .codec("aac")
+        .channels(2)
+        .bitrate(128_000L);
   }
 
   @Test
@@ -204,6 +218,196 @@ class FfmpegTranscodeEngineTest {
         .isInstanceOf(TranscodeException.class)
         .hasMessageStartingWith("FFmpeg is unavailable");
     assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse to start a producer on an encoder backend resolved earlier without launching"
+          + " FFmpeg when it is unavailable")
+  void
+      shouldRefuseToStartAProducerOnAnEncoderBackendResolvedEarlierWithoutLaunchingFfmpegWhenItIsUnavailable() {
+    executor =
+        engineLaunching(
+            ScriptedProcess.builder().output(new byte[0]).build(),
+            createCapabilityService(false, noHardware()));
+    var request = createRequest(TranscodeMode.REMUX, "h264");
+
+    var thrown =
+        catchThrowable(
+            () ->
+                executor.startProducer(
+                    request,
+                    Optional.empty(),
+                    new RecordingSegmentSink(),
+                    SegmentMemoryBudget.forSlots(1)));
+
+    assertThat(thrown)
+        .isInstanceOf(TranscodeException.class)
+        .hasMessageStartingWith("FFmpeg is unavailable");
+    assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should have an encoder waiting for its recheck only after a hardware encoder is withdrawn")
+  void shouldHaveAnEncoderWaitingForItsRecheckOnlyAfterAHardwareEncoderIsWithdrawn() {
+    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
+    var nvenc = executor.encoderBackendOf(request).orElseThrow();
+    var waitingBefore = executor.hasWithdrawnEncoders();
+
+    executor.withdraw(nvenc);
+
+    assertThat(waitingBefore).isFalse();
+    assertThat(executor.hasWithdrawnEncoders()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should report no change when a hardware encoder that is already withdrawn fails again")
+  void shouldReportNoChangeWhenAHardwareEncoderThatIsAlreadyWithdrawnFailsAgain() {
+    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
+    var nvenc = executor.encoderBackendOf(request).orElseThrow();
+    var changedFirst = executor.withdraw(nvenc);
+
+    var changedAgain = executor.withdraw(nvenc);
+
+    assertThat(changedFirst).isTrue();
+    assertThat(changedAgain).isFalse();
+    assertThat(executor.encoderBackendOf(request)).map(EncoderBackend::encoder).contains("libx264");
+  }
+
+  // FFmpeg delivers segment 0 of three 1 s segments. The source's audio, stream 1, ends with a
+  // packet that starts 8 ms before segment 0's end and ends 13 ms after it. The producer places a
+  // copied packet whole by its start, and an encode converts each sample over its whole duration.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("audioWhoseLastPacketCrossesTheLastDeliveredSegmentsEnd")
+  @DisplayName(
+      "Should report the audio as having media after the last delivered segment only when the"
+          + " attempt encodes it, when the audio's last packet crosses that segment's end")
+  void shouldReportTheAudioAsHavingMediaAfterTheLastDeliveredSegmentOnlyWhenTheAttemptEncodesIt(
+      TranscodeMode mode, AudioMode audioMode, List<Integer> streamsWithMediaAfterSegment0) {
+    var process =
+        ScriptedProcess.builder()
+            .output(IsoBoxes.oneSecondKeyframeFragments(List.of(List.of(1001))))
+            .stderr(
+                """
+                Stream mapping:
+                  Stream #0:0 -> #1:0 (copy)
+                  Stream #0:1 -> #1:1 (copy)
+                #tb 0: 1/1000
+                #tb 1: 1/48000
+                0, 0, 0, 40, 1000, 0x0a1b2c3d
+                0, 960, 960, 40, 1000, 0x0a1b2c3d
+                1, 47616, 47616, 1024, 300, 0x0a1b2c3d
+                """)
+            .build();
+    executor = engineLaunching(process, createCapabilityService(true, noHardware()));
+    var request =
+        requestBuilder(mode, "h264", stereoAac().mode(audioMode).build())
+            .targetSegmentDuration(1)
+            .mediaSegmentCount(3)
+            .build();
+
+    var producer =
+        executor.startProducer(
+            request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .asInstanceOf(InstanceOfAssertFactories.type(Completed.class))
+        .extracting(completed -> completed.sourceEnd().endedEarly())
+        .isEqualTo(Optional.of(new EndedEarly(0, streamsWithMediaAfterSegment0)));
+  }
+
+  static Stream<Arguments> audioWhoseLastPacketCrossesTheLastDeliveredSegmentsEnd() {
+    return Stream.of(
+        Arguments.of(TranscodeMode.REMUX, AudioMode.COPY, List.of()),
+        Arguments.of(TranscodeMode.AUDIO_TRANSCODE, AudioMode.TRANSCODE, List.of(1)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should complete the attempt when the job names no audio stream and FFmpeg's output declares"
+          + " no sound track")
+  void shouldCompleteTheAttemptWhenTheJobNamesNoAudioStreamAndTheOutputDeclaresNoSoundTrack() {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().build()),
+            IsoBoxes.moof(oneSecondOfVideoFrom(0)),
+            IsoBoxes.mdat(1));
+    executor =
+        engineLaunching(
+            ScriptedProcess.builder().output(output).build(),
+            createCapabilityService(true, noHardware()));
+    var request = requestBuilder(TranscodeMode.REMUX, "h264").targetSegmentDuration(1).build();
+    var sink = new RecordingSegmentSink();
+
+    var producer = executor.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // FFmpeg writes two 1 s segments whose audio runs on to 2 s; the job advertises 1.5 s.
+  @Test
+  @DisplayName(
+      "Should deliver no audio that starts at or after the advertised end when the job pads its"
+          + " audio with silence up to that end")
+  void shouldDeliverNoAudioThatStartsAtOrAfterTheAdvertisedEndWhenTheJobPadsItsAudioWithSilence() {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            oneSecondOfVideoWithAudio(0, 24_000, 24_000),
+            oneSecondOfVideoWithAudio(1, 12_000, 12_000, 12_000, 12_000));
+    executor =
+        engineLaunching(
+            ScriptedProcess.builder().output(output).build(),
+            createCapabilityService(true, noHardware()));
+    var paddedAudio = stereoAac().padsWithSilenceToAdvertisedEnd(true).build();
+    var request =
+        requestBuilder(TranscodeMode.AUDIO_TRANSCODE, "h264", paddedAudio)
+            .targetSegmentDuration(1)
+            .advertisedEnd(Optional.of(Duration.ofMillis(1_500)))
+            .build();
+    var sink = new RecordingSegmentSink();
+
+    var producer = executor.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    var lastSegment =
+        Mp4Samples.read(
+            IsoBoxes.concat(sink.contentOf("init.mp4"), sink.contentOf("segment1.m4s")));
+    assertThat(lastSegment.samplesOf(lastSegment.audioTrack()))
+        .extracting(Sample::presentationTime)
+        .as("segment 1's audio, in 48 kHz ticks, up to the advertised end at 72,000")
+        .containsExactly(48_000L, 60_000L);
+  }
+
+  // A fragment of the second's video from a keyframe and the audio samples it carries from the
+  // second's start.
+  private static byte[] oneSecondOfVideoWithAudio(int second, Integer... audioDurations) {
+    return IsoBoxes.concat(
+        IsoBoxes.moof(
+            oneSecondOfVideoFrom(second),
+            IsoBoxes.audioTraf()
+                .baseMediaDecodeTime(second * 48_000L)
+                .sampleDurations(List.of(audioDurations))
+                .build()),
+        IsoBoxes.mdat(1 + audioDurations.length));
+  }
+
+  private static IsoBoxes.TrackFragment oneSecondOfVideoFrom(int second) {
+    return IsoBoxes.videoTraf()
+        .baseMediaDecodeTime(second * 24_000L)
+        .sampleDurations(List.of(24_000))
+        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+        .build();
   }
 
   @Test
