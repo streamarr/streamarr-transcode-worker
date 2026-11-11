@@ -128,6 +128,28 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
   }
 
   @Test
+  @DisplayName("Should list no encode feature whose test encode cannot start")
+  void shouldListNoEncodeFeatureWhoseTestEncodeCannotStart() {
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              // Only the HLG test encode names the ARIB STD-B67 transfer.
+              if (command.command().stream().anyMatch(arg -> arg.contains("arib-std-b67"))) {
+                throw new IOException("Cannot run program \"ffmpeg\"");
+              }
+
+              return resolve(command, test -> TestEncodeOutput.faithful(test).process());
+            });
+
+    service.detectCapabilities();
+
+    assertThat(featuresByEncoder(service))
+        .containsEntry("libx265", Set.of(TEN_BIT, PQ, DOLBY_VISION_TO_PQ))
+        .containsEntry("libsvtav1", Set.of(TEN_BIT, PQ, DOLBY_VISION_TO_PQ));
+  }
+
+  @Test
   @DisplayName(
       "Should pass libx265 its level, tier and colour parameters and libsvtav1 its colour"
           + " parameters when a feature's test encode runs with a software encoder")
