@@ -7984,25 +7984,28 @@ class WorkerMediaSmokeTest {
   // start and 2 s before the end of the media.
   private static List<Long> exactStarts(Path source) throws Exception {
     var timeBase = videoTimeBase(source);
-    var origin = earliestStreamStart(source);
     var end = timeBase.ticksIn(mediaDuration(source));
     var twoSeconds = timeBase.ticksIn(new BigFraction(2, 1));
     var starts = new ArrayList<Long>();
     starts.add(0L);
-    var keyframes =
-        ffprobe(VIDEO_KEYFRAME_PTS, source)
-            .lines()
-            .map(line -> line.split(","))
-            .filter(parts -> parts[2].startsWith("K"))
-            .mapToLong(parts -> presentationTick(parts) - origin)
-            .toArray();
-    for (var tick : keyframes) {
+    for (var tick : keyframeTicks(source)) {
       if (tick >= starts.getLast() + twoSeconds && tick <= end - twoSeconds) {
         starts.add(tick);
       }
     }
 
     return List.copyOf(starts);
+  }
+
+  // Each video keyframe's presentation tick on the zero-based timeline, in decode order.
+  private static long[] keyframeTicks(Path source) throws Exception {
+    var origin = earliestStreamStart(source);
+    return ffprobe(VIDEO_KEYFRAME_PTS, source)
+        .lines()
+        .map(line -> line.split(","))
+        .filter(parts -> parts[2].startsWith("K"))
+        .mapToLong(parts -> presentationTick(parts) - origin)
+        .toArray();
   }
 
   private static final List<String> VIDEO_KEYFRAME_PTS =
