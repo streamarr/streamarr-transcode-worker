@@ -16,8 +16,10 @@ import lombok.Builder;
  *
  * <p>ffprobe reports every video {@code pts} later than the sample's own presentation time by the
  * deepest reordering delay of the output it reads (ADR 0037, evidence on initialization segment
- * identity). Two listings compare by {@code pts} only when their outputs reorder to the same depth;
- * {@link com.streamarr.transcode.fixtures.Mp4Samples} reads the times that the bytes carry.
+ * identity). When an output's smallest composition offset is zero or below, moving every offset
+ * earlier by the same ticks deepens that delay by as many ticks and leaves every {@code pts} as it
+ * was, so equal listings do not show equal presentation times. {@link
+ * com.streamarr.transcode.fixtures.Mp4Samples} reads the times that the bytes carry.
  */
 public final class FfprobePackets {
 

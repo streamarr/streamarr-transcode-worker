@@ -4156,9 +4156,9 @@ class WorkerMediaSmokeTest {
         .filteredOn(sample -> sample.trackId() == videoTrackId && sample.isSync())
         .hasSize(2);
     assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
-    assertThat(videoPacketsOf(replacementUploads, "segment2.m4s"))
+    assertThat(videoSamplesOf(replacementUploads, "segment2.m4s"))
         .isNotEmpty()
-        .isEqualTo(videoPacketsOf(fromStartUploads, "segment2.m4s"));
+        .isEqualTo(videoSamplesOf(fromStartUploads, "segment2.m4s"));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -9327,10 +9327,10 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
-  private List<Packet> videoPacketsOf(MediaUploads uploads, String name) throws Exception {
-    return FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root).stream()
-        .filter(Packet::isVideo)
-        .toList();
+  // The media segment's video samples, read after the initialization segment, with the times that
+  // its bytes carry.
+  private static List<Mp4Samples.Sample> videoSamplesOf(MediaUploads uploads, String name) {
+    return videoSamples(uploads.contentOf(List.of("init.mp4", name)));
   }
 
   // H.264 at one frame per second with libx264's default B-frames and a keyframe every 6 s, and
