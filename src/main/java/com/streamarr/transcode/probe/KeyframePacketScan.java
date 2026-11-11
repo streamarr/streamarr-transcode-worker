@@ -190,7 +190,7 @@ final class KeyframePacketScan {
     private final List<KeyframeTime> times = new ArrayList<>();
     private boolean missingTime;
     private boolean keyframeNotAfterPrevious;
-    private long streamEnd = Long.MIN_VALUE;
+    private OptionalLong streamEnd = OptionalLong.empty();
     private boolean isStreamEndUnknown;
 
     /**
@@ -238,7 +238,8 @@ final class KeyframePacketScan {
         return;
       }
 
-      streamEnd = Math.max(streamEnd, presentation.getAsLong() + positiveDuration);
+      var packetEnd = presentation.getAsLong() + positiveDuration;
+      streamEnd = OptionalLong.of(Math.max(streamEnd.orElse(packetEnd), packetEnd));
     }
 
     private PacketTimes timesOf(Packet packet) {
@@ -276,11 +277,11 @@ final class KeyframePacketScan {
 
     /** The latest end of the stream's packets, or empty when a packet's end is unknown. */
     OptionalLong streamEnd() {
-      if (isStreamEndUnknown || streamEnd == Long.MIN_VALUE) {
+      if (isStreamEndUnknown) {
         return OptionalLong.empty();
       }
 
-      return OptionalLong.of(streamEnd);
+      return streamEnd;
     }
   }
 

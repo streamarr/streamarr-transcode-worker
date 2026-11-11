@@ -850,38 +850,38 @@ class FfprobeExecutorKeyframeTest {
     assertThat(scannedEnd(report)).hasValue(17_090);
   }
 
-  // The time base is 1/24 and the container starts at zero. Each packet lasts one tick.
-  @ParameterizedTest(name = "{0}")
-  @CsvSource(
-      delimiter = '|',
-      value = {
-        "a decode time alone | 0, 18, -9223372036854775808, 1, 100, 0x00000000, F=0x0 | 19",
-        "a presentation time alone | 0, -9223372036854775808, 20, 1, 100, 0x00000000, F=0x0 | 21"
-      })
+  // The time base is 1/24 and the container starts at zero. The last packet decodes at 18 ticks for
+  // one tick and has no presentation time.
+  @Test
   @DisplayName(
-      "Should end the scanned stream by the one time that a packet has when the stream does not"
-          + " reorder frames")
-  void shouldEndTheScannedStreamByTheOneTimeThatAPacketHasWhenTheStreamDoesNotReorderFrames(
-      String description, String lastPacket, long expectedEnd) {
+      "Should end the scanned stream by a packet's decode time when the packet has no presentation"
+          + " time and the stream does not reorder frames")
+  void
+      shouldEndScannedStreamByPacketsDecodeTimeWhenItHasNoPresentationTimeAndStreamDoesNotReorder() {
     var ffprobe =
         ScriptedFfprobe.builder()
             .streams(AVI_STREAMS_WITHOUT_REORDERING)
-            .packetScan("0, 0, 0, 1, 100, 0x00000000\n" + lastPacket + "\n")
+            .packetScan(
+                """
+                0, 0, 0, 1, 100, 0x00000000
+                0, 18, -9223372036854775808, 1, 100, 0x00000000, F=0x0
+                """)
             .build();
 
     var report = ffprobe.executor().probe(fixture("avi.avi"), packetScanRequest());
 
-    assertThat(scannedEnd(report)).hasValue(expectedEnd);
+    assertThat(scannedEnd(report)).hasValue(19);
   }
 
-  // FFmpeg's Matroska demuxer prints a duration of 0 for a block without one. The container starts
-  // 23 ticks before zero, so the last packet presents at 2,940 ticks.
+  // The contract keeps the end at or after every keyframe's presentation time, so a duration of 0
+  // or less counts as 0. FFmpeg's Matroska demuxer prints 0 for a block without a duration. The
+  // container starts 23 ticks before zero, so the last keyframe presents at 2,940 ticks.
   @ParameterizedTest
   @CsvSource({"0", "-42"})
   @DisplayName(
-      "Should end the scanned stream at its last presentation time when the last packet has no"
-          + " positive duration")
-  void shouldEndTheScannedStreamAtItsLastPresentationTimeWhenTheLastPacketHasNoPositiveDuration(
+      "Should end the scanned stream at its last keyframe's presentation time when that last"
+          + " packet has no positive duration")
+  void shouldEndScannedStreamAtLastKeyframesPresentationTimeWhenThatLastPacketHasNoPositiveDuration(
       long duration) {
     var ffprobe =
         ScriptedFfprobe.builder()
@@ -889,7 +889,7 @@ class FfprobeExecutorKeyframeTest {
             .packetScan(
                 """
                 0, 0, 0, 42, 100, 0x00000000
-                0, 2917, 2917, %d, 100, 0x00000000, F=0x0
+                0, 2917, 2917, %d, 100, 0x00000000
                 """
                     .formatted(duration))
             .build();
@@ -897,6 +897,51 @@ class FfprobeExecutorKeyframeTest {
     var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
 
     assertThat(scannedEnd(report)).hasValue(2_940);
+  }
+
+  // The last packet ends at the greatest long value, 131,410 ticks after the container's start.
+  @Test
+  @DisplayName(
+      "Should report the scanned stream's end when a packet ends at the greatest long value")
+  void shouldReportTheScannedStreamsEndWhenAPacketEndsAtTheGreatestLongValue() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0, 126000, 133500, 3750, 100, 0x00000000
+                0, 129750, 9223372036854772057, 3750, 100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnd(report)).hasValue(Long.MAX_VALUE - 131_410);
+  }
+
+  // The container starts 23 ticks before zero, so the last packet's end leaves the long range on
+  // the zero-based timeline.
+  @Test
+  @DisplayName(
+      "Should report the keyframe positions without an end when the end exceeds the long range"
+          + " after the container's start is subtracted")
+  void shouldReportKeyframePositionsWithoutEndWhenEndExceedsLongRangeAfterStartIsSubtracted() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan(
+                """
+                0, 0, 0, 42, 100, 0x00000000
+                0, 9223372036854775800, 9223372036854775800, 0, 100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(scannedEnd(report)).isEmpty();
+    assertThat(report.keyframePositionsParts())
+        .singleElement()
+        .satisfies(part -> assertThat(part.getPresentationTimeDeltasList()).containsExactly(23L));
   }
 
   // A stream that reorders frames gets no presentation time from a packet's decode time. A packet

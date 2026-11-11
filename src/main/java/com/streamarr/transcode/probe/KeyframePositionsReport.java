@@ -80,7 +80,7 @@ record KeyframePositionsReport(
             .setTimeBaseDenominator(Math.toIntExact(timeBase.denominator()))
             .setSource(source)
             .setKeyframeCount(zeroBased.size());
-    endTime.ifPresent(end -> positions.setEndTime(end - start));
+    zeroBasedEnd(start).ifPresent(positions::setEndTime);
     var result =
         MaximumFrameRate.withMeasuredRate(
             withKeyframes(probed.result(), ProbeKeyframes.newBuilder().setPositions(positions)),
@@ -103,6 +103,19 @@ record KeyframePositionsReport(
                 .setMedia(result.getMedia().toBuilder().setStreamMeasurements(measurements()))
                 .build())
         .build();
+  }
+
+  // An end that leaves the long range on the zero-based timeline is left out, as an unknown end is.
+  private OptionalLong zeroBasedEnd(long start) {
+    if (endTime.isEmpty()) {
+      return OptionalLong.empty();
+    }
+
+    try {
+      return OptionalLong.of(Math.subtractExact(endTime.getAsLong(), start));
+    } catch (ArithmeticException _) {
+      return OptionalLong.empty();
+    }
   }
 
   /**
