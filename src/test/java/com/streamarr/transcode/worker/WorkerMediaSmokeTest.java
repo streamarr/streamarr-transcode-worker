@@ -313,11 +313,12 @@ class WorkerMediaSmokeTest {
   // 18 s of video and 10 s of FLAC audio in three 6 s segments.
   private static final int FLAC_SOURCE_SEGMENT_COUNT = 3;
   private static final int COUNTED_AUDIO_SAMPLE_RATE = 48_000;
-  // The counted source's audio ends at 10 s, inside segment 1 of the ten that its video fills.
+  // The counted source's audio ends at 10 s, inside segment 3 of the twenty 3 s segments that its
+  // video fills.
   private static final int COUNTED_AUDIO_SAMPLES = 10 * COUNTED_AUDIO_SAMPLE_RATE;
-  private static final int COUNTED_AUDIO_SEGMENT_COUNT = 10;
+  private static final int COUNTED_AUDIO_SEGMENT_COUNT = 20;
   private static final int COUNTED_AUDIO_ADVERTISED_END_SAMPLES =
-      COUNTED_AUDIO_SEGMENT_COUNT * 6 * COUNTED_AUDIO_SAMPLE_RATE;
+      COUNTED_AUDIO_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
   private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
   // FFmpeg's FLAC encoder codes 4,608 samples a frame at 48 kHz, less than 0.1 s.
   private static final int FLAC_SAMPLES_PAST_THE_END_AT_MOST = 4_800;
@@ -5982,13 +5983,13 @@ class WorkerMediaSmokeTest {
   // video's input, a copy's audio came out after the video had run on to the source's end, 50 s
   // later, when the worker had delivered the segments it belongs to. The encode that holds its
   // last frame keeps its video beside its audio in one filter graph.
-  // A replacement attempt seeks both inputs alike: a Matroska source by decode time, and an MP4
-  // source by presentation time.
+  // A replacement attempt for segment 2 seeks both inputs alike, 3 s into the source, one segment
+  // before its first: a Matroska source by decode time, and an MP4 source by presentation time.
   @ParameterizedTest(name = "{0} of the {1} source from segment {2}")
   @CsvSource({
     "TRANSCODE_MODE_AUDIO_TRANSCODE, mkv, 0",
-    "TRANSCODE_MODE_AUDIO_TRANSCODE, mkv, 1",
-    "TRANSCODE_MODE_AUDIO_TRANSCODE, mp4, 1",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mkv, 2",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mp4, 2",
     "TRANSCODE_MODE_FULL_TRANSCODE, mkv, 0"
   })
   @DisplayName(
@@ -6002,7 +6003,7 @@ class WorkerMediaSmokeTest {
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
-    var firstSample = startSequenceNumber * 6 * COUNTED_AUDIO_SAMPLE_RATE;
+    var firstSample = startSequenceNumber * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
     var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
     assertThat(delivered.sourceSamples(firstSample, COUNTED_AUDIO_SAMPLES))
         .as("the source's samples from the first segment's start to the audio's end at 10 s")
@@ -6015,12 +6016,12 @@ class WorkerMediaSmokeTest {
   }
 
   // A job that encodes the counted source's mono audio to FLAC, which keeps every sample's value,
-  // and pads it to the advertised end, holding the last frame too when it encodes the video. It
-  // names the source's audio stream and the output's layout, as the server does for every audio
-  // encode, which maps that stream alone and encodes 2,400 samples a frame.
+  // and pads it to the advertised end of its 3 s segments, holding the last frame too when it
+  // encodes the video. It names the source's audio stream and the output's layout, as the server
+  // does for every audio encode, which maps that stream alone and encodes 2,400 samples a frame.
   private static VariantJob.Builder countedAudioJob(Path source, TranscodeMode mode) {
     var job = seekableSourceJob(source, mode);
-    paddedTo(job, COUNTED_AUDIO_SEGMENT_COUNT);
+    paddedToSlots(job, COUNTED_AUDIO_SEGMENT_COUNT);
     job.getDecisionBuilder()
         .getAudioBuilder()
         .setCodec("flac")
@@ -6032,6 +6033,17 @@ class WorkerMediaSmokeTest {
     }
 
     return job;
+  }
+
+  // Pads the job's audio to the advertised end of this many 3 s segments.
+  private static void paddedToSlots(VariantJob.Builder job, int segmentCount) {
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(segmentCount);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds((long) segmentCount * SLOT_SECONDS);
+    job.getDecisionBuilder().getAudioBuilder().setPadWithSilenceToAdvertisedEnd(true);
   }
 
   // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 60 s, and 10 s of 24-bit mono FLAC at
