@@ -37,12 +37,9 @@ final class ProbeReportQueue {
     waiting.get(order).add(report);
   }
 
-  /** Removes and returns the report that the worker sends next. */
-  Optional<ProbeAttemptReport> poll() {
-    return waiting.values().stream()
-        .filter(reports -> !reports.isEmpty())
-        .findFirst()
-        .map(Deque::remove);
+  /** Removes and returns the report that has waited longest in this order. */
+  Optional<ProbeAttemptReport> poll(Order order) {
+    return Optional.ofNullable(waiting.get(order).poll());
   }
 
   /**

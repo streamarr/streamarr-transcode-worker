@@ -81,8 +81,15 @@ final class ProbeReportSender implements AutoCloseable {
 
   // Holds this monitor.
   private void openWaiting() {
+    for (var order : ProbeReportQueue.Order.values()) {
+      openWaiting(order);
+    }
+  }
+
+  // Holds this monitor.
+  private void openWaiting(ProbeReportQueue.Order order) {
     while (limit == 0 || open.size() < limit) {
-      var next = waiting.poll();
+      var next = waiting.poll(order);
       if (next.isEmpty()) {
         return;
       }
