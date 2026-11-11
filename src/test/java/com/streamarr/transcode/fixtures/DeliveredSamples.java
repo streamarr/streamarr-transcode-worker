@@ -4,7 +4,7 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.assertBeginsWithTh
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.streamarr.transcode.engine.FfmpegRecordings.DroppedAudioSample;
+import com.streamarr.transcode.engine.FfmpegRecordings.LateAudioSample;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
@@ -51,9 +51,9 @@ public final class DeliveredSamples {
 
   /**
    * The recording's audio samples that start inside the interval of a segment {@code expected.json}
-   * delivers, in order, apart from those it lists as dropped because they arrive after their
-   * segment was delivered: segment zero of an attempt from the start also takes the priming frame
-   * before zero, and no segment takes a sample after its interval.
+   * delivers, in order, apart from those it lists as late because they arrive after their segment
+   * was delivered: segment zero of an attempt from the start also takes the priming frame before
+   * zero, and no segment takes a sample after its interval.
    */
   public static List<Sample> audioSamplesOfTheDeliveredSegments(Recording recording) {
     var recorded = Mp4Samples.read(bytesOf(recording.file()));
@@ -63,13 +63,13 @@ public final class DeliveredSamples {
         recording.segments().stream()
             .map(segment -> AudioInterval.ofDeliveredSegment(segment.number(), periodTicks))
             .toList();
-    var dropped =
-        recording.droppedAudioSamples().stream().map(DroppedAudioSample::presentationTime).toList();
+    var late =
+        recording.lateAudioSamples().stream().map(LateAudioSample::presentationTime).toList();
     return recorded.samplesOf(audio).stream()
         .filter(
             sample ->
                 intervals.stream().anyMatch(interval -> interval.holds(sample.presentationTime())))
-        .filter(sample -> !dropped.contains(sample.presentationTime()))
+        .filter(sample -> !late.contains(sample.presentationTime()))
         .toList();
   }
 

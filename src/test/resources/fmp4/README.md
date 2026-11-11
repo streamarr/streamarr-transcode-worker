@@ -223,7 +223,7 @@ order the worker's command builder passes them.
   preroll) and the attempt then fails. The skipping keyframe and everything after it are never
   grouped. Whether a segment that long may be served at all is a duration policy that
   [server #66](https://github.com/streamarr/streamarr-server/issues/66) owns, not the grouping.
-- `droppedAudioSamples` lists every audio sample that arrives after its media segment closed, by
+- `lateAudioSamples` lists every audio sample that arrives after its media segment closed, by
   its fragment, its presentation time in the audio timescale and its segment, or is empty. Once the
   keyframe of a later segment has arrived, a segment closes after the fragment in which an audio
   sample of a later segment arrives or the video's decode end runs 1 s and the video's lead past the
@@ -231,10 +231,12 @@ order the worker's command builder passes them.
   producer holds when that sample arrived: at most 0.162 s in these recordings (04), and two frames,
   0.083 s, in most of them. In every other recording an audio sample trails the video written before it by at most 0.162 s
   (04); in 17b the AAC encoder's last two frames arrive 149 s after their segment's video, and
-  the producer drops them: the segment was delivered long before. An audio sample whose
-  presentation time runs back behind the one before it fails the attempt with
-  `PRESENTATION_TIME_REGRESSED`. `ProducerTest` delivers every recording and checks that the
-  delivered audio is the recorded audio of the delivered segments without the dropped samples.
+  the producer fails the attempt with `AUDIO_ARRIVED_AFTER_ITS_SEGMENT`: the segment was delivered
+  long before, without them. An audio sample whose presentation time runs back behind the one
+  before it fails the attempt with `PRESENTATION_TIME_REGRESSED`. `ProducerTest` delivers every
+  recording and checks that the delivered audio is the recorded audio of the delivered segments
+  without the late samples, and that 17b's attempt fails after the segments delivered before its
+  first late sample.
 - `mode` and `audio` say whether the recording encodes or copies its video and its audio.
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.
@@ -286,7 +288,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 16 | `16-copy-encode-audio.fmp4` | 0 | 7's source with its video copied and its audio encoded (the worker's audio transcode): 11 segments of 3 keyframes each, every keyframe starting a fragment. |
 | 16b | `16-copy-encode-audio-seek30.fmp4` | 5 | Its replacement attempt from segment 5, reading from one period early (`-ss 24`) so that the AAC encoder has its lead before 30 s, with its encoded audio shifted so that a frame starts on 30 s, as 1b's is. The seek lands on the keyframe at 22.022 s, and the encoded audio starts at 23.984 s with its priming frame. `delay_moov` writes nothing until every track has a sample, so the first fragment runs from 22.022 s past the keyframe at 24.024 s. Everything before the keyframe at 30.030 s is discarded preroll (segments 3 and 4); that keyframe starts fragment 7 and opens segment 5, and segments 5–10 carry exactly 16's video samples at the same ticks. Ends with one audio-only fragment. |
 | 17 | `17-copy-audio-ends-long-before-video.fmp4` | 0 | 180 s of video, 20 s of a sine tone, copied: the audio outlasts FFmpeg's 10 s muxer interleave bound many times over. The fragment at 20.020 s carries the last three audio samples, which end at 20.0 s, and fragments 21–179 carry video alone, so no audio sample ever starts at or after the end of segments 3–28; 30 segments, the last from 174.174 s. |
-| 17b | `17-encode-audio-ends-long-before-video.fmp4` | 0 | The same source encoded under the recipe: the fragment at 20.020 s carries an audio sample at 19.947 s, and the AAC encoder's last two frames (19.968–20.011 s, segment 3) arrive only in fragment 169, at 169.002 s, inside segment 28: FFmpeg flushes the encoder once the whole input has ended, so the producer drops them. Every other fragment from 21 on carries video alone; 30 segments of one forced keyframe each. |
+| 17b | `17-encode-audio-ends-long-before-video.fmp4` | 0 | The same source encoded under the recipe: the fragment at 20.020 s carries an audio sample at 19.947 s, and the AAC encoder's last two frames (19.968–20.011 s, segment 3) arrive only in fragment 169, at 169.002 s, inside segment 28: FFmpeg flushes the encoder once the whole input has ended, so the producer fails the attempt there. The worker's own command reads a copy's encoded audio from a second input, and that of an encode that holds its last frame, so that FFmpeg writes those frames beside their video; 17b records the output of one input. Every other fragment from 21 on carries video alone; 30 segments of one forced keyframe each. |
 | 18 | `18-copy-hevc-keeping-packet-bytes.fmp4` | 0 | libx265 Main source (23.976 fps, a keyframe every 48 frames, B-frames, 20 s) whose `hvcC` holds the parameter sets, copied without the Annex B filter: no keyframe sample repeats a VPS, SPS or PPS, and every video sample keeps its source packet's size. 4 segments: 0@0, 1@6.006, 2@12.012, 3@18.018. |
 | 18b | `18-copy-hevc-annex-b.fmp4` | 0 | The same source copied through `hevc_mp4toannexb`: every keyframe sample starts with the record's VPS, SPS and PPS, and no other sample changes. The same segments and initialization segment as 18. |
 
@@ -566,10 +568,12 @@ settle what, if anything, changes because of them.
   1–3 each close once the video's decode end runs 1 s and its lead past their end, not when the
   output ends; 17
   shows the same over 160 s of video without audio. An audio encoder's last frames are the
-  exception: FFmpeg flushes them only once the whole input has ended (17b), and the producer drops
-  them, since their segment was delivered long before. When the video is copied, more of the audio
-  can still be inside FFmpeg's encoding pipeline once the muxer stops holding the video for it, and
-  the producer drops that too (`WorkerMediaSmokeTest`). A movie without a sound
+  exception: read from the video's input, FFmpeg flushes them only once the whole input has ended
+  (17b), after their segment was delivered, and the producer fails the attempt. When the video is
+  copied from that input, more of the audio can still be inside FFmpeg's decoder, filters and
+  encoder once the muxer stops holding the video for it. The worker therefore reads encoded audio
+  from a second input of the source, which holds the video's input back while the audio trails
+  (`WorkerMediaSmokeTest`). A movie without a sound
   track closes each segment at the keyframe that opens the next.
 - **Trailing audio-only fragments are common, not exceptional.** With 48 kHz audio they end 1, 1b, 2,
   3, 4, 5b, 5c, 10, 12, 13, 13b, 13d and 16b, as well as 6.

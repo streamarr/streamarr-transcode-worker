@@ -111,7 +111,7 @@ public final class FfmpegRecordings {
       List<SegmentSummary> segments,
       List<SegmentSummary> discardedPreroll,
       Optional<ExpectedFailure> failure,
-      List<DroppedAudioSample> droppedAudioSamples,
+      List<LateAudioSample> lateAudioSamples,
       int trailingAudioOnlyFragmentCount,
       List<HlsRun> hlsComparisons) {
 
@@ -189,11 +189,11 @@ public final class FfmpegRecordings {
       Optional<Long> actualNumber) {}
 
   /**
-   * An audio sample that arrives after its media segment was delivered, which the producer drops,
-   * at a presentation time in the audio timescale, and the fragment that carries it, counted from 0
-   * after the initialization segment.
+   * An audio sample that arrives after its media segment was delivered, at which the producer fails
+   * the attempt, at a presentation time in the audio timescale, and the fragment that carries it,
+   * counted from 0 after the initialization segment.
    */
-  public record DroppedAudioSample(int fragmentIndex, long presentationTime, int segmentNumber) {}
+  public record LateAudioSample(int fragmentIndex, long presentationTime, int segmentNumber) {}
 
   /**
    * The HLS muxer's run over the same source, with the media time of the first video sample of each
