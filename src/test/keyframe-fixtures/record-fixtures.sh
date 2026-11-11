@@ -68,16 +68,20 @@ ffmpeg -version | head -1 > ffmpeg-version.txt
 # An H.264 AVI with B-frames, whose packets the AVI demuxer gives no presentation time.
 "${FF[@]}" "${SOURCE[@]}" "${X264[@]}" "${BFRAMES[@]}" -map 0:v "${OUT[@]}" avi-bframes.avi
 
-# The probe's own ffprobe run and packet scan of the first stream, as FfprobeExecutor and
-# KeyframePacketScan run them, without the source's path.
+# The probe's own ffprobe run and packet scan, as FfprobeExecutor and KeyframePacketScan run them,
+# without the source's path. The scan copies the first stream, which is the video stream in every
+# recording, and each audio stream whose sample rate ffprobe states.
 mkdir -p scans
 scan() {
-  local source="$1" name="$2"
+  local source="$1" name="$2" audio_maps
   ffprobe -v quiet -print_format json -analyzeduration 200M -probesize 1G -scan_all_pmts 0 \
     -show_streams -show_format -show_chapters -show_error "$source" \
     | sed '/"filename":/d' > "scans/$name.json"
+  audio_maps=$(ffprobe -v quiet -select_streams a -show_entries stream=index,sample_rate \
+    -of csv=p=0 "$source" | awk -F, '$2 > 0 { printf " -map 0:%s", $1 }')
   # FFmpeg names each logging context by its address, which changes from run to run.
-  ffmpeg -nostdin -hide_banner -nostats -v error -copyts -i "$source" -map 0:0 -c copy \
+  # shellcheck disable=SC2086 # the maps are separate arguments
+  ffmpeg -nostdin -hide_banner -nostats -v error -copyts -i "$source" -map 0:0 $audio_maps -c copy \
     -f framecrc - > "scans/$name.framecrc" 2> "scans/$name.log"
   sed -E 's/ @ 0x[0-9a-f]+\]/]/' "scans/$name.log" > "scans/$name.diagnostics"
   rm "scans/$name.log"
