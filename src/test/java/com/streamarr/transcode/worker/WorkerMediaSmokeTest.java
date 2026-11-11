@@ -2147,10 +2147,12 @@ class WorkerMediaSmokeTest {
     assertThat(fromRpusAhead.names())
         .containsExactlyElementsOf(fromRpusBehind.names())
         .hasSize(PROFILE_5_SEGMENT_COUNT - startSequenceNumber + 1);
+    assertThat(fromRpusAhead.segments())
+        .containsEntry("init.mp4", fromRpusBehind.segments().get("init.mp4"));
     for (var name : fromRpusBehind.names()) {
-      assertThat(packetsOf(fromRpusAhead, name))
+      assertThat(samplesByTrackOf(fromRpusAhead, name))
           .as(name)
-          .containsExactlyElementsOf(packetsOf(fromRpusBehind, name));
+          .isEqualTo(samplesByTrackOf(fromRpusBehind, name));
     }
   }
 
@@ -2540,7 +2542,7 @@ class WorkerMediaSmokeTest {
 
   // Runs the profile 5 job once as one FFmpeg, whose source's RPUs follow their pictures, and once
   // as the encode of the source's copy, whose RPUs may start samples, each with libx264 on one
-  // thread, and compares their packets.
+  // thread, and compares their initialization segments and the times and bytes of their samples.
   private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
       Path source, VariantJob.Builder job) throws Exception {
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
@@ -2563,10 +2565,12 @@ class WorkerMediaSmokeTest {
 
     assertThat(commands).as("the FFmpegs of the attempt that reads the copy").hasSize(2);
     assertThat(fromTheCopy.names()).containsExactlyElementsOf(oneFfmpeg.names());
+    assertThat(fromTheCopy.segments())
+        .containsEntry("init.mp4", oneFfmpeg.segments().get("init.mp4"));
     for (var name : oneFfmpeg.names()) {
-      assertThat(packetsOf(fromTheCopy, name))
+      assertThat(samplesByTrackOf(fromTheCopy, name))
           .as(name)
-          .containsExactlyElementsOf(packetsOf(oneFfmpeg, name));
+          .isEqualTo(samplesByTrackOf(oneFfmpeg, name));
     }
 
     return fromTheCopy;
@@ -9331,6 +9335,15 @@ class WorkerMediaSmokeTest {
   // its bytes carry.
   private static List<Mp4Samples.Sample> videoSamplesOf(MediaUploads uploads, String name) {
     return videoSamples(uploads.contentOf(List.of("init.mp4", name)));
+  }
+
+  // The media segment's samples, read after the initialization segment, for each track with its
+  // timescale, with the times that its bytes carry.
+  private static Map<Mp4Samples.Track, List<Mp4Samples.Sample>> samplesByTrackOf(
+      MediaUploads uploads, String name) {
+    var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", name)));
+    return movie.tracks().values().stream()
+        .collect(Collectors.toMap(Function.identity(), movie::samplesOf));
   }
 
   // H.264 at one frame per second with libx264's default B-frames and a keyframe every 6 s, and
