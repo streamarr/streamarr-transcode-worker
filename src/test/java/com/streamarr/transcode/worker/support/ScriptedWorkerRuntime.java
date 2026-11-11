@@ -48,6 +48,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 
 public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
@@ -168,6 +169,26 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** Every message the worker has sent on its session stream, in order. */
     public List<EstablishWorkerSessionRequest> events() {
       return List.copyOf(call.events);
+    }
+
+    /**
+     * The probe attempt that each {@code ProbeAttemptEndedWithoutReport} event of the worker names,
+     * in the order in which the worker sent the events.
+     */
+    public List<Uuid> attemptsEndedWithoutReport() {
+      return call.events.stream()
+          .filter(EstablishWorkerSessionRequest::hasProbeAttemptEndedWithoutReport)
+          .map(event -> event.getProbeAttemptEndedWithoutReport().getProbeAttemptId())
+          .toList();
+    }
+
+    /**
+     * Delivers this command when the worker sends its next event that matches, on the thread that
+     * sends the event and before the send returns, as a server that answers the event at once.
+     */
+    public void deliverWhenTheWorkerSends(
+        Predicate<EstablishWorkerSessionRequest> event, EstablishWorkerSessionResponse command) {
+      call.answers.add(new EventAnswer(event, command));
     }
 
     /** Every segment upload the worker has opened, in order. */
@@ -469,6 +490,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final ConcurrentLinkedQueue<EstablishWorkerSessionRequest> events =
         new ConcurrentLinkedQueue<>();
     private final CompletableFuture<Uuid> workerSessionId = new CompletableFuture<>();
+    private final List<EventAnswer> answers = new CopyOnWriteArrayList<>();
     private final WorkerSessionAccepted limits;
     private Listener<EstablishWorkerSessionResponse> responses;
     private volatile boolean refusing;
@@ -496,6 +518,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         responses.onMessage(
             EstablishWorkerSessionResponse.newBuilder().setSessionAccepted(accepted).build());
       }
+
+      answers.stream()
+          .filter(answer -> answer.event().test(message))
+          .findFirst()
+          .filter(answers::remove)
+          .ifPresent(answer -> responses.onMessage(answer.command()));
     }
 
     @Override
@@ -513,6 +541,10 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       // Server completion is controlled independently from the client's half-close.
     }
   }
+
+  // A command that the scripted server delivers at once when the worker sends a matching event.
+  private record EventAnswer(
+      Predicate<EstablishWorkerSessionRequest> event, EstablishWorkerSessionResponse command) {}
 
   // The threads that send the worker's probe reports: one virtual thread for each task, counted so
   // that a test can wait until the worker has nothing left to send.

@@ -72,6 +72,19 @@ final class ProbeReportSender implements AutoCloseable {
   }
 
   /**
+   * Discards the report of a probe attempt that the server canceled: a waiting report never opens a
+   * report call, and an open report call ends. The caller answers the cancel command with the
+   * event, so this method waits for nothing.
+   */
+  synchronized void discard(@NonNull UUID probeAttemptId) {
+    waiting.discard(probeAttemptId);
+    var canceled = new CancellationException("The server canceled the probe attempt");
+    open.stream()
+        .filter(call -> call.probeAttemptId().equals(probeAttemptId))
+        .forEach(call -> call.cancel(canceled));
+  }
+
+  /**
    * Moves this probe attempt's report, when it still waits, to the reports of canceled probes. The
    * server ends the worker session when a canceled probe's report is late.
    */
@@ -104,7 +117,8 @@ final class ProbeReportSender implements AutoCloseable {
     try {
       if (!call.send(opener)) {
         log.debug(
-            "Discarding the report of probe attempt {}: its worker session has ended",
+            "Discarding the report of probe attempt {}: its worker session has ended, or the"
+                + " server canceled the attempt before the report call opened",
             call.probeAttemptId());
       }
     } catch (InterruptedException e) {

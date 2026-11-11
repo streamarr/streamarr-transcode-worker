@@ -430,8 +430,8 @@ class TranscodeWorkerProbeCapacityTest {
         cancel(connection, request, ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT);
         timedOutTask.get();
 
-        assertThat(connection.results())
-            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+        assertThat(connection.attemptsEndedWithoutReport())
+            .containsExactly(request.getProbeAttemptId());
         assertThat(capacityChanges(connection)).containsExactly(changed(2, 1));
         clock.advance(Duration.ofSeconds(29));
         var firstTask = startHeld(connection, first);
@@ -594,12 +594,43 @@ class TranscodeWorkerProbeCapacityTest {
         cancel(connection, request, reason);
         task.get();
 
-        assertThat(connection.results())
-            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+        assertThat(connection.attemptsEndedWithoutReport())
+            .containsExactly(request.getProbeAttemptId());
         assertThat(capacityChanges(connection)).isEmpty();
       } finally {
         cancelled.finish();
       }
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the background probe capacity when the server cancels a probe at the probe"
+          + " timeout after the probe has ended on the worker")
+  void
+      shouldKeepTheBackgroundProbeCapacityWhenTheServerCancelsAProbeAtTheProbeTimeoutAfterTheProbeHasEnded()
+          throws Exception {
+    var request = requestBuilder().build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .configuration(configurationBuilder().availableSlots(1).build())
+            .runtime(runtime)
+            .ffprobe(launchCounting(new AtomicInteger(), processBuilder().build()))
+            .clock(new SteppedClock())
+            .build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdReportAnswers();
+      start(connection, request);
+      runtime.probes().drain();
+      connection.awaitReportCalls(1).getFirst().awaitSentWhole();
+
+      cancel(connection, request, ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT);
+
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId());
+      assertThat(capacityChanges(connection)).isEmpty();
     }
   }
 

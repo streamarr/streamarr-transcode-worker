@@ -13,10 +13,10 @@ import com.streamarr.transcode.probe.ProbeKind;
 import com.streamarr.transcode.probe.ProbeReports;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.NonNull;
@@ -33,6 +33,9 @@ final class WorkerProbeSession implements AutoCloseable {
   @NonNull private final ExecutorService executor;
   @NonNull private final ProbeSummary summary;
   @NonNull private final ProbeCapacities capacities;
+  // Sends the event that a probe attempt has ended without a probe report. It takes the worker
+  // monitor, so it never runs under this object's monitor.
+  @NonNull private final Consumer<UUID> endedWithoutReport;
   private final Map<UUID, ProbeAttempt> attempts = new HashMap<>();
   // No limit until the server states its limits, which it does before it starts any probe.
   private final AtomicReference<ProbeReportLimits> limits =
@@ -97,41 +100,64 @@ final class WorkerProbeSession implements AutoCloseable {
     record Refused(ProbeAttemptReport report) implements Admission {}
   }
 
-  // A timed-out ffprobe can wait for the disk long after the cancel, so the brake applies when the
-  // cancel arrives rather than when the unit frees. The brake runs outside this monitor because its
-  // capacity change takes the worker monitor.
+  // Answers a cancel command on the control stream's thread, which waits for neither ffprobe nor
+  // the server. A timed-out ffprobe can wait for the disk long after the cancel, so the brake
+  // applies when the cancel arrives rather than when the unit frees. The brake and the event run
+  // outside this monitor because each takes the worker monitor.
   void cancel(UUID attemptId, ProbeCancelReason reason) {
-    cancelAttempt(attemptId, reason).ifPresent(capacities::probeTimedOut);
+    Runnable outsideThisMonitor =
+        switch (cancelAttempt(attemptId, reason)) {
+          case Cancellation.Stopped() -> () -> {};
+          case Cancellation.StoppedAtProbeTimeout(var probe) ->
+              () -> capacities.probeTimedOut(probe);
+          case Cancellation.NothingRuns() -> () -> endedWithoutReport.accept(attemptId);
+        };
+    outsideThisMonitor.run();
   }
 
-  // Returns the probe when the cancel ends it at the probe timeout. A cancel for a probe that has
-  // ended changes only where its report waits: the server ends the session when the report of a
-  // probe that it canceled is late.
-  private synchronized Optional<ProbeCapacities.CountedProbe> cancelAttempt(
-      UUID attemptId, ProbeCancelReason reason) {
+  // Decides in one section who sends the event that answers the cancel command: the probe's own
+  // thread once the probe has ended, or the caller at once when no probe runs for the attempt. A
+  // probe attempt that the server canceled has no probe report, so the sender discards a report
+  // that the attempt already handed over.
+  private synchronized Cancellation cancelAttempt(UUID attemptId, ProbeCancelReason reason) {
     var attempt = attempts.get(attemptId);
     if (attempt == null) {
-      reports.sendFirst(attemptId);
-      return Optional.empty();
+      reports.discard(attemptId);
+      return new Cancellation.NothingRuns();
     }
 
     if (attempt.ended) {
       attempt.cancelled = true;
-      return Optional.empty();
+      return new Cancellation.Stopped();
     }
 
     if (reason == ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT) {
       attempt.cancelAtProbeTimeout();
-      return Optional.of(attempt.counted);
+      return new Cancellation.StoppedAtProbeTimeout(attempt.counted);
     }
 
     attempt.cancel();
-    return Optional.empty();
+    return new Cancellation.Stopped();
+  }
+
+  private sealed interface Cancellation {
+    /**
+     * The probe still runs or has yet to hand its report over, and its own thread sends the event
+     * once the probe has ended.
+     */
+    record Stopped() implements Cancellation {}
+
+    /** As {@link Stopped}, for a probe that still ran when the server's probe timeout passed. */
+    record StoppedAtProbeTimeout(ProbeCapacities.CountedProbe probe) implements Cancellation {}
+
+    /** No probe runs for the attempt, so the caller sends the event at once. */
+    record NothingRuns() implements Cancellation {}
   }
 
   // Never waits, so the worker ends a session under its monitor. A report of the ended session is
   // never sent: the sender cancels its open calls and discards its waiting reports, and a probe
-  // that ends from now on hands over nothing.
+  // that ends from now on hands over nothing. The server learns of these ends from the session's
+  // end, so no event names them.
   synchronized void shutdown() {
     attempts.values().forEach(ProbeAttempt::cancel);
     executor.shutdownNow();
@@ -213,9 +239,8 @@ final class WorkerProbeSession implements AutoCloseable {
       return ProbeReports.failed(request, failure);
     }
 
-    // The unit is free before the report is handed over, so the server's count never falls below
-    // the worker's. The attempt stays known until its report waits with the sender, so that a
-    // cancel in between still moves the report to the canceled probes' reports.
+    // The unit is free before the report is handed over or the event leaves, so the server's count
+    // never falls below the worker's.
     private void complete(ProbeAttemptReport report) {
       var attemptId = fromProto(request.getProbeAttemptId());
       boolean endedAtProbeTimeout;
@@ -226,10 +251,23 @@ final class WorkerProbeSession implements AutoCloseable {
 
       releaseUnit(endedAtProbeTimeout);
       summary.finished(attemptId, report.getResult());
+      if (!handOver(report)) {
+        endedWithoutReport.accept(attemptId);
+      }
+    }
+
+    // Returns whether the report went to the sender. A stopped probe attempt has no probe report.
+    // The attempt stays known until this section, so a cancel command either stops the attempt
+    // before its report is handed over, or finds the report with the sender.
+    private boolean handOver(ProbeAttemptReport report) {
       synchronized (WorkerProbeSession.this) {
-        attempts.remove(attemptId, this);
-        reports.submit(
-            report, cancelled ? ProbeReportQueue.Order.CANCELED : waitingOrderOf(request));
+        attempts.remove(fromProto(request.getProbeAttemptId()), this);
+        if (cancelled) {
+          return false;
+        }
+
+        reports.submit(report, waitingOrderOf(request));
+        return true;
       }
     }
 

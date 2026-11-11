@@ -143,26 +143,6 @@ class TranscodeWorkerProbeReportTest {
   }
 
   @Test
-  @DisplayName("Should end a probe with one report call when the server cancels the probe")
-  void shouldEndAProbeWithOneReportCallWhenTheServerCancelsTheProbe() throws Exception {
-    Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
-    var request = requestBuilder().build();
-
-    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      start(connection, request);
-      cancel(connection, request);
-      runtime.probes().drain();
-
-      assertThat(connection.results())
-          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
-      assertThat(connection.reportCalls()).hasSize(1);
-      assertThat(probeReportEventsOnTheSession(connection)).isEmpty();
-    }
-  }
-
-  @Test
   @DisplayName(
       "Should send a probe's report once when the server cancels the probe after it has ended")
   void shouldSendAProbesReportOnceWhenTheServerCancelsTheProbeAfterItHasEnded() throws Exception {

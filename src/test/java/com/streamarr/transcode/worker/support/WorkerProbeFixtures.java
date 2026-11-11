@@ -99,13 +99,18 @@ public final class WorkerProbeFixtures {
   }
 
   public static void start(ScriptedWorkerRuntime.Connection connection, ProbeRequest request) {
-    connection.deliver(
-        EstablishWorkerSessionResponse.newBuilder()
-            .setStartProbe(
-                StartProbeCommand.newBuilder()
-                    .setTarget(connection.registration().getWorker())
-                    .setRequest(request))
-            .build());
+    connection.deliver(startCommand(connection, request));
+  }
+
+  /** The command that starts the probe on the worker of this connection. */
+  public static EstablishWorkerSessionResponse startCommand(
+      ScriptedWorkerRuntime.Connection connection, ProbeRequest request) {
+    return EstablishWorkerSessionResponse.newBuilder()
+        .setStartProbe(
+            StartProbeCommand.newBuilder()
+                .setTarget(connection.registration().getWorker())
+                .setRequest(request))
+        .build();
   }
 
   public static void cancel(ScriptedWorkerRuntime.Connection connection, ProbeRequest request) {

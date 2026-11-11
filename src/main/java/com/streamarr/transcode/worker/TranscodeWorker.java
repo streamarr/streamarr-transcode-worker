@@ -14,6 +14,7 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptProgress;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptEndedWithoutReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReportMetadata;
 import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
@@ -232,6 +233,8 @@ public final class TranscodeWorker implements AutoCloseable {
         WorkerProbeSession.builder()
             .ffprobe(ffprobe)
             .sources(sources)
+            .endedWithoutReport(
+                attemptId -> sendEndedWithoutReport(sessionRequests.get(), attemptId))
             .reports(
                 ProbeReportSender.builder()
                     .opener(call -> openProbeReport(sessionRequests.get(), call))
@@ -387,7 +390,8 @@ public final class TranscodeWorker implements AutoCloseable {
         .build();
   }
 
-  // Opens the report call while the session that produced the report is still the accepted one.
+  // Opens the report call while the session that produced the report is still the accepted one,
+  // unless the call was canceled before it opened.
   private synchronized Optional<ProbeAttemptReportMetadata.Builder> openProbeReport(
       StreamObserver<EstablishWorkerSessionRequest> sessionRequests,
       FlowControlledCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call) {
@@ -395,11 +399,31 @@ public final class TranscodeWorker implements AutoCloseable {
       return Optional.empty();
     }
 
-    TranscodeWorkerServiceGrpc.newStub(channel).reportProbeAttempt(call);
+    var stub = TranscodeWorkerServiceGrpc.newStub(channel);
+    if (!call.startUnlessCancelled(stub::reportProbeAttempt)) {
+      return Optional.empty();
+    }
+
     return Optional.of(
         ProbeAttemptReportMetadata.newBuilder()
             .setWorkerSessionId(workerSession.getWorkerSessionId())
             .setWorker(identity()));
+  }
+
+  // Sends the event only on the session that started the probe attempt: a later session never
+  // learns of an earlier session's probe attempt.
+  private synchronized void sendEndedWithoutReport(
+      StreamObserver<EstablishWorkerSessionRequest> sessionRequests, UUID probeAttemptId) {
+    if (requests == null || requests != sessionRequests) {
+      return;
+    }
+
+    tryReport(
+        EstablishWorkerSessionRequest.newBuilder()
+            .setProbeAttemptEndedWithoutReport(
+                ProbeAttemptEndedWithoutReport.newBuilder()
+                    .setProbeAttemptId(toProto(probeAttemptId)))
+            .build());
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.

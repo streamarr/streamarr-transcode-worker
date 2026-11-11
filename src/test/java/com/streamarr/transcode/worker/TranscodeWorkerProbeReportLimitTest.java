@@ -10,7 +10,6 @@ import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
-import com.streamarr.transcode.fixtures.PausingClock;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime.Connection;
 import java.nio.file.Files;
@@ -23,6 +22,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Worker Probe Report Limit Tests")
@@ -86,9 +87,7 @@ class TranscodeWorkerProbeReportLimitTest {
   }
 
   @Test
-  @DisplayName(
-      "Should send waiting reports first in, first out when the server canceled none of their"
-          + " probes and they share a priority")
+  @DisplayName("Should send waiting reports first in, first out when they share a priority")
   void shouldSendWaitingReportsFirstInFirstOutWhenTheyShareAPriority() throws Exception {
     var runtime = acceptingReportCalls(1);
     var open = background();
@@ -112,108 +111,62 @@ class TranscodeWorkerProbeReportLimitTest {
   }
 
   @Test
-  @DisplayName(
-      "Should send the reports of canceled probes first, then the reports of probes with playback"
-          + " priority, then the others")
-  void shouldSendTheReportsOfCanceledProbesFirstThenPlaybackPriorityThenTheOthers()
-      throws Exception {
+  @DisplayName("Should send the reports of probes with playback priority before the other reports")
+  void shouldSendTheReportsOfProbesWithPlaybackPriorityBeforeTheOtherReports() throws Exception {
     var runtime = acceptingReportCalls(1);
     var open = background();
     var other = background();
     var playback = requestBuilder().setPriority(ProbePriority.PROBE_PRIORITY_PLAYBACK).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      holdTheOneReportCall(runtime, open);
+      probe(runtime, other);
+      probe(runtime, playback);
+
+      connection.releaseReportAnswers();
+
+      assertThat(reportedAttempts(connection)).containsExactly(idsOf(open, playback, other));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should discard a waiting report, send one event at once and open no report call for the"
+          + " report when the server cancels its probe attempt")
+  void shouldDiscardAWaitingReportAndSendOneEventAtOnceWhenTheServerCancelsItsProbeAttempt()
+      throws Exception {
+    var runtime = acceptingReportCalls(1);
+    var open = background();
     var canceled = background();
+    var later = background();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       holdTheOneReportCall(runtime, open);
-      probe(runtime, other);
-      probe(runtime, playback);
-      start(connection, canceled);
+      probe(runtime, canceled);
+      probe(runtime, later);
+
       cancel(connection, canceled);
-      runtime.probes().drain();
 
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(canceled.getProbeAttemptId());
       connection.releaseReportAnswers();
-
-      assertThat(reportedAttempts(connection))
-          .containsExactly(idsOf(open, canceled, playback, other));
+      assertThat(reportedAttempts(connection)).containsExactly(idsOf(open, later));
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(canceled.getProbeAttemptId());
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(SessionEnd.class)
   @DisplayName(
-      "Should send a waiting report with the reports of canceled probes when the server cancels"
-          + " its probe attempt")
-  void shouldSendAWaitingReportWithTheReportsOfCanceledProbesWhenTheServerCancelsItsAttempt()
-      throws Exception {
-    var runtime = acceptingReportCalls(1);
-    var open = background();
-    var other = background();
-    var playback = requestBuilder().setPriority(ProbePriority.PROBE_PRIORITY_PLAYBACK).build();
-    var canceledWhileRunning = background();
-    var canceledWhileWaiting = background();
-
-    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      holdTheOneReportCall(runtime, open);
-      probe(runtime, other);
-      probe(runtime, canceledWhileWaiting);
-      probe(runtime, playback);
-      start(connection, canceledWhileRunning);
-      cancel(connection, canceledWhileRunning);
-      runtime.probes().drain();
-
-      cancel(connection, canceledWhileWaiting);
-      connection.releaseReportAnswers();
-
-      assertThat(reportedAttempts(connection))
-          .containsExactly(
-              idsOf(open, canceledWhileRunning, canceledWhileWaiting, playback, other));
-    }
-  }
-
-  @Test
-  @DisplayName(
-      "Should send a report with the reports of canceled probes when the server cancels its probe"
-          + " attempt while the ended probe hands the report over")
-  void shouldSendAReportWithTheReportsOfCanceledProbesWhenTheCancelArrivesAsTheProbeEnds()
-      throws Exception {
-    var runtime = acceptingReportCalls(1);
-    var clock = new PausingClock();
-    var open = background();
-    var other = background();
-    var canceledAsItEnds = background();
-
-    try (var worker =
-        workerBuilder(tempDir).runtime(runtime).probeSummary(new ProbeSummary(clock)).build()) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      holdTheOneReportCall(runtime, open);
-      probe(runtime, other);
-      start(connection, canceledAsItEnds);
-      // The probe summary reads the clock once the probe has ended, before the report is handed
-      // over.
-      clock.pauseAtTheNextReading();
-      var ending = runtime.probes().runNext();
-      clock.awaitPaused();
-
-      cancel(connection, canceledAsItEnds);
-      clock.resume();
-      ending.get();
-      connection.releaseReportAnswers();
-
-      assertThat(reportedAttempts(connection))
-          .containsExactly(idsOf(open, canceledAsItEnds, other));
-      assertThat(connection.reports())
-          .as("the cancel changes nothing else for a probe that has ended")
-          .allSatisfy(report -> assertThat(report.getResult().hasMedia()).isTrue());
-    }
-  }
-
-  @Test
-  @DisplayName("Should discard the waiting reports and open no further call when the session ends")
-  void shouldDiscardTheWaitingReportsAndOpenNoFurtherCallWhenTheSessionEnds() throws Exception {
+      "Should discard the waiting reports, open no further call and send no event when the session"
+          + " ends")
+  void shouldDiscardTheWaitingReportsOpenNoFurtherCallAndSendNoEventWhenTheSessionEnds(
+      SessionEnd end) throws Exception {
     var runtime = acceptingReportCalls(1);
     var open = background();
 
@@ -224,13 +177,30 @@ class TranscodeWorkerProbeReportLimitTest {
       probe(runtime, background());
       probe(runtime, background());
 
-      connection.fail("connection lost");
+      end.end(connection, worker);
       connection.awaitReportThreads();
       connection.releaseReportAnswers();
 
       assertThat(connection.reportCalls())
           .singleElement()
           .satisfies(call -> assertThat(call.wasCancelled()).isTrue());
+      assertThat(connection.attemptsEndedWithoutReport()).isEmpty();
+    }
+  }
+
+  private enum SessionEnd {
+    THE_CONNECTION_FAILS,
+    THE_SERVER_COMPLETES_THE_SESSION,
+    THE_WORKER_CLOSES;
+
+    private void end(Connection connection, TranscodeWorker worker) {
+      Runnable ending =
+          switch (this) {
+            case THE_CONNECTION_FAILS -> () -> connection.fail("connection lost");
+            case THE_SERVER_COMPLETES_THE_SESSION -> connection::complete;
+            case THE_WORKER_CLOSES -> worker::close;
+          };
+      ending.run();
     }
   }
 

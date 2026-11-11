@@ -42,6 +42,17 @@ final class ProbeReportQueue {
     return Optional.ofNullable(waiting.get(order).poll());
   }
 
+  /** Discards this probe attempt's report when it waits. */
+  void discard(UUID probeAttemptId) {
+    waiting
+        .values()
+        .forEach(
+            reports ->
+                reports.removeIf(
+                    report ->
+                        fromProto(report.getResult().getProbeAttemptId()).equals(probeAttemptId)));
+  }
+
   /**
    * Moves this probe attempt's report, when it waits behind the canceled probes' reports, to the
    * end of them.

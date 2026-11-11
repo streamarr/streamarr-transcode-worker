@@ -68,7 +68,7 @@ class WorkerProbeFrameRateCancellationTest {
 
         assertThat(worker.hasAcceptedSession()).isTrue();
         assertThat(scan.isAlive()).isTrue();
-        assertThat(connection.results())
+        assertThat(connection.attemptsEndedWithoutReport())
             .as("server capacity remains claimed until the scan process exits")
             .isEmpty();
         assertThat(running).isNotDone();
@@ -76,8 +76,9 @@ class WorkerProbeFrameRateCancellationTest {
         running.get();
 
         assertThat(scan.isAlive()).isFalse();
-        assertThat(connection.results())
-            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+        assertThat(connection.attemptsEndedWithoutReport())
+            .containsExactly(request.getProbeAttemptId());
+        assertThat(connection.results()).isEmpty();
       } finally {
         scan.finish();
       }

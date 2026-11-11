@@ -8,6 +8,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 
 /**
  * One upload call, which sends a message only when the call is ready for it. It fails when the call
@@ -62,6 +63,21 @@ final class FlowControlledCall<Q, R> implements ClientResponseObserver<Q, R> {
   public synchronized void beforeStart(ClientCallStreamObserver<Q> call) {
     this.call = call;
     call.setOnReadyHandler(this::signalReadiness);
+  }
+
+  /**
+   * Starts the call unless it was cancelled, in one step, so that a call that was cancelled before
+   * it started never opens.
+   *
+   * @return whether the call started
+   */
+  synchronized boolean startUnlessCancelled(Consumer<? super FlowControlledCall<Q, R>> start) {
+    if (response.isDone()) {
+      return false;
+    }
+
+    start.accept(this);
+    return true;
   }
 
   // Sends nothing once the server has answered or the upload was cancelled; that decides it.

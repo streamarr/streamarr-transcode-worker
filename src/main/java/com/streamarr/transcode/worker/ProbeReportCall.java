@@ -42,7 +42,8 @@ final class ProbeReportCall {
 
     /**
      * Opens the call and returns its first message with the worker session and the worker named, or
-     * returns nothing, and opens no call, when that worker session has ended.
+     * returns nothing, and opens no call, when that worker session has ended or the call was
+     * canceled before it opened.
      */
     Optional<ProbeAttemptReportMetadata.Builder> open(
         FlowControlledCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call);
@@ -55,7 +56,8 @@ final class ProbeReportCall {
   /**
    * Sends the report and waits for the server's answer.
    *
-   * @return whether the call opened; the report of a worker session that has ended is never sent
+   * @return whether the call opened; the report of a worker session that has ended is never sent,
+   *     and neither is a report whose call was canceled before it opened
    * @throws WorkerJobException when the server accepted another length than the report's
    */
   boolean send(Opener opener) throws InterruptedException, ExecutionException, TimeoutException {

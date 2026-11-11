@@ -602,8 +602,9 @@ class TranscodeWorkerProbeTest {
   }
 
   @Test
-  @DisplayName("Should return cancellation when a queued probe is cancelled before execution")
-  void shouldReturnCancellationWhenAQueuedProbeIsCancelledBeforeExecution() throws Exception {
+  @DisplayName(
+      "Should send the event and no report when a queued probe is cancelled before execution")
+  void shouldSendTheEventAndNoReportWhenAQueuedProbeIsCancelledBeforeExecution() throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
     var runtime = new ScriptedWorkerRuntime();
     var request = requestBuilder().build();
@@ -615,16 +616,20 @@ class TranscodeWorkerProbeTest {
       start(connection, request);
 
       cancel(connection, request);
+      assertThat(connection.attemptsEndedWithoutReport())
+          .as("the probe has yet to end on the worker")
+          .isEmpty();
       runtime.probes().drain();
 
-      assertThat(connection.results())
-          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId());
+      assertThat(connection.results()).isEmpty();
     }
   }
 
   @Test
-  @DisplayName("Should withhold the cancellation result when the probe process has not exited")
-  void shouldWithholdCancellationResultWhenProbeProcessHasNotExited() throws Exception {
+  @DisplayName("Should withhold the event when the probe process has not exited")
+  void shouldWithholdTheEventWhenTheProbeProcessHasNotExited() throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
     var runtime = new ScriptedWorkerRuntime();
     var process = processBuilder().running(true).deferredTermination(true).build();
@@ -644,14 +649,15 @@ class TranscodeWorkerProbeTest {
         process.awaitExitWait(running);
 
         assertThat(process.isAlive()).isTrue();
-        assertThat(connection.results())
+        assertThat(connection.attemptsEndedWithoutReport())
             .as("cancellation must not release server capacity before process exit")
             .isEmpty();
         assertThat(running.isDone()).isFalse();
         process.finish();
         running.get();
-        assertThat(connection.results())
-            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+        assertThat(connection.attemptsEndedWithoutReport())
+            .containsExactly(request.getProbeAttemptId());
+        assertThat(connection.results()).isEmpty();
       } finally {
         process.finish();
       }
@@ -991,6 +997,7 @@ class TranscodeWorkerProbeTest {
                   assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
                   assertThat(result.hasMedia()).isTrue();
                 });
+        assertThat(connection.attemptsEndedWithoutReport()).isEmpty();
       } finally {
         process.finish();
       }
