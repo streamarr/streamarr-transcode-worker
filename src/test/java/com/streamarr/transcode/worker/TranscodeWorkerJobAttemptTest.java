@@ -86,6 +86,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.BeforeEach;
@@ -2390,6 +2391,59 @@ class TranscodeWorkerJobAttemptTest {
           .as("segment 0 has not closed")
           .containsExactly("init.mp4");
     }
+  }
+
+  // FFmpeg has written the first fragment and writes nothing more, as while a copy's audio input
+  // reads on after the audio's last packet, and it has read one more byte at every count.
+  @Test
+  @DisplayName(
+      "Should report the bytes that FFmpeg has read, each time they have grown, and no further"
+          + " output end while a copy that encodes its audio reads ahead and writes nothing")
+  void shouldReportTheBytesThatFfmpegHasReadWhileACopyThatEncodesItsAudioReadsAhead()
+      throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var pause = endOfFragment(output, 1);
+    var launcher = new ScriptedProcessLauncher(_ -> readingProcess(output, pause));
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitProgressReports(connection, 3);
+      var reports = progressReportsOf(connection);
+      assertThat(reports)
+          .extracting(JobAttemptProgress::getJobAttemptId)
+          .containsOnly(job.getJobAttemptId());
+      assertThat(reports.stream().flatMapToLong(TranscodeWorkerJobAttemptTest::ffmpegBytesRead))
+          .as("the bytes read that the reports carry")
+          .hasSizeGreaterThanOrEqualTo(2)
+          .doesNotHaveDuplicates()
+          .isSorted();
+      assertThat(reports.stream().filter(JobAttemptProgress::hasOutputEnd))
+          .as("the reports that the output's end grew: it grew once, in the first fragment")
+          .hasSize(1);
+    }
+  }
+
+  private static ScriptedProcess readingProcess(byte[] output, int pause) {
+    var process = ScriptedProcess.builder().output(output).pauseAfter(pause).build();
+    process.startReading();
+    return process;
+  }
+
+  // JobAttemptProgress.ffmpeg_bytes_read, field 4 of the worker contract, which the pinned SDK
+  // predates.
+  private static LongStream ffmpegBytesRead(JobAttemptProgress progress) {
+    return progress.getUnknownFields().getField(4).getVarintList().stream()
+        .mapToLong(Long::longValue);
   }
 
   @Test

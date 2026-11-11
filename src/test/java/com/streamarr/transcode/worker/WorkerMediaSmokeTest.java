@@ -113,6 +113,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -132,6 +133,7 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -313,6 +315,18 @@ class WorkerMediaSmokeTest {
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   // How long the server waits for an attempt's progress before it replaces the attempt's producer.
   private static final Duration SERVER_STALL_THRESHOLD = Duration.ofSeconds(10);
+  // The stall timeout of an engine that reads the source with video long after its audio through
+  // paced pipes: a sixth of the worker's own, so that the read after the audio's end outlasts it.
+  private static final Duration PACED_STALL_TIMEOUT = Duration.ofSeconds(5);
+  // How long FFmpeg may take to exit once the producer has asked it to terminate, after which the
+  // producer destroys it and reports the failure.
+  private static final Duration FFMPEG_GRACE_PERIOD = Duration.ofSeconds(5);
+  // The source with video long after its audio: 51 s of video in seventeen 3 s segments.
+  private static final int VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT = 17;
+  // About three times the byte rate of that source's video, which fills it after the audio's end.
+  private static final int THRICE_THE_VIDEOS_BYTE_RATE = 280_000;
+  // JobAttemptProgress.ffmpeg_bytes_read in the worker contract, which the pinned SDK predates.
+  private static final int FFMPEG_BYTES_READ_FIELD = 4;
   // About three times the 256 kb/s of the audio that makes up nearly all of a source's bytes.
   private static final int THRICE_THE_SOURCES_BYTE_RATE = 96 * 1024;
 
@@ -6636,6 +6650,138 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // FFmpeg holds the video's input back while the audio trails, and once the audio's packets stop
+  // it writes nothing until the audio's input has read on to the source's end. Both inputs read
+  // through pipes at about three times real time, so reading the 41 s of video after the audio's
+  // end takes about 13 s: longer than the engine's stall timeout of 5 s and than the server's stall
+  // threshold. An FFmpeg that reads is not stalled: the worker counts the bytes that FFmpeg reads
+  // as the attempt's progress, and reports them, while FFmpeg writes nothing.
+  @Test
+  @DisplayName(
+      "Should deliver every source audio sample and report progress throughout when a copy that"
+          + " encodes its audio reads a paced source's video for longer than the stall timeout"
+          + " after the audio's end")
+  void shouldDeliverEverySourceAudioSampleAndReportProgressWhenACopyReadsOnLongAfterItsAudiosEnd()
+      throws Exception {
+    var source = countedAudioEndsLongBeforeNoisyVideoSource();
+    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    paddedToSlots(job, VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT);
+    var advertisedEndSamples =
+        VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
+
+    try (var pipes = new PacedSourcePipes(root, THRICE_THE_VIDEOS_BYTE_RATE)) {
+      var engine =
+          engine(
+              softwareCapabilities(),
+              pipes.feeding(new ProcessBuilderLauncher()),
+              PACED_STALL_TIMEOUT);
+
+      var completion = executeToCompletion(engine, source.getParent(), job.build());
+
+      var uploads = completion.uploads();
+      assertThat(uploads.names())
+          .containsExactlyElementsOf(uploadNames(VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT));
+      var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+      assertThat(delivered.sourceSamples(0, COUNTED_AUDIO_SAMPLES))
+          .as("the source's samples up to the audio's end at 10 s")
+          .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES, 0, 0));
+      assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+      assertThat(delivered.silentSamples(COUNTED_AUDIO_SAMPLES, advertisedEndSamples))
+          .as("the samples from the audio's end at 10 s to the advertised end at 51 s")
+          .isEqualTo(new SilentSamples(advertisedEndSamples - COUNTED_AUDIO_SAMPLES, 0, 0));
+      assertThat(completion.longestTimeWithoutOutput())
+          .as("the longest time in which the attempt's output did not advance")
+          .isGreaterThan(PACED_STALL_TIMEOUT);
+      assertThat(completion.longestSilence())
+          .as("the longest time without a progress report before the attempt completed")
+          .isLessThan(SERVER_STALL_THRESHOLD);
+      assertThat(completion.progress().stream().flatMapToLong(TimedProgress::ffmpegBytesRead))
+          .as("the bytes read that the reports carry, each only once it has grown")
+          .isNotEmpty()
+          .doesNotHaveDuplicates()
+          .isSorted();
+    }
+  }
+
+  // The pipes stop 7 s into the read after the audio's end and stay open, as a mount that hangs
+  // does, so FFmpeg waits in a read of the audio's input. By then the read has outlasted the stall
+  // timeout as progress. From then on nothing counts as progress: the reports stop, and the
+  // producer fails the attempt once FFmpeg has read nothing for the stall timeout, as it does for
+  // an FFmpeg that writes nothing. FFmpeg ignores the request to terminate while it waits in the
+  // read, so the producer destroys it after the grace period and then reports the failure.
+  @Test
+  @DisplayName(
+      "Should fail the attempt within the stall timeout of the source's last byte when the source"
+          + " stops serving a copy that encodes its audio and reads on after the audio's end")
+  void shouldFailTheAttemptWithinTheStallTimeoutWhenTheSourceStopsServingACopyThatReadsOn()
+      throws Exception {
+    var source = countedAudioEndsLongBeforeNoisyVideoSource();
+    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    paddedToSlots(job, VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT);
+    var servedBytes = lastAudioPacketOffset(source) + 7L * THRICE_THE_VIDEOS_BYTE_RATE;
+
+    try (var pipes = new PacedSourcePipes(root, THRICE_THE_VIDEOS_BYTE_RATE, servedBytes)) {
+      var engine =
+          engine(
+              softwareCapabilities(),
+              pipes.feeding(new ProcessBuilderLauncher()),
+              PACED_STALL_TIMEOUT);
+
+      var failed = executeProbedJobExpectingFailure(engine, source.getParent(), job.build());
+
+      assertThat(failed.failure().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      var stoppedAt = pipes.firstStoppedAtNanos();
+      assertThat(stoppedAt).as("when a pipe served its last byte").isPresent();
+      assertThat(failed.timeWithoutOutputBefore(stoppedAt.getAsLong()))
+          .as("how long the attempt's output had not advanced when the source stopped")
+          .isGreaterThan(PACED_STALL_TIMEOUT);
+      assertThat(failed.lastProgressAfter(stoppedAt.getAsLong()))
+          .as("the last progress report, counted from the source's last byte")
+          .isLessThan(Duration.ofSeconds(3));
+      assertThat(Duration.ofNanos(failed.failedAtNanos() - stoppedAt.getAsLong()))
+          .as("the failure report, counted from the source's last byte")
+          .isBetween(
+              PACED_STALL_TIMEOUT.minusSeconds(1),
+              PACED_STALL_TIMEOUT.plus(FFMPEG_GRACE_PERIOD).plusSeconds(3));
+    }
+  }
+
+  private static long lastAudioPacketOffset(Path source) throws Exception {
+    return ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=pos"), source)
+        .lines()
+        .mapToLong(Long::parseLong)
+        .max()
+        .orElseThrow();
+  }
+
+  // 51 s of noise in H.264 at 64x36 and 24 fps with a keyframe every 2 s, at about 90 kB a second,
+  // beside the counted source's 10 s of 24-bit mono FLAC. The video stays High 4:4:4 Predictive at
+  // level 1.0, as the other seekable sources' is. After the audio's last packet, about 1.1 MB into
+  // the file, 41 s of video alone follow in about 3.7 MB.
+  private static synchronized Path countedAudioEndsLongBeforeNoisyVideoSource() throws Exception {
+    var source = seekableSources.resolve("counted-audio-ends-long-before-noisy-video.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          Stream.of(
+                  List.of(
+                      "-f",
+                      "lavfi",
+                      "-i",
+                      "testsrc=size=64x36:rate=24:duration=51,noise=alls=100:allf=t+u,"
+                          + "format=yuv444p"),
+                  countedAudioInput(),
+                  List.of("-c:v", "libx264", "-g", "48", "-crf", "10"),
+                  List.of("-c:a", "flac", "-sample_fmt", "s32"))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   /**
    * Feeds FFmpeg each of its inputs through a named pipe of its own, in place of the path that its
    * command reads, at a steady number of bytes a second, as a slow mount would serve it.
@@ -6646,11 +6792,23 @@ class WorkerMediaSmokeTest {
 
     private final Path directory;
     private final int bytesPerWrite;
+    private final long servedBytes;
     private final List<PacedPipe> pipes = new CopyOnWriteArrayList<>();
 
     private PacedSourcePipes(Path directory, int bytesPerSecond) {
+      this(directory, bytesPerSecond, Long.MAX_VALUE);
+    }
+
+    // Each pipe serves this many bytes of the source and then stays open without another byte.
+    private PacedSourcePipes(Path directory, int bytesPerSecond, long servedBytes) {
       this.directory = directory;
       this.bytesPerWrite = bytesPerSecond / WRITES_PER_SECOND;
+      this.servedBytes = servedBytes;
+    }
+
+    // When the first pipe that served its last byte did so, on System.nanoTime.
+    private OptionalLong firstStoppedAtNanos() {
+      return pipes.stream().flatMapToLong(pipe -> pipe.stoppedAtNanos().stream()).min();
     }
 
     private ProcessLauncher feeding(ProcessLauncher launcher) {
@@ -6683,7 +6841,8 @@ class WorkerMediaSmokeTest {
         var path = directory.resolve("source-pipe-" + pipes.size());
         var mkfifo = new ProcessBuilder("mkfifo", path.toString()).start();
         assertThat(mkfifo.waitFor()).isZero();
-        pipes.add(new PacedPipe(path, source, bytesPerWrite));
+        var served = Arrays.copyOf(source, (int) Math.min(source.length, servedBytes));
+        pipes.add(new PacedPipe(path, served, bytesPerWrite, served.length == source.length));
         return path;
       } catch (IOException e) {
         throw new UncheckedIOException(e);
@@ -6709,16 +6868,21 @@ class WorkerMediaSmokeTest {
 
     private final byte[] source;
     private final int bytesPerWrite;
+    private final boolean endsTheSource;
     private final ScheduledExecutorService writer =
         Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
     private final FileChannel output;
     private final AtomicInteger written = new AtomicInteger();
+    private final AtomicLong stoppedAtNanos = new AtomicLong();
 
     // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
     // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
-    private PacedPipe(Path pipe, byte[] source, int bytesPerWrite) throws IOException {
+    // A pipe that does not end the source stays open after its last byte, so its reader waits.
+    private PacedPipe(Path pipe, byte[] source, int bytesPerWrite, boolean endsTheSource)
+        throws IOException {
       this.source = source;
       this.bytesPerWrite = bytesPerWrite;
+      this.endsTheSource = endsTheSource;
       this.output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
       writer.scheduleAtFixedRate(
           this::writeNext, 0, 1_000 / PacedSourcePipes.WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
@@ -6732,13 +6896,27 @@ class WorkerMediaSmokeTest {
           output.write(block);
         }
 
-        if (written.get() == source.length) {
+        if (written.get() < source.length) {
+          return;
+        }
+
+        stoppedAtNanos.set(System.nanoTime());
+        writer.shutdown();
+        if (endsTheSource) {
           output.close();
-          writer.shutdown();
         }
       } catch (IOException e) {
         throw new UncheckedIOException(e);
       }
+    }
+
+    private OptionalLong stoppedAtNanos() {
+      var stoppedAt = stoppedAtNanos.get();
+      if (stoppedAt == 0) {
+        return OptionalLong.empty();
+      }
+
+      return OptionalLong.of(stoppedAt);
     }
 
     @Override
@@ -9952,10 +10130,32 @@ class WorkerMediaSmokeTest {
           .max(Comparator.naturalOrder())
           .orElseThrow();
     }
+
+    // The longest time between two reports that the output's end grew, or between the last one
+    // and the completion.
+    Duration longestTimeWithoutOutput() {
+      var times =
+          new ArrayList<>(
+              progress.stream()
+                  .filter(timed -> timed.report().hasOutputEnd())
+                  .map(TimedProgress::receivedAtNanos)
+                  .toList());
+      times.add(completedAtNanos);
+      return IntStream.range(1, times.size())
+          .mapToObj(index -> Duration.ofNanos(times.get(index) - times.get(index - 1)))
+          .max(Comparator.naturalOrder())
+          .orElseThrow();
+    }
   }
 
   // A progress report and when the control plane received it, on System.nanoTime.
   private record TimedProgress(long receivedAtNanos, JobAttemptProgress report) {
+
+    // The bytes that the attempt's FFmpeg has read, when the report carries them.
+    LongStream ffmpegBytesRead() {
+      return report.getUnknownFields().getField(FFMPEG_BYTES_READ_FIELD).getVarintList().stream()
+          .mapToLong(Long::longValue);
+    }
 
     Duration outputEnd() {
       var end = report.getOutputEnd();
@@ -9971,8 +10171,20 @@ class WorkerMediaSmokeTest {
 
   private FailedExecution executeExpectingFailure(
       FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    return executeExpectingFailure(workerBuilder(sourceRoot).engine(engine), job);
+  }
+
+  // The worker probes the audio stream that the job names before it starts the attempt.
+  private FailedExecution executeProbedJobExpectingFailure(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    return executeExpectingFailure(
+        workerBuilder(sourceRoot).engine(engine).ffprobe(probeExecutor()), job);
+  }
+
+  private FailedExecution executeExpectingFailure(
+      TranscodeWorker.TranscodeWorkerBuilder workerBuilder, VariantJob job) throws Exception {
     try (var controlPlane = new MediaControlPlane(_ -> {});
-        var worker = workerBuilder(sourceRoot).engine(engine).build()) {
+        var worker = workerBuilder.build()) {
       worker.start("127.0.0.1", controlPlane.port());
       var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
       controlPlane.responses.onNext(
@@ -9984,11 +10196,33 @@ class WorkerMediaSmokeTest {
       var failure = controlPlane.failed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS);
       return new FailedExecution(
           failure,
-          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)),
+          List.copyOf(controlPlane.progress),
+          controlPlane.failedAt.get());
     }
   }
 
-  private record FailedExecution(JobAttemptFailed failure, MediaUploads uploads) {}
+  private record FailedExecution(
+      JobAttemptFailed failure,
+      MediaUploads uploads,
+      List<TimedProgress> progress,
+      long failedAtNanos) {
+
+    // How long before the moment the last report arrived that the output's end grew.
+    Duration timeWithoutOutputBefore(long nanos) {
+      return progress.stream()
+          .filter(timed -> timed.report().hasOutputEnd())
+          .filter(timed -> timed.receivedAtNanos() < nanos)
+          .map(timed -> Duration.ofNanos(nanos - timed.receivedAtNanos()))
+          .min(Comparator.naturalOrder())
+          .orElseThrow();
+    }
+
+    // How long after the moment the last progress report arrived; negative when it came before.
+    Duration lastProgressAfter(long nanos) {
+      return Duration.ofNanos(progress.getLast().receivedAtNanos() - nanos);
+    }
+  }
 
   // Runs the job until the worker reports that its attempt completed or failed.
   private EndedExecution executeToItsEnd(
@@ -10030,13 +10264,18 @@ class WorkerMediaSmokeTest {
 
   private static FfmpegTranscodeEngine engine(
       TranscodeCapabilityService capabilities, ProcessLauncher launcher) {
+    return engine(capabilities, launcher, FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT);
+  }
+
+  private static FfmpegTranscodeEngine engine(
+      TranscodeCapabilityService capabilities, ProcessLauncher launcher, Duration stallTimeout) {
     capabilities.detectCapabilities();
     assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", DEFAULT_FRAGMENTATION_TARGET))
         .capabilityService(capabilities)
         .launcher(launcher)
-        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
+        .encoderStallTimeout(stallTimeout)
         .build();
   }
 
@@ -10583,6 +10822,7 @@ class WorkerMediaSmokeTest {
     private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
     private final AtomicLong completedAt = new AtomicLong();
     private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
+    private final AtomicLong failedAt = new AtomicLong();
     private final List<TimedProgress> progress = new CopyOnWriteArrayList<>();
     private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
     private final List<String> names = new CopyOnWriteArrayList<>();
@@ -10634,6 +10874,7 @@ class WorkerMediaSmokeTest {
           }
 
           if (message.hasJobAttemptFailed()) {
+            failedAt.set(System.nanoTime());
             failed.complete(message.getJobAttemptFailed());
             completed.completeExceptionally(new AssertionError(message.getJobAttemptFailed()));
           }
