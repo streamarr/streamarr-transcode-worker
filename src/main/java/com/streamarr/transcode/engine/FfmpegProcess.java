@@ -31,7 +31,7 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses
       @NonNull Duration gracePeriod) {
     ProcessStarter starter = command -> started(launcher, command, jobAttemptId);
     return switch (pipeline) {
-      case FfmpegPipeline.SingleProcess(var command, var _) ->
+      case FfmpegPipeline.SingleProcess(var command, _) ->
           new SingleFfmpegProcess(starter.start(command), gracePeriod);
       case FfmpegPipeline.RpuMovingPipe pipe ->
           PipedFfmpegProcesses.start(starter, pipe, gracePeriod);

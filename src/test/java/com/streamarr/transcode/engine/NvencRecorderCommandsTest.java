@@ -174,7 +174,7 @@ class NvencRecorderCommandsTest {
         new FfmpegCommandBuilder("ffmpeg", WORKER_FRAGMENTATION_TARGET)
             .buildPipeline(jobPlannedFor(recording));
     return switch (pipeline) {
-      case FfmpegPipeline.SingleProcess(var command, var _) -> command;
+      case FfmpegPipeline.SingleProcess(var command, _) -> command;
       case FfmpegPipeline.RpuMovingPipe _ ->
           throw new AssertionError("An SDR H.264 source needs one FFmpeg, not " + pipeline);
     };
