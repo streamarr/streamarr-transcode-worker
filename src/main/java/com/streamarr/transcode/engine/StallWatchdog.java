@@ -68,6 +68,11 @@ final class StallWatchdog {
             LONGEST_READ_SAMPLE_INTERVAL.toNanos());
   }
 
+  /** Whether the bytes that FFmpeg reads count as its progress too. */
+  boolean watchesReads() {
+    return watchesReads;
+  }
+
   /** The bytes read that the latest sample found; 0 for a watchdog that watches no reading. */
   long sampledBytesRead() {
     return sampledBytesRead;

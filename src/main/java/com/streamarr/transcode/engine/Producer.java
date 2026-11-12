@@ -613,11 +613,18 @@ public final class Producer {
 
   private void watchForStall() {
     if (watchdog.awaitStall()) {
-      failAndTerminateFfmpeg(
-          new Failed(
-              ProducerFailure.ENCODER_STALLED,
-              "FFmpeg wrote no output for " + stallTimeout + " while the producer read it"));
+      failAndTerminateFfmpeg(new Failed(ProducerFailure.ENCODER_STALLED, stallDetail()));
     }
+  }
+
+  private String stallDetail() {
+    if (watchdog.watchesReads()) {
+      return "FFmpeg wrote no output, and the worker counted no bytes that it read, for "
+          + stallTimeout
+          + " while the producer read it";
+    }
+
+    return "FFmpeg wrote no output for " + stallTimeout + " while the producer read it";
   }
 
   private void failAndTerminateFfmpeg(Failed failure) {
