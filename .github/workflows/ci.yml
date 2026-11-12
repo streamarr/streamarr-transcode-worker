@@ -88,6 +88,8 @@ jobs:
           node --test .github/actions/pack-build/*.test.mjs
       - name: Verify analysis failure handling
         run: node --test .github/actions/sonar/test/*.test.mjs
+      - name: Verify the nightly mutation report
+        run: node --test .github/actions/mutation-report/test/*.test.mjs
       - name: Verify the fMP4 fixture recorder
         run: >-
           node --test --experimental-test-coverage

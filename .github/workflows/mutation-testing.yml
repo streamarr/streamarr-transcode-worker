@@ -1,0 +1,77 @@
+name: Mutation testing
+
+# PIT mutates the production classes and runs the unit tests against each mutant, then reports the
+# mutants that no test detected. It only reports: no pull request runs it, no required check names
+# it, and no score fails it. A red run means PIT or the report could not finish.
+on:
+  schedule:
+    # 07:17 UTC: night in the Americas and early morning in Europe, away from the top of the hour.
+    - cron: '17 7 * * *'
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: mutation-testing
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    name: Report mutants the unit tests miss
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # No Maven cache: a cache this run saved first would lack what CI's builds need.
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: zulu
+          java-version: '25'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: buildpacks/ffmpeg/.nvmrc
+          package-manager-cache: false
+      - name: Mutate the production classes under the unit tests
+        run: >-
+          ./mvnw -B -Pmutation-testing -Djacoco.skip=true
+          test-compile org.pitest:pitest-maven:mutationCoverage
+      - name: Fetch the previous summary from main
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/actions/mutation-report/fetch-previous.sh "$RUNNER_TEMP/previous"
+      - name: Summarize the mutants no test detected
+        if: always()
+        env:
+          COMMIT: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+        run: |
+          previous=()
+          if [[ -f "$RUNNER_TEMP/previous/summary.json" ]]; then
+            previous=(--previous "$RUNNER_TEMP/previous/summary.json")
+          fi
+          mkdir -p "$RUNNER_TEMP/summary"
+          node .github/actions/mutation-report/summarize.mjs \
+            --report target/pit-reports/mutations.xml --commit "$COMMIT" --ref "$REF" \
+            --write "$RUNNER_TEMP/summary/summary.json" "${previous[@]}" >>"$GITHUB_STEP_SUMMARY"
+      - name: Keep the HTML report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-report
+          path: target/pit-reports
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Keep the summary for the next night
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-summary
+          path: ${{ runner.temp }}/summary/summary.json
+          if-no-files-found: ignore
+          retention-days: 90
