@@ -283,7 +283,9 @@ public final class FfprobeExecutor {
     var probed =
         ProbedSource.builder().source(attempt.source()).ffprobeOutput(json).result(result).build();
     if (attempt.request().getScanKeyframePackets()) {
-      return new KeyframePacketScan(this::runPacketScan).addKeyframes(probed);
+      return new KeyframePacketScan(
+              this::runPacketScan, new CopiedPacketCheck(this::runWithinOutputBudget, objectMapper))
+          .addKeyframes(probed);
     }
 
     return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
