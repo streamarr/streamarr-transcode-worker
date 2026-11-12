@@ -746,6 +746,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private volatile Listener<R> responses;
     private Optional<StatusRuntimeException> refusal = Optional.empty();
     private final CompletableFuture<Void> sentWhole = new CompletableFuture<>();
+    private final CompletableFuture<Void> cancelledByTheWorker = new CompletableFuture<>();
     private boolean closed;
     private boolean cancelled;
     private boolean halfClosed;
@@ -928,8 +929,17 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       responses.onClose(Status.OK, new Metadata());
     }
 
+    /**
+     * Runs this action on the worker's thread when the worker first cancels the call, before the
+     * cancel returns, also when the call has already ended without an answer.
+     */
+    public void whenTheWorkerCancels(Runnable action) {
+      cancelledByTheWorker.thenRun(action);
+    }
+
     @Override
     public void cancel(String message, Throwable cause) {
+      cancelledByTheWorker.complete(null);
       if (!tryClose()) {
         return;
       }

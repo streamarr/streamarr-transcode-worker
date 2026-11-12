@@ -394,6 +394,36 @@ class TranscodeWorkerProbeAttemptEndedWithoutReportTest {
 
   @Test
   @DisplayName(
+      "Should send one event when the server cancels the probe attempt after its report call ended"
+          + " without the server's answer and before the worker freed the call's place")
+  void shouldSendOneEventWhenTheCancelArrivesBetweenTheReportCallsEndAndTheFreeingOfItsPlace()
+      throws Exception {
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      var call = openReportCallThatAwaits("answer", request);
+      // The worker cancels the call that failed before it frees the call's place, and the cancel
+      // command arrives in between.
+      var canceledInBetween = new CompletableFuture<Void>();
+      call.whenTheWorkerCancels(
+          () -> {
+            cancel(connection, request);
+            canceledInBetween.complete(null);
+          });
+
+      call.failTransport();
+
+      assertThat(reportCallsOnceNothingIsLeftToSend(connection)).containsExactly(call);
+      assertThat(canceledInBetween).isDone();
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId());
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should answer a cancel command with an event of its own when the attempt's report call has"
           + " already ended without the server's answer")
   void shouldAnswerACancelCommandWithAnEventOfItsOwnWhenTheReportCallHasEndedWithoutAnAnswer()
