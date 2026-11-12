@@ -210,7 +210,8 @@ final class KeyframePacketScan {
   // scan maps. With its smaller default limits, FFmpeg would not know the sample rate of audio that
   // starts late, and it refuses to write such a stream. FFmpeg, unlike ffprobe, refuses an option
   // that the source's demuxer lacks.
-  // -copyinkf keeps the packets before each stream's first keyframe, which a copy also writes.
+  // -copyinkf keeps the packets before each stream's first keyframe. A stream copy drops them, but
+  // ADR 0054 counts them in the first keyframe interval, as a bitrate scan does.
   private static List<String> arguments(ProbedSource probed, List<ScannedStream> scanned) {
     var arguments =
         new ArrayList<>(List.of("-nostdin", "-hide_banner", "-nostats", "-v", "error", "-copyts"));
