@@ -1088,19 +1088,22 @@ class TranscodeWorkerControlPlaneIT {
     private boolean sessionEnded;
     private StreamObserver<EstablishWorkerSessionResponse> responses;
     private final ConcurrentLinkedQueue<UploadedSegment> uploads = new ConcurrentLinkedQueue<>();
-    private volatile boolean acknowledgeUploads = true;
+    private boolean acknowledgeUploads = true;
     private StreamObserver<UploadSegmentResponse> pendingUpload;
     private int pendingLength;
 
-    private void stopAcknowledgingUploads() {
+    private synchronized void stopAcknowledgingUploads() {
       acknowledgeUploads = false;
     }
 
-    private void resumeAcknowledgingUploads() {
+    private synchronized void resumeAcknowledgingUploads() {
       acknowledgeUploads = true;
-      pendingUpload.onNext(
-          UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(pendingLength).build());
-      pendingUpload.onCompleted();
+      acknowledge(pendingUpload, pendingLength);
+    }
+
+    private static void acknowledge(StreamObserver<UploadSegmentResponse> response, int length) {
+      response.onNext(UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(length).build());
+      response.onCompleted();
     }
 
     private ControllableWorkerService() {
@@ -1184,14 +1187,7 @@ class TranscodeWorkerControlPlaneIT {
 
         @Override
         public void onCompleted() {
-          pendingUpload = responseObserver;
-          pendingLength = bytes.size();
-          receiveUpload(new UploadedSegment(metadata, bytes.toByteArray()));
-          if (acknowledgeUploads) {
-            responseObserver.onNext(
-                UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(bytes.size()).build());
-            responseObserver.onCompleted();
-          }
+          receiveUpload(new UploadedSegment(metadata, bytes.toByteArray()), responseObserver);
         }
       };
     }
@@ -1201,9 +1197,19 @@ class TranscodeWorkerControlPlaneIT {
       notifyAll();
     }
 
-    private synchronized void receiveUpload(UploadedSegment upload) {
+    // Decides in the section that publishes the upload. The test can resume acknowledging as soon
+    // as it sees the upload, and only one of the two may answer it.
+    private synchronized void receiveUpload(
+        UploadedSegment upload, StreamObserver<UploadSegmentResponse> response) {
       uploads.add(upload);
       notifyAll();
+      if (acknowledgeUploads) {
+        acknowledge(response, upload.bytes().length);
+        return;
+      }
+
+      pendingUpload = response;
+      pendingLength = upload.bytes().length;
     }
 
     private synchronized void markSessionEnded() {
