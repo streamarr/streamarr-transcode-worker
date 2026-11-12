@@ -10167,6 +10167,7 @@ class WorkerMediaSmokeTest {
    * presentation time to the end of its last packet, and its bytes and packets in each keyframe
    * interval.
    */
+  @Builder
   private record StreamCounts(
       int streamIndex,
       long bytes,
@@ -10184,20 +10185,23 @@ class WorkerMediaSmokeTest {
               .filter(part -> part.getStreamIndex() == stream.getStreamIndex())
               .toList();
       counts.add(
-          new StreamCounts(
-              stream.getStreamIndex(),
-              stream.getMeasuredBytes(),
-              stream.getPacketCount(),
-              stream.getTimeBaseNumerator() + "/" + stream.getTimeBaseDenominator(),
-              stream.getMeasuredDuration(),
-              parts.stream()
-                  .flatMap(part -> part.getKeyframeIntervalBytesList().stream())
-                  .map(Integer::toUnsignedLong)
-                  .toList(),
-              parts.stream()
-                  .flatMap(part -> part.getKeyframeIntervalPacketCountsList().stream())
-                  .map(Integer::toUnsignedLong)
-                  .toList()));
+          StreamCounts.builder()
+              .streamIndex(stream.getStreamIndex())
+              .bytes(stream.getMeasuredBytes())
+              .packets(stream.getPacketCount())
+              .timeBase(stream.getTimeBaseNumerator() + "/" + stream.getTimeBaseDenominator())
+              .duration(stream.getMeasuredDuration())
+              .intervalBytes(
+                  parts.stream()
+                      .flatMap(part -> part.getKeyframeIntervalBytesList().stream())
+                      .map(Integer::toUnsignedLong)
+                      .toList())
+              .intervalPackets(
+                  parts.stream()
+                      .flatMap(part -> part.getKeyframeIntervalPacketCountsList().stream())
+                      .map(Integer::toUnsignedLong)
+                      .toList())
+              .build());
     }
 
     return counts;
@@ -10228,7 +10232,7 @@ class WorkerMediaSmokeTest {
     var keyframes =
         packets.stream()
             .filter(packet -> packet.streamIndex() == chosenStream && packet.isKeyframe())
-            .map(ListedPacket::time)
+            .map(packet -> seconds(packet.time(), timeBases.get(chosenStream)))
             .toList();
     var measured = new ArrayList<StreamCounts>();
     for (var entry : timeBases.entrySet()) {
@@ -10243,9 +10247,7 @@ class WorkerMediaSmokeTest {
           keyframesSeen += packet.isKeyframe() ? 1 : 0;
           interval = Math.max(0, keyframesSeen - 1);
         } else {
-          interval =
-              intervalHolding(
-                  packet.time(), entry.getValue(), keyframes, timeBases.get(chosenStream));
+          interval = intervalHolding(seconds(packet.time(), entry.getValue()), keyframes);
         }
 
         intervalBytes[interval] += packet.size();
@@ -10259,14 +10261,15 @@ class WorkerMediaSmokeTest {
               .max()
               .orElseThrow();
       measured.add(
-          new StreamCounts(
-              index,
-              Arrays.stream(intervalBytes).sum(),
-              streamPackets.size(),
-              entry.getValue(),
-              end - first,
-              Arrays.stream(intervalBytes).boxed().toList(),
-              Arrays.stream(intervalPackets).boxed().toList()));
+          StreamCounts.builder()
+              .streamIndex(index)
+              .bytes(Arrays.stream(intervalBytes).sum())
+              .packets(streamPackets.size())
+              .timeBase(entry.getValue())
+              .duration(end - first)
+              .intervalBytes(Arrays.stream(intervalBytes).boxed().toList())
+              .intervalPackets(Arrays.stream(intervalPackets).boxed().toList())
+              .build());
     }
 
     return measured;
@@ -10274,28 +10277,28 @@ class WorkerMediaSmokeTest {
 
   // One line of ffprobe's packet list: the stream, presentation time, decode time, duration, size
   // and flags. The time is the presentation time, or the decode time when the packet has none.
+  @Builder
   private record ListedPacket(
       int streamIndex, long time, long duration, long size, boolean isKeyframe) {
 
     static ListedPacket parse(String line) {
       var fields = line.split(",", -1);
-      return new ListedPacket(
-          Integer.parseInt(fields[0]),
-          Long.parseLong("N/A".equals(fields[1]) ? fields[2] : fields[1]),
-          "N/A".equals(fields[3]) ? 0 : Long.parseLong(fields[3]),
-          Long.parseLong(fields[4]),
-          fields[5].startsWith("K"));
+      return ListedPacket.builder()
+          .streamIndex(Integer.parseInt(fields[0]))
+          .time(Long.parseLong("N/A".equals(fields[1]) ? fields[2] : fields[1]))
+          .duration("N/A".equals(fields[3]) ? 0 : Long.parseLong(fields[3]))
+          .size(Long.parseLong(fields[4]))
+          .isKeyframe(fields[5].startsWith("K"))
+          .build();
     }
   }
 
   // The last keyframe interval whose keyframe presents at or before the time, in exact seconds;
   // the first interval for a time before every keyframe.
-  private static int intervalHolding(
-      long time, String timeBase, List<Long> keyframes, String keyframeTimeBase) {
-    var seconds = seconds(time, timeBase);
+  private static int intervalHolding(BigFraction time, List<BigFraction> keyframes) {
     var interval = 0;
     for (var i = 0; i < keyframes.size(); i++) {
-      if (seconds(keyframes.get(i), keyframeTimeBase).compareTo(seconds) <= 0) {
+      if (keyframes.get(i).compareTo(time) <= 0) {
         interval = i;
       }
     }
