@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.fixtures.DetectedCapabilities;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -22,11 +24,14 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 /**
  * Runs 10-bit and HDR encodes (streamarr/streamarr-transcode-worker#27) through the producer over
@@ -40,7 +45,8 @@ import org.junit.jupiter.api.io.TempDir;
  * run only on a host whose HEVC encoder is hevc_nvenc with the encode feature they need, at a
  * height of 240, because NVENC refuses a frame smaller than 144x144. NVDEC refuses such a picture
  * too, so the hevc_nvenc tests of the reshape read a 256x144 profile 5 source, which libx265
- * encodes from the fixture's pictures with their RPUs.
+ * encodes from the fixture's pictures with their RPUs. The seek test reads an open-GOP source of
+ * testsrc2 pictures with those RPUs; its software chain runs on every host.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")
@@ -62,6 +68,15 @@ class HdrEncodeSmokeTest {
   private static final String NVENC_MAIN_10_CODEC_STRING = "hvc1.2.4.L90.90";
   private static final int NVENC_HEVC_LEVEL = 30;
   private static final int NVENC_HEIGHT = 240;
+  // The open-GOP profile 5 source keys every 50 pictures, off the 2 s segment grid. An encode from
+  // segment 2 at 4 s reads from the keyframe that the server sends, the last one at or before
+  // 3.5 s: the CRA picture at 50/24 s.
+  private static final Duration SECOND_OPEN_GOP_KEYFRAME = Duration.ofNanos(2_083_333_333);
+  // H.265 Table 7-1: RASL_N, RASL_R, CRA_NUT, and the first type that is not a slice segment.
+  private static final int RASL_N = 8;
+  private static final int RASL_R = 9;
+  private static final int CRA_NUT = 21;
+  private static final int FIRST_NON_SLICE_NUT = 32;
 
   /** A P3 D65 display of 1000 cd/m² and 0.005 cd/m², with MaxCLL 1000 and MaxFALL 400. */
   private static final StaticHdrMetadata SOURCE_METADATA =
@@ -466,6 +481,50 @@ class HdrEncodeSmokeTest {
                     .contains(HardwareEncoderFault.DECODER_REFUSED));
   }
 
+  // ADR 0037 drops the leading pictures of a hardware decode's first keyframe with a bitstream
+  // filter. The worker's NVDEC decode of an HEVC source runs without it: FFmpeg's HEVC decoder
+  // skips the RASL pictures of the CRA picture it starts at before they reach NVDEC. The software
+  // chain needs no GPU, so CI also runs this test's commands and comparison.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(ReshapeChain.class)
+  @DisplayName(
+      "Should hand hevc_nvenc the start attempt's pictures at the same times when a seek attempt"
+          + " starts at an open-GOP keyframe of a profile 5 source whose leading pictures it"
+          + " cannot decode")
+  void shouldHandHevcNvencTheStartAttemptsPicturesWhenASeekStartsAtAnOpenGopKeyframe(
+      ReshapeChain chain) throws Exception {
+    if (chain == ReshapeChain.NVDEC_AND_CUDA_FILTERS) {
+      assumeHevcNvencReshapesOnTheGpu();
+    }
+    var encode = onHevcNvenc(profile5EncodeBuilder()).build();
+    var source = openGopProfile5Source();
+    var fromSegment2 =
+        request(source, encode, 2).toBuilder()
+            .seekPosition(Optional.of(SECOND_OPEN_GOP_KEYFRAME))
+            .build();
+    var segment2Start = Duration.ofSeconds(2L * PROFILE_5_PERIOD_SECONDS);
+
+    var fromStart = picturesHandedToTheEncoder(chain, request(source, encode, 0));
+    var fromTheKeyframe = picturesHandedToTheEncoder(chain, fromSegment2);
+
+    assertThat(firstDecodedPicture(chain, fromSegment2))
+        .as("the seek attempt's first decoded picture, the CRA picture of its keyframe")
+        .isEqualTo(SECOND_OPEN_GOP_KEYFRAME);
+    assertThat(fromStart).extracting(Picture::md5).doesNotHaveDuplicates();
+    assertThat(fromTheKeyframe)
+        .isNotEmpty()
+        .isEqualTo(
+            fromStart.stream()
+                .filter(picture -> picture.time().compareTo(segment2Start) >= 0)
+                .toList());
+  }
+
+  /** How the worker decodes and reshapes a profile 5 source for hevc_nvenc. */
+  enum ReshapeChain {
+    NVDEC_AND_CUDA_FILTERS,
+    SOFTWARE_DECODE_AND_CPU_FILTERS
+  }
+
   private static void assumeHevcNvencReshapesOnTheGpu() {
     var capabilities = DetectedCapabilities.realCapabilities();
     assumeTrue(
@@ -614,6 +673,173 @@ class HdrEncodeSmokeTest {
             source.toString()));
     return source;
   }
+
+  // testsrc2 pictures, each one different, with the fixture's RPUs, as an open GOP: a CRA picture
+  // every 50 pictures, each followed in decode order by RASL pictures that reference pictures
+  // before it. The source takes its name only once it has that shape, so a failed write is not
+  // read by the next case.
+  private static Path openGopProfile5Source() throws Exception {
+    var source = root.resolve("dolby-vision-5-open-gop.mp4");
+    if (Files.exists(source)) {
+      return source;
+    }
+
+    var written = root.resolve("dolby-vision-5-open-gop-written.mp4");
+    runToCompletion(
+        List.of(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            profile5Source().toString(),
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=256x144:rate=24",
+            "-filter_complex",
+            "[0:v]scale=256:144,format=yuv420p10le[rpus];[1:v]format=yuv420p10le[picture];"
+                + "[rpus][picture]overlay=format=yuv420p10:shortest=1",
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-dolbyvision",
+            "1",
+            "-strict",
+            "unofficial",
+            "-x265-params",
+            "keyint=50:min-keyint=50:scenecut=0:open-gop=1:bframes=8:b-pyramid=1"
+                + ":rc-lookahead=10:log-level=error:vbv-maxrate=1000:vbv-bufsize=1000",
+            "-bsf:v",
+            "hevc_metadata=matrix_coefficients=2",
+            "-tag:v",
+            "dvh1",
+            written.toString()));
+    assertThat(raslPicturesAfterEachCraPicture(written))
+        .as("the RASL pictures that follow each CRA picture in decode order")
+        .isNotEmpty()
+        .allSatisfy(count -> assertThat(count).isPositive());
+    return Files.move(written, source);
+  }
+
+  private static List<Long> raslPicturesAfterEachCraPicture(Path source) throws Exception {
+    var elementary = root.resolve(source.getFileName() + ".hevc");
+    runToCompletion(
+        List.of(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            source.toString(),
+            "-map",
+            "0:v:0",
+            "-c",
+            "copy",
+            "-bsf:v",
+            "hevc_mp4toannexb",
+            "-f",
+            "hevc",
+            elementary.toString()));
+    var types = pictureTypesInDecodeOrder(Files.readAllBytes(elementary));
+    return IntStream.range(0, types.size())
+        .filter(index -> types.get(index) == CRA_NUT)
+        .mapToObj(
+            index ->
+                types.subList(index + 1, types.size()).stream()
+                    .takeWhile(type -> type == RASL_N || type == RASL_R)
+                    .count())
+        .toList();
+  }
+
+  // The nal_unit_type of each picture's first slice segment (H.265 7.3.1.2 and 7.3.6.1).
+  private static List<Integer> pictureTypesInDecodeOrder(byte[] annexB) {
+    var types = new ArrayList<Integer>();
+    for (var index = 0; index + 5 < annexB.length; index++) {
+      var type = (annexB[index + 3] >> 1) & 0x3F;
+      var startCode = annexB[index] == 0 && annexB[index + 1] == 0 && annexB[index + 2] == 1;
+      if (startCode && type < FIRST_NON_SLICE_NUT && (annexB[index + 5] & 0x80) != 0) {
+        types.add(type);
+      }
+    }
+
+    return types;
+  }
+
+  // The worker's own command for the attempt, which the engine runs once the job resolved to
+  // hevc_nvenc and, for the GPU chain, hevc_nvenc passed its test of the GPU reshape.
+  private static List<String> workerCommand(ReshapeChain chain, TranscodeRequest request) {
+    var job =
+        TranscodeJob.builder()
+            .request(request)
+            .videoEncoder("hevc_nvenc")
+            .gpuDolbyVisionReshapeVerified(chain == ReshapeChain.NVDEC_AND_CUDA_FILTERS)
+            .build();
+    var command =
+        switch (new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET).buildPipeline(job)) {
+          case FfmpegPipeline.SingleProcess(var single) -> single;
+          case FfmpegPipeline.RpuMovingPipe pipe ->
+              throw new AssertionError("RPUs after their own picture need one FFmpeg: " + pipe);
+        };
+    assertThat(command.contains("-hwaccel"))
+        .as("the attempt decodes on the GPU")
+        .isEqualTo(chain == ReshapeChain.NVDEC_AND_CUDA_FILTERS);
+    return command;
+  }
+
+  // The worker's command with its filters into framemd5 in place of the encoder. A CUDA frame is
+  // copied to system memory first.
+  private static List<Picture> picturesHandedToTheEncoder(
+      ReshapeChain chain, TranscodeRequest request) throws Exception {
+    var command = workerCommand(chain, request);
+    return pictures(command, command.get(command.indexOf("-vf") + 1) + downloadOf(chain));
+  }
+
+  private static Duration firstDecodedPicture(ReshapeChain chain, TranscodeRequest request)
+      throws Exception {
+    return pictures(workerCommand(chain, request), "null" + downloadOf(chain)).getFirst().time();
+  }
+
+  private static String downloadOf(ReshapeChain chain) {
+    return chain == ReshapeChain.NVDEC_AND_CUDA_FILTERS ? ",hwdownload,format=p010le" : "";
+  }
+
+  // The worker's command up to its encoder's options, then the filters into framemd5: each
+  // picture's presentation time and MD5, in presentation order.
+  private static List<Picture> pictures(List<String> workerCommand, String filters)
+      throws Exception {
+    var hashes = Files.createTempFile(root, "pictures", ".framemd5");
+    var command = new ArrayList<>(workerCommand.subList(0, workerCommand.indexOf("-c:v")));
+    command.addAll(
+        List.of("-vf", filters, "-fps_mode", "passthrough", "-f", "framemd5", hashes.toString()));
+    runToCompletion(command);
+    var lines = Files.readAllLines(hashes);
+    var timeBase =
+        lines.stream()
+            .filter(line -> line.startsWith("#tb 0: "))
+            .map(line -> line.substring("#tb 0: ".length()).split("/"))
+            .findFirst()
+            .orElseThrow();
+    return lines.stream()
+        .filter(line -> !line.startsWith("#") && !line.isBlank())
+        .map(line -> line.split(",\\s*"))
+        .map(
+            fields ->
+                new Picture(
+                    Duration.ofNanos(
+                        new BigDecimal(fields[2])
+                            .multiply(new BigDecimal(timeBase[0]))
+                            .movePointRight(9)
+                            .divide(new BigDecimal(timeBase[1]), 0, RoundingMode.HALF_EVEN)
+                            .longValueExact()),
+                    fields[5]))
+        .toList();
+  }
+
+  private record Picture(Duration time, String md5) {}
 
   // The attempt's deliveries, after the producer accepted its output against the job.
   private static RecordingSegmentSink encoded(
