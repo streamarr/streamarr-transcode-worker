@@ -127,8 +127,9 @@ class KeyframeSearchSmokeTest {
 
   // The source's keyframes lie 60 s apart, so a read from 5.005 s lands inside the GOP from 0 s,
   // where the decoder shows nothing until the keyframe at 60 s. The check of a read up to 5.5 s
-  // stops reading once its copies reach 6.5 s. FFmpeg reads and decodes on to the keyframe in about
-  // 150 ms on the workstation, ten times as long as the stop takes.
+  // sends q once its copies reach 6.5 s, and FFmpeg acts on q within about 100 ms. At this size,
+  // FFmpeg reads and decodes on to the keyframe in about 430 ms on the workstation, four times as
+  // long as the stop takes.
   @Test
   @DisplayName(
       "Should stop the check a second past the latest picture's time, and count the packets that it"
@@ -153,7 +154,7 @@ class KeyframeSearchSmokeTest {
     assertThat(bytesRead).as("the bytes of the packets that the check copied").hasPositiveValue();
   }
 
-  // 130 s of H.264 at 320x180 and 24 fps with keyframes 60 s apart, in MPEG-TS.
+  // 130 s of H.264 at 640x360 and 24 fps with keyframes 60 s apart, in MPEG-TS.
   private Path keyframesAMinuteApart() throws Exception {
     var source = root.resolve("keyframes-a-minute-apart.ts");
     ffmpeg(
@@ -161,7 +162,7 @@ class KeyframeSearchSmokeTest {
             "-f",
             "lavfi",
             "-i",
-            "testsrc2=size=320x180:rate=24:duration=130",
+            "testsrc2=size=640x360:rate=24:duration=130",
             "-c:v",
             "libx264",
             "-bf",
