@@ -748,10 +748,9 @@ class ProducerTest {
   }
 
   // The same video. The copied audio's first sample lasts 40,000 ticks, 833 ms, as the sample
-  // before
-  // a gap in the audio does. One frame of 1,024 ticks and a last frame shortened to 384 ticks
-  // follow. It ends at 0.863 s, 137 ms before the video: more than that one frame, though less
-  // than the first sample, and no earlier duration is more common than the other.
+  // before a gap in the audio does. One frame of 1,024 ticks and a last frame shortened to 384
+  // ticks follow. It ends at 0.863 s, 137 ms before the video: more than that one frame, though
+  // less than the first sample, and no earlier duration is more common than the other.
   @Test
   @DisplayName(
       "Should refuse an encoded segment when its copied audio ends more than one full audio frame"
