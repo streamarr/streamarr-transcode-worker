@@ -6650,21 +6650,25 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
-  // FFmpeg holds the video's input back while the audio trails, and once the audio's packets stop
-  // it writes nothing until the audio's input has read on to the source's end. Both inputs read
-  // through pipes at about three times real time, so reading the 41 s of video after the audio's
-  // end takes about 13 s: longer than the engine's stall timeout of 5 s and than the server's stall
-  // threshold. An FFmpeg that reads is not stalled: the worker counts the bytes that FFmpeg reads
-  // as the attempt's progress, and reports them, while FFmpeg writes nothing.
-  @Test
+  // A copy and an encode that holds its last frame read their encoded audio from an input of its
+  // own. FFmpeg holds the video's input back while the audio trails, and once the audio's packets
+  // stop it writes nothing until the audio's input has read on to the source's end. Both inputs
+  // read through pipes at about three times real time, so reading the 41 s of video after the
+  // audio's end takes about 13 s: longer than the engine's stall timeout of 5 s and than the
+  // server's stall threshold. An FFmpeg that reads is not stalled: the worker counts the bytes that
+  // FFmpeg reads as the attempt's progress, and reports them, while FFmpeg writes nothing.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_AUDIO_TRANSCODE", "TRANSCODE_MODE_FULL_TRANSCODE"})
   @DisplayName(
-      "Should deliver every source audio sample and report progress throughout when a copy that"
-          + " encodes its audio reads a paced source's video for longer than the stall timeout"
-          + " after the audio's end")
-  void shouldDeliverEverySourceAudioSampleAndReportProgressWhenACopyReadsOnLongAfterItsAudiosEnd()
-      throws Exception {
+      "Should deliver every source audio sample and report progress throughout when an attempt"
+          + " that reads its encoded audio from an input of its own reads a paced source's video"
+          + " for longer than the stall timeout after the audio's end")
+  void shouldDeliverEverySourceAudioSampleAndReportProgressWhenTheAudiosInputReadsOnLongAfterItsEnd(
+      TranscodeMode mode) throws Exception {
     var source = countedAudioEndsLongBeforeNoisyVideoSource();
-    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var job = countedAudioJob(source, mode);
     paddedToSlots(job, VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT);
     var advertisedEndSamples =
         VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
@@ -6709,14 +6713,17 @@ class WorkerMediaSmokeTest {
   // producer fails the attempt once FFmpeg has read nothing for the stall timeout, as it does for
   // an FFmpeg that writes nothing. FFmpeg ignores the request to terminate while it waits in the
   // read, so the producer destroys it after the grace period and then reports the failure.
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_AUDIO_TRANSCODE", "TRANSCODE_MODE_FULL_TRANSCODE"})
   @DisplayName(
       "Should fail the attempt within the stall timeout of the source's last byte when the source"
-          + " stops serving a copy that encodes its audio and reads on after the audio's end")
-  void shouldFailTheAttemptWithinTheStallTimeoutWhenTheSourceStopsServingACopyThatReadsOn()
-      throws Exception {
+          + " stops serving an attempt whose audio's input reads on after the audio's end")
+  void shouldFailTheAttemptWithinTheStallTimeoutWhenTheSourceStopsServingTheAudiosInputReadingOn(
+      TranscodeMode mode) throws Exception {
     var source = countedAudioEndsLongBeforeNoisyVideoSource();
-    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var job = countedAudioJob(source, mode);
     paddedToSlots(job, VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT);
     var servedBytes = lastAudioPacketOffset(source) + 7L * THRICE_THE_VIDEOS_BYTE_RATE;
 

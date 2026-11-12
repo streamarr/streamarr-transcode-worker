@@ -3781,15 +3781,37 @@ class FfmpegCommandBuilderTest {
     assertThat(pipeline.audioInputReadsAhead()).isFalse();
   }
 
-  // The held encode reads its audio from a second input too, and its one filter graph keeps its
-  // video beside its audio.
+  // The held encode reads its audio from a second input too. FFmpeg holds the first input back
+  // while the audio trails there as well, and writes nothing while the audio's input reads on.
   @Test
-  @DisplayName("Should say that no input reads ahead when an encode holds the last frame")
-  void shouldSayThatNoInputReadsAheadWhenAnEncodeHoldsTheLastFrame() {
+  @DisplayName(
+      "Should say that the audio's input reads ahead when an encode holds the last frame and reads"
+          + " its audio from an input of its own")
+  void shouldSayThatTheAudiosInputReadsAheadWhenAnEncodeHoldsTheLastFrame() {
     var held = heldAndPadded(TranscodeMode.FULL_TRANSCODE).build();
 
     var pipeline = builder.buildPipeline(job(held, "libx264"));
 
+    assertThat(pipeline.audioInputReadsAhead()).isTrue();
+  }
+
+  // A held encode that names a stream which the worker did not read as audio keeps the one input.
+  @Test
+  @DisplayName(
+      "Should say that no input reads ahead when an encode holds the last frame and names an audio"
+          + " stream that the worker did not read")
+  void shouldSayThatNoInputReadsAheadWhenAHeldEncodeNamesAnAudioStreamThatTheWorkerDidNotRead() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .audioDecision(namedPaddedAac())
+            .build();
+    var held = request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build();
+
+    var pipeline = builder.buildPipeline(job(held, "libx264"));
+
+    assertThat(pipeline.commandLine()).doesNotContain("-isync");
     assertThat(pipeline.audioInputReadsAhead()).isFalse();
   }
 

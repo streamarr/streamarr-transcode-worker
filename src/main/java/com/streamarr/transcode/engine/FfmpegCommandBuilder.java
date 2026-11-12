@@ -272,7 +272,7 @@ public class FfmpegCommandBuilder {
 
     return new FfmpegPipeline.SingleProcess(
         buildCommand(job, EncoderInput.SOURCE),
-        copiesVideoBesideAudioOfItsOwnInput(job.request(), EncoderInput.SOURCE));
+        readsAudioFromItsOwnInput(job.request(), EncoderInput.SOURCE));
   }
 
   // Dolby Vision profiles 5 and 10.0 have no compatible base, and of those only profile 5 is

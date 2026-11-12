@@ -11,9 +11,10 @@ public sealed interface FfmpegPipeline {
   String commandLine();
 
   /**
-   * Whether FFmpeg writes nothing while its audio's input reads on: a copy that encodes its audio
-   * reads the audio from an input of its own, and FFmpeg holds the video's input back while that
-   * input reads from the audio stream's last packet to its next one or to the source's end.
+   * Whether FFmpeg writes nothing while its audio's input reads on: an attempt that encodes its
+   * audio from an input of its own, as a copy and an encode that holds its last frame do, holds the
+   * video's input back while that input reads from the audio stream's last packet to its next one
+   * or to the source's end.
    */
   boolean audioInputReadsAhead();
 
@@ -62,7 +63,7 @@ public sealed interface FfmpegPipeline {
       return List.copyOf(command);
     }
 
-    /** False: the pipe encodes its video, and only a copy holds its video's input back. */
+    /** False: the producer watches the pipe's two FFmpegs by their output alone. */
     @Override
     public boolean audioInputReadsAhead() {
       return false;
