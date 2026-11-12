@@ -131,6 +131,11 @@ public final class TeeingProcessLauncher implements ProcessLauncher {
     }
 
     @Override
+    public ProcessHandle toHandle() {
+      return process.toHandle();
+    }
+
+    @Override
     public CompletableFuture<Process> onExit() {
       return process.onExit().thenApply(_ -> this);
     }
