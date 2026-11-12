@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -100,6 +101,8 @@ public final class ScriptedProcess extends Process {
   private boolean pausedBySignal;
   private boolean reading;
   private long bytesRead;
+  // How long after the count before it the next count comes at the soonest; 0 for no delay.
+  private long nextCountDelayNanos;
   // On System.nanoTime: the latest count, the count that found the last byte read, the count
   // before that one, and the first request to terminate; 0 until it happens.
   private long countedAtNanos;
@@ -225,8 +228,17 @@ public final class ScriptedProcess extends Process {
     reading = false;
   }
 
+  /**
+   * Makes the next count of the bytes that the process has read come no sooner than the delay after
+   * the count before it, as a count does whose thread the system does not run meanwhile.
+   */
+  public synchronized void delayNextCount(Duration delay) {
+    nextCountDelayNanos = delay.toNanos();
+  }
+
   /** Counts the bytes that the process has read so far, as its launcher does. */
   public synchronized long countBytesRead() {
+    awaitTheDelayedCount();
     var now = System.nanoTime();
     if (reading) {
       bytesRead++;
@@ -236,6 +248,21 @@ public final class ScriptedProcess extends Process {
 
     countedAtNanos = now;
     return bytesRead;
+  }
+
+  // Holds this monitor; the wait releases it, so the process's output stays readable meanwhile.
+  private void awaitTheDelayedCount() {
+    var countAt = countedAtNanos + nextCountDelayNanos;
+    while (nextCountDelayNanos > 0 && countAt - System.nanoTime() > 0) {
+      try {
+        TimeUnit.NANOSECONDS.timedWait(this, countAt - System.nanoTime());
+      } catch (InterruptedException _) {
+        Thread.currentThread().interrupt();
+        break;
+      }
+    }
+
+    nextCountDelayNanos = 0;
   }
 
   /** When the count that found the last byte that the process read was made, on System.nanoTime. */

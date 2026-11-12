@@ -19,7 +19,9 @@ import java.util.function.Supplier;
  * watchdog samples the bytes read only while it watches, several times within the stall timeout,
  * and dates bytes that a sample finds to the sample before it, the earliest moment they can have
  * been read at. An FFmpeg that stops reading therefore stalls within the stall timeout of its last
- * read, as one that stops writing does of its last byte.
+ * read, as one that stops writing does of its last byte. A sample that the system delays dates them
+ * no earlier than one sample interval before itself, so an FFmpeg that a sample finds reading never
+ * stalls sooner than the stall timeout less that interval after it.
  */
 final class StallWatchdog {
 
@@ -131,15 +133,18 @@ final class StallWatchdog {
     return Math.min(now - lastOutputNanos, now - lastReadNanos);
   }
 
-  // Holds this monitor. Bytes read since the sample before were read at or after that sample.
+  // Holds this monitor. Bytes read since the sample before were read at or after that sample. When
+  // the system ran the watchdog late, the time it did not look is its own delay, not FFmpeg's
+  // silence, so the bytes are dated no earlier than one interval before this sample.
   private void sampleBytesRead() {
     var sampled = bytesRead.get().orElse(sampledBytesRead);
+    var now = System.nanoTime();
     if (sampled > sampledBytesRead) {
       sampledBytesRead = sampled;
-      lastReadNanos = sampledAtNanos;
+      lastReadNanos = now - Math.min(now - sampledAtNanos, readSampleIntervalNanos);
     }
 
-    sampledAtNanos = System.nanoTime();
+    sampledAtNanos = now;
   }
 
   // Holds this monitor. False when interrupted.

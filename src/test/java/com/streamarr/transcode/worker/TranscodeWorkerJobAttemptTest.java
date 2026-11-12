@@ -2398,6 +2398,45 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // A count that comes two stall timeouts after the one before it, as when the system does not run
+  // the worker's watchdog meanwhile, finds that FFmpeg read, as does every count after it.
+  @Test
+  @DisplayName(
+      "Should keep the attempt running when a count of the bytes that FFmpeg has read comes later"
+          + " than the stall timeout and finds that FFmpeg read, while a copy that encodes its"
+          + " audio reads ahead")
+  void shouldKeepTheAttemptRunningWhenACountThatComesLaterThanTheStallTimeoutFindsThatFfmpegRead()
+      throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var pause = endOfFragment(output, 1);
+    var launcher = new ScriptedProcessLauncher(_ -> readingProcess(output, pause));
+    var job = copyThatEncodesItsAudioJobBuilder().build();
+    var stallTimeout = Duration.ofMillis(200);
+    var engine = engineBuilder(launcher).encoderStallTimeout(stallTimeout).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).engine(engine).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      awaitProgressReports(connection, 2);
+      var process = processOf(launcher, job);
+      process.delayNextCount(stallTimeout.multipliedBy(2));
+      var readBeforeTheDelayedCount = process.bytesRead();
+
+      promptly()
+          .until(
+              () ->
+                  process.bytesRead() >= readBeforeTheDelayedCount + 3
+                      || !terminalEventsOf(connection, job).isEmpty());
+
+      assertThat(eventsOf(connection))
+          .as("the attempt's events, after the delayed count and two more")
+          .containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      process.resume();
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+    }
+  }
+
   // A job that copies its video and encodes its audio, whose audio's input reads ahead.
   private static VariantJob.Builder copyThatEncodesItsAudioJobBuilder() {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
