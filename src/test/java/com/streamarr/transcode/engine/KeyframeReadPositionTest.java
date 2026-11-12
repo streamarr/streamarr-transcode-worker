@@ -704,19 +704,17 @@ class KeyframeReadPositionTest {
     assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
   }
 
-  // The read lands on the video's last keyframe, which presents last, up to the video's end. Its
-  // three leading pictures follow it in decode order, need no picture before it, as HEVC's RADL
-  // pictures do, and present before the search time of 23.5 s. FFmpeg shows the decoder's first
-  // picture only at the end of the file, once the worker has read every copy.
+  // No keyframe of the read presents by the search time of 23.5 s, and the pictures that do follow
+  // the packet that ends the video in decode order. FFmpeg shows the decoder's first picture only
+  // at the end of the file, once the worker has read every copy.
   @ParameterizedTest(name = "{0}")
-  @MethodSource("readsThatLandOnAKeyframeThatEndsTheVideoAfterItsLeadingPictures")
+  @MethodSource("readsWhosePicturesInTimeFollowThePacketThatEndsTheVideo")
   @Timeout(10)
   @DisplayName(
-      "Should let the first picture check read on past the keyframe that ends the video when its"
-          + " leading pictures can present by the search time")
-  void shouldLetTheCheckReadOnPastTheKeyframeThatEndsTheVideoWhenItsLeadingPicturesCanBeInTime(
-      String containerCase, String copies, Duration videoEnd, Duration firstPicture)
-      throws Exception {
+      "Should let the first picture check read on past the packet that ends the video when the"
+          + " pictures after it can present by the search time")
+  void shouldLetTheCheckReadOnPastThePacketThatEndsTheVideoWhenThePicturesAfterItCanBeInTime(
+      String readCase, String copies, Duration videoEnd, Duration firstPicture) throws Exception {
     var picture = firstPicture.toMillis();
     var check =
         ScriptedProcess.builder()
@@ -741,14 +739,16 @@ class KeyframeReadPositionTest {
                 endingVideoAt(videoEnd, storing(STORED_POSITION, searching(seconds("23.5"), 24))),
                 readingToTheEndOfTheFile);
 
-    assertThat(check.stdinText()).as("no q before the leading pictures").isEmpty();
+    assertThat(check.stdinText()).as("no q before the pictures in time").isEmpty();
     assertThat(readPosition).contains(STORED_POSITION);
   }
 
-  // The Matroska case is the pinned FFmpeg's copy of the smoke test's read from 4.2 s of an x265
-  // encode at 4 fps, 20 s later: it decodes the keyframe two pictures before it presents, and the
-  // leading pictures 1 ms after it.
-  static Stream<Arguments> readsThatLandOnAKeyframeThatEndsTheVideoAfterItsLeadingPictures() {
+  // In the MP4 and Matroska cases, the read lands on the video's last keyframe, which presents
+  // last, up to the video's end, and its three leading pictures need no picture before it, as
+  // HEVC's RADL pictures do. The Matroska case is the pinned FFmpeg's copy of the smoke test's read
+  // from 4.2 s of an x265 encode at 4 fps, 20 s later: it decodes the keyframe two pictures before
+  // it presents, and the leading pictures 1 ms after it.
+  static Stream<Arguments> readsWhosePicturesInTimeFollowThePacketThatEndsTheVideo() {
     return Stream.of(
         Arguments.of(
             "MP4 stores each packet's decode time: the keyframe decodes at 22.5 s and presents at"
