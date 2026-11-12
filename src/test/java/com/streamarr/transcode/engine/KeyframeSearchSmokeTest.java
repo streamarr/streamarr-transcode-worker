@@ -170,16 +170,7 @@ class KeyframeSearchSmokeTest {
       throws Exception {
     var source = videoThatEndsLongBeforeItsAudio();
     var launcher = new InputRecordingLauncher();
-    var scan =
-        KeyframeScan.builder()
-            .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
-            .launcher(launcher)
-            .request(
-                searching(source, OptionalInt.of(1), 6).toBuilder()
-                    .videoEnd(Optional.of(probe(source).videoEnd()))
-                    .build())
-            .bytesRead(_ -> {})
-            .build();
+    var scan = firstPictureCheck(source, probe(source).videoEnd(), launcher);
 
     var read = scan.firstDecodedPicture(Duration.ofMillis(4500), Duration.ofMillis(5500));
 
@@ -567,6 +558,21 @@ class KeyframeSearchSmokeTest {
             new TranscodeCapabilityService("ffmpeg", _ -> new FakeProcess("ffmpeg version 8.1", 0)))
         .launcher(new ProcessBuilderLauncher())
         .encoderStallTimeout(Duration.ofSeconds(30))
+        .build();
+  }
+
+  // The first picture check of a held encode of the source's first audio stream, with the video's
+  // end that the server sends.
+  private static KeyframeScan firstPictureCheck(
+      Path source, Duration videoEnd, ProcessLauncher launcher) {
+    return KeyframeScan.builder()
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+        .launcher(launcher)
+        .request(
+            searching(source, OptionalInt.of(1), 6).toBuilder()
+                .videoEnd(Optional.of(videoEnd))
+                .build())
+        .bytesRead(_ -> {})
         .build();
   }
 
