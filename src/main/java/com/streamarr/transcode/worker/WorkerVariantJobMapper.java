@@ -44,11 +44,11 @@ final class WorkerVariantJobMapper {
    * @throws InvalidJobSpecificationException when the job names no transcode, audio or subtitle
    *     mode, when its video decision is missing, contradicts the rest of the job, or lacks a value
    *     that the worker forces or checks, or when it holds the last frame or pads its audio without
-   *     encoding that stream or without a positive advertised end, or when its segment list, in
-   *     exact ticks or else in slots, is not empty and does not hold one start for each media
-   *     segment, from 0 and strictly increasing, or when its exact starts come without a positive
-   *     time base or a time base without exact starts, or when its advertised end does not lie
-   *     after the last listed segment's start
+   *     encoding that stream or without a positive advertised end, or when its exact segment starts
+   *     are not empty and do not hold one start for each media segment, from 0 and strictly
+   *     increasing, or when its exact starts come without a positive time base or a time base
+   *     without exact starts, or when its advertised end does not lie after the last listed
+   *     segment's start
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
@@ -79,28 +79,11 @@ final class WorkerVariantJobMapper {
         // so seek_position_seconds, which the server sets to that segment's boundary, is not read.
         .startSequenceNumber(execution.getStartSequenceNumber())
         .mediaSegmentCount(execution.getMediaSegmentCount())
-        .segmentStartSlots(segmentStartSlots(execution))
         .exactSegmentStarts(exactSegmentStarts(execution))
         .seekPosition(seekPosition(execution))
         .sourceAudio(sourceAudio)
         .advertisedEnd(advertisedEnd(job))
         .build();
-  }
-
-  // A job that carries exact segment starts groups on them alone, and its slot list goes unread.
-  private static List<Long> segmentStartSlots(TranscodeExecution execution) {
-    if (carriesExactSegmentStarts(execution)) {
-      return List.of();
-    }
-
-    return segmentStartSlotsInSlots(execution);
-  }
-
-  // The contract's slots are uint32, which Java reads as int, so they compare as unsigned values.
-  private static List<Long> segmentStartSlotsInSlots(TranscodeExecution execution) {
-    var slots = execution.getSegmentStartSlotsList().stream().map(Integer::toUnsignedLong).toList();
-    requireSegmentList(slots, execution.getMediaSegmentCount(), "slot");
-    return slots;
   }
 
   private static boolean carriesExactSegmentStarts(TranscodeExecution execution) {
@@ -129,7 +112,7 @@ final class WorkerVariantJobMapper {
           "The exact segment starts hold a tick count past a signed 64-bit value");
     }
 
-    requireSegmentList(ticks, execution.getMediaSegmentCount(), "tick");
+    requireSegmentList(ticks, execution.getMediaSegmentCount());
     var timeBase = execution.getSegmentStartTimeBase();
     if (timeBase.getNumerator() == 0 || timeBase.getDenominator() == 0) {
       throw new InvalidJobSpecificationException(
@@ -147,8 +130,8 @@ final class WorkerVariantJobMapper {
   }
 
   // A non-empty segment list holds one start for each media segment, from 0 and strictly
-  // increasing, in units such as slots.
-  private static void requireSegmentList(List<Long> starts, int mediaSegmentCount, String unit) {
+  // increasing.
+  private static void requireSegmentList(List<Long> starts, int mediaSegmentCount) {
     if (starts.isEmpty()) {
       return;
     }
@@ -164,28 +147,24 @@ final class WorkerVariantJobMapper {
 
     if (starts.getFirst() != 0) {
       throw new InvalidJobSpecificationException(
-          "The segment list starts at " + unit + " " + starts.getFirst() + " instead of 0");
+          "The segment list starts at tick " + starts.getFirst() + " instead of 0");
     }
 
     for (var index = 1; index < starts.size(); index++) {
-      requireLaterStart(starts, index, unit);
+      requireLaterStart(starts, index);
     }
   }
 
-  private static void requireLaterStart(List<Long> starts, int index, String unit) {
+  private static void requireLaterStart(List<Long> starts, int index) {
     if (starts.get(index) <= starts.get(index - 1)) {
       throw new InvalidJobSpecificationException(
           "Segment "
               + index
-              + " starts at "
-              + unit
-              + " "
+              + " starts at tick "
               + starts.get(index)
               + ", not after segment "
               + (index - 1)
-              + "'s "
-              + unit
-              + " "
+              + "'s tick "
               + starts.get(index - 1));
     }
   }
@@ -234,29 +213,19 @@ final class WorkerVariantJobMapper {
 
   private static Optional<ListedStart> lastListedStart(TranscodeExecution execution) {
     var ticks = execution.getSegmentStartTicksList();
-    if (!ticks.isEmpty()) {
-      var timeBase = execution.getSegmentStartTimeBase();
-      return Optional.of(
-          new ListedStart(
-              ticks.getLast(),
-              Integer.toUnsignedLong(timeBase.getNumerator()),
-              Integer.toUnsignedLong(timeBase.getDenominator())));
-    }
-
-    var slots = execution.getSegmentStartSlotsList();
-    if (slots.isEmpty()) {
+    if (ticks.isEmpty()) {
       return Optional.empty();
     }
 
+    var timeBase = execution.getSegmentStartTimeBase();
     return Optional.of(
         new ListedStart(
-            Integer.toUnsignedLong(slots.getLast()),
-            execution.getTargetSegmentDurationSeconds(),
-            1));
+            ticks.getLast(),
+            Integer.toUnsignedLong(timeBase.getNumerator()),
+            Integer.toUnsignedLong(timeBase.getDenominator())));
   }
 
-  // A listed start of ticks that each last numerator / denominator seconds; a slot is one tick of
-  // a time base whose ticks each last one period.
+  // A listed start of ticks that each last numerator / denominator seconds.
   private record ListedStart(long ticks, long numerator, long denominator) {
 
     // Compares by cross-multiplication in nanoseconds, so that neither time is rounded.

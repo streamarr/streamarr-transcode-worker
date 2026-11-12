@@ -18,9 +18,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 class SegmentIntervalsTest {
 
   private static final long MILLISECONDS = 1000;
-  // Keyframes 10 s apart on 3 s slots: the slots without one merge into the segment before them.
-  private static final List<Long> TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS =
-      List.of(0L, 3L, 6L, 10L);
+  // Keyframes 10 s apart on 3 s slots: the slots without one merge into the segment before them,
+  // so the segments start at slots 0, 3, 6 and 10, listed here in whole seconds.
+  private static final ExactSegmentStarts TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS =
+      new ExactSegmentStarts(List.of(0L, 9L, 18L, 30L), 1, 1);
   private static final long AUDIO_TIMESCALE = 48_000;
   private static final long NANOSECONDS = 1_000_000_000;
   // Keyframes at 3.5 s, 6.5 s and 9.5 s in an MPEG-TS source's 1/90000 time base.
@@ -65,7 +66,7 @@ class SegmentIntervalsTest {
           + " merge")
   void shouldPlaceAPresentationTimeInTheSegmentWhoseListedIntervalHoldsItWhenSlotsMerge(
       long milliseconds, long number) {
-    var intervals = SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS);
+    var intervals = SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS);
 
     assertThat(intervals.numberAt(milliseconds, MILLISECONDS)).isEqualTo(number);
   }
@@ -75,7 +76,7 @@ class SegmentIntervalsTest {
       "Should start and end each listed segment at its slots and leave the last one open when"
           + " slots merge")
   void shouldStartAndEndEachListedSegmentAtItsSlotsAndLeaveTheLastOneOpenWhenSlotsMerge() {
-    var intervals = SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS);
+    var intervals = SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS);
 
     assertThat(intervals.startOf(2, MILLISECONDS)).isEqualTo(18_000);
     assertThat(intervals.endOf(2, MILLISECONDS)).hasValue(30_000);
@@ -91,7 +92,7 @@ class SegmentIntervalsTest {
           + " after it when the job carries an advertised end")
   void shouldEndTheLastListedSegmentsAudioAtTheAdvertisedEndWhenTheJobCarriesOne() {
     var intervals =
-        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
             .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
 
     assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_500);
@@ -108,7 +109,7 @@ class SegmentIntervalsTest {
           + " carries an advertised end")
   void shouldKeepAKeyframePastTheAdvertisedEndInTheLastListedSegmentWhenTheJobCarriesOne() {
     var intervals =
-        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
             .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
 
     assertThat(intervals.numberAt(34_500, MILLISECONDS)).isEqualTo(3);
@@ -120,7 +121,7 @@ class SegmentIntervalsTest {
           + " that end falls between two ticks")
   void shouldEndTheLastListedSegmentAtTheFirstTickAtOrAfterTheAdvertisedEndBetweenTwoTicks() {
     var intervals =
-        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
             .withLastListedSegmentEndingAt(Duration.ofMillis(34_500).plusNanos(1));
 
     assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_501);
@@ -141,9 +142,9 @@ class SegmentIntervalsTest {
   }
 
   @Test
-  @DisplayName("Should use the plain grid when the segment list is empty")
-  void shouldUseThePlainGridWhenTheSegmentListIsEmpty() {
-    var intervals = SegmentIntervals.onSegmentList(3, List.of());
+  @DisplayName("Should use the plain grid when the exact starts are empty")
+  void shouldUseThePlainGridWhenTheExactStartsAreEmpty() {
+    var intervals = SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(), 1, 1));
 
     assertThat(intervals.numberAt(30_000, MILLISECONDS)).isEqualTo(10);
     assertThat(intervals.startOf(10, MILLISECONDS)).isEqualTo(30_000);
@@ -193,37 +194,55 @@ class SegmentIntervalsTest {
   }
 
   // The server sends a plain grid's starts as whole seconds in time base 1/1.
-  @ParameterizedTest(name = "audio sample at {0} of 48 kHz")
-  @ValueSource(longs = {-1, 0, 143_999, 144_000, 287_999, 288_000, 431_999, 432_000, 2_880_000})
+  @ParameterizedTest(name = "audio sample at {0} of 48 kHz is in segment {1}")
+  @CsvSource({
+    "-1, -1",
+    "0, 0",
+    "143999, 0",
+    "144000, 1",
+    "287999, 1",
+    "288000, 2",
+    "431999, 2",
+    "432000, 3",
+    "2880000, 3"
+  })
   @DisplayName(
-      "Should place a time in the same segment as the slot list does when the exact starts are a"
-          + " plain grid's whole seconds")
-  void shouldPlaceATimeInTheSameSegmentAsTheSlotListWhenTheExactStartsAreAPlainGridsSeconds(
-      long presentationTime) {
-    var onSlots = SegmentIntervals.onSegmentList(3, List.of(0L, 1L, 2L, 3L));
+      "Should place a time in the slot that holds it, and in the last one from its start on, when"
+          + " the exact starts are a plain grid's whole seconds")
+  void shouldPlaceATimeInTheSlotThatHoldsItWhenTheExactStartsAreAPlainGridsSeconds(
+      long presentationTime, long number) {
     var onSeconds =
         SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 3L, 6L, 9L), 1, 1));
 
-    assertThat(onSeconds.numberAt(presentationTime, AUDIO_TIMESCALE))
-        .isEqualTo(onSlots.numberAt(presentationTime, AUDIO_TIMESCALE));
+    assertThat(onSeconds.numberAt(presentationTime, AUDIO_TIMESCALE)).isEqualTo(number);
   }
 
   @ParameterizedTest(name = "segment {0}")
-  @ValueSource(longs = {0, 1, 2, 3})
+  @ValueSource(longs = {0, 1, 2})
   @DisplayName(
-      "Should start and end each segment where the slot list does when the exact starts are a"
-          + " plain grid's whole seconds")
-  void shouldStartAndEndEachSegmentWhereTheSlotListDoesWhenTheExactStartsAreAPlainGridsSeconds(
-      long segment) {
-    var onSlots = SegmentIntervals.onSegmentList(3, List.of(0L, 1L, 2L, 3L));
+      "Should start and end each segment on its slot when the exact starts are a plain grid's"
+          + " whole seconds")
+  void shouldStartAndEndEachSegmentOnItsSlotWhenTheExactStartsAreAPlainGridsSeconds(long segment) {
     var onSeconds =
         SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 3L, 6L, 9L), 1, 1));
 
     assertThat(onSeconds.startTimeOf(segment))
-        .isEqualTo(onSlots.startTimeOf(segment))
         .isEqualTo(MediaTime.of(Duration.ofSeconds(3 * segment)));
-    assertThat(onSeconds.endTimeOf(segment)).isEqualTo(onSlots.endTimeOf(segment));
-    assertThat(onSeconds.shortestInterval()).isEqualTo(onSlots.shortestInterval());
+    assertThat(onSeconds.endTimeOf(segment))
+        .contains(MediaTime.of(Duration.ofSeconds(3 * (segment + 1))));
+    assertThat(onSeconds.shortestInterval()).isEqualTo(MediaTime.of(Duration.ofSeconds(3)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should start the last segment on its slot and leave it open when the exact starts are a"
+          + " plain grid's whole seconds")
+  void shouldStartTheLastSegmentOnItsSlotAndLeaveItOpenWhenTheExactStartsAreAPlainGridsSeconds() {
+    var onSeconds =
+        SegmentIntervals.onExactStarts(3, new ExactSegmentStarts(List.of(0L, 3L, 6L, 9L), 1, 1));
+
+    assertThat(onSeconds.startTimeOf(3)).isEqualTo(MediaTime.of(Duration.ofSeconds(9)));
+    assertThat(onSeconds.endTimeOf(3)).isEmpty();
   }
 
   @Test

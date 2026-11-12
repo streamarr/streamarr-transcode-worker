@@ -2,7 +2,6 @@ package com.streamarr.transcode.engine;
 
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.Builder;
@@ -23,14 +22,12 @@ public record TranscodeRequest(
     String variantLabel,
     int startSequenceNumber,
     int mediaSegmentCount,
-    @NonNull List<Long> segmentStartSlots,
     @NonNull Optional<ExactSegmentStarts> exactSegmentStarts,
     @NonNull Optional<Duration> seekPosition,
     @NonNull Optional<SourceAudio> sourceAudio,
     @NonNull Optional<Duration> advertisedEnd) {
 
   public TranscodeRequest {
-    segmentStartSlots = List.copyOf(segmentStartSlots);
     if (encoderPreset == null && encodesVideo(transcodeDecision)) {
       throw new IllegalArgumentException("A video encode requires an encoder preset");
     }
@@ -57,7 +54,6 @@ public record TranscodeRequest(
 
   public static TranscodeRequestBuilder builder() {
     return new TranscodeRequestBuilder()
-        .segmentStartSlots(List.of())
         .exactSegmentStarts(Optional.empty())
         .seekPosition(Optional.empty())
         .outputFrameRate(Optional.empty())
@@ -66,16 +62,14 @@ public record TranscodeRequest(
   }
 
   /**
-   * The media segments' intervals: the job's exact segment starts, or else its segment list in
-   * slots, whose last segment ends at the advertised end when the job carries one, or the plain
-   * grid when it has neither.
+   * The media segments' intervals: the job's exact segment starts, whose last segment ends at the
+   * advertised end when the job carries one, or the plain grid when it carries no exact starts.
    */
   SegmentIntervals segmentIntervals() {
     var intervals =
         exactSegmentStarts
             .map(starts -> SegmentIntervals.onExactStarts(targetSegmentDuration, starts))
-            .orElseGet(
-                () -> SegmentIntervals.onSegmentList(targetSegmentDuration, segmentStartSlots));
+            .orElseGet(() -> SegmentIntervals.onPlainGrid(targetSegmentDuration));
     return advertisedEnd.map(intervals::withLastListedSegmentEndingAt).orElse(intervals);
   }
 

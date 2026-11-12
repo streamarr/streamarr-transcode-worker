@@ -168,6 +168,9 @@ class WorkerMediaSmokeTest {
   private static final int SLOT_SECONDS = 3;
   // The 3 s slots where the segments of the source with keyframes 10 s apart start.
   private static final List<Integer> TEN_SECOND_KEYFRAME_SEGMENT_STARTS = List.of(0, 3, 6, 10);
+  // The server lists a plain grid's segment starts in whole seconds.
+  private static final Fraction WHOLE_SECONDS =
+      Fraction.newBuilder().setNumerator(1).setDenominator(1).build();
   private static final int REPLACEMENT_START_SEQUENCE_NUMBER = 2;
   // The seekable sources' 6 s period in their 48 kHz audio timescale.
   private static final long SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS = 6L * 48_000;
@@ -6026,7 +6029,10 @@ class WorkerMediaSmokeTest {
       throws Exception {
     var source = videoEndsLongBeforeAudioSource();
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
-    job.getExecutionBuilder().setMediaSegmentCount(2).addAllSegmentStartSlots(List.of(0, 1));
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, 6L))
+        .setSegmentStartTimeBase(WHOLE_SECONDS);
 
     try (var pipe =
         new PacedSourcePipe(root.resolve("source-pipe"), THRICE_THE_SOURCES_BYTE_RATE)) {
@@ -6961,47 +6967,49 @@ class WorkerMediaSmokeTest {
     };
   }
 
+  // The server lists a copy's starts as its opening keyframes' ticks in the source's time base,
+  // here 0 s, 10 s, 20 s and 30 s, so each segment spans several 3 s slots. Segment 0 starts at 0
+  // and opens at the source's first keyframe, which AAC priming can place after 0.
   @ParameterizedTest(name = "from segment {0}")
   @ValueSource(ints = {0, 2})
   @DisplayName(
-      "Should upload every listed segment, each opening at the source keyframe in its first slot"
-          + " with only its listed interval's audio, when a copy's job merges 3 s slots between"
-          + " keyframes 10 s apart")
-  void shouldUploadEveryListedSegmentWhenACopysJobMergesSlotsBetweenKeyframesTenSecondsApart(
-      int startSequenceNumber) throws Exception {
+      "Should upload every listed segment, each opening at its listed keyframe with only its listed"
+          + " interval's audio, when a copy's keyframes lie 10 s apart on 3 s slots")
+  void
+      shouldUploadEveryListedSegmentOpeningAtItsListedKeyframeWhenACopysKeyframesLieTenSecondsApart(
+          int startSequenceNumber) throws Exception {
     var source = tenSecondKeyframeSource();
-    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    var timeBase = videoTimeBase(source);
+    var starts = exactStarts(source);
+    assertThat(starts).as("the source's keyframes 10 s apart open four segments").hasSize(4);
+    var times = starts.stream().map(timeBase::times).toList();
+    var openings =
+        Stream.concat(Stream.of(timeBase.times(keyframeTicks(source)[0])), times.stream().skip(1))
+            .toList();
+    var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
+    job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_COPY);
     job.getExecutionBuilder()
-        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
-        .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder()
+                .setNumerator(timeBase.numerator().intValueExact())
+                .setDenominator(timeBase.denominator().intValueExact()))
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(
-            TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
+            Math.toIntExact(new BigFraction(1, 1).ticksIn(times.get(startSequenceNumber))));
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
     assertThat(uploads.names())
         .containsExactlyElementsOf(
-            uploadNames(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size()).stream()
+            uploadNames(starts.size()).stream()
                 .filter(
                     name -> !name.startsWith("segment") || numberOf(name) >= startSequenceNumber)
                 .toList());
-    for (var number = startSequenceNumber;
-        number < TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size();
-        number++) {
-      var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
-      var firstSlot = listedInterval(number, movie.videoTrack().timescale());
-      var video = movie.samplesOf(movie.videoTrack()).getFirst();
-      assertThat(video.isSync()).as("segment %d opens at a keyframe", number).isTrue();
-      assertThat(video.presentationTime())
-          .as("segment %d opens in its first slot", number)
-          .isBetween(firstSlot.start(), firstSlot.start() + SLOT_SECONDS * firstSlot.timescale());
-      var audioInterval = listedInterval(number, movie.audioTrack().timescale());
-      assertThat(movie.samplesOf(movie.audioTrack()))
-          .as("segment %d's audio starts inside its listed interval", number)
-          .isNotEmpty()
-          .allMatch(sample -> audioInterval.interval().holds(sample.presentationTime()));
+    for (var number = startSequenceNumber; number < starts.size(); number++) {
+      assertThat(firstVideoSampleOf(uploads, number))
+          .as("segment %d opens at its keyframe", number)
+          .isEqualTo(openings.get(number));
+      assertAudioStartsInsideItsExactInterval(uploads, number, times);
     }
   }
 
@@ -7018,7 +7026,8 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .addAllSegmentStartTicks(tenSecondKeyframeSegmentStartSeconds())
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(
             TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
@@ -7600,7 +7609,8 @@ class WorkerMediaSmokeTest {
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(SLOT_SECONDS)
         .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
-        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS);
+        .addAllSegmentStartTicks(tenSecondKeyframeSegmentStartSeconds())
+        .setSegmentStartTimeBase(WHOLE_SECONDS);
     return job;
   }
 
@@ -7812,6 +7822,8 @@ class WorkerMediaSmokeTest {
       throws Exception {
     var source = exactStartMpegTsSourceWithAudio();
     var starts = exactStarts(source);
+    var mpegTsTick = new BigFraction(1, MPEG_TS_TICKS_PER_SECOND);
+    var times = starts.stream().map(mpegTsTick::times).toList();
     var job = exactStartJob(source, TranscodeMode.TRANSCODE_MODE_REMUX, starts);
     job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_COPY);
 
@@ -7821,12 +7833,12 @@ class WorkerMediaSmokeTest {
     assertThat(firstVideoSampleOf(uploads, 0))
         .as("segment 0 opens at the first keyframe, after the AAC priming that starts the timeline")
         .isGreaterThan(new BigFraction(0, 1));
-    assertAudioStartsInsideItsExactInterval(uploads, 0, starts);
+    assertAudioStartsInsideItsExactInterval(uploads, 0, times);
     for (var number = 1; number < starts.size(); number++) {
       assertThat(firstVideoSampleOf(uploads, number))
           .as("segment %d opens at its listed keyframe", number)
-          .isEqualTo(new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND));
-      assertAudioStartsInsideItsExactInterval(uploads, number, starts);
+          .isEqualTo(times.get(number));
+      assertAudioStartsInsideItsExactInterval(uploads, number, times);
     }
   }
 
@@ -7905,17 +7917,14 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
-  // Segment 0's audio may start before zero with the AAC priming frame; the last segment's audio
-  // runs to the end of the media.
+  // Each segment's exact start in seconds. Segment 0's audio may start before zero with the AAC
+  // priming frame; the last segment's audio runs to the end of the media.
   private static void assertAudioStartsInsideItsExactInterval(
-      MediaUploads uploads, int number, List<Long> starts) {
+      MediaUploads uploads, int number, List<BigFraction> starts) {
     var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
     var audioTimescale = movie.audioTrack().timescale();
-    var start = new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND);
-    var end =
-        Optional.of(number + 1)
-            .filter(next -> next < starts.size())
-            .map(next -> new BigFraction(starts.get(next), MPEG_TS_TICKS_PER_SECOND));
+    var start = starts.get(number);
+    var end = Optional.of(number + 1).filter(next -> next < starts.size()).map(starts::get);
     assertThat(movie.samplesOf(movie.audioTrack()))
         .extracting(sample -> new BigFraction(sample.presentationTime(), audioTimescale))
         .as("segment %d's audio starts inside its exact interval", number)
@@ -7979,25 +7988,28 @@ class WorkerMediaSmokeTest {
   // start and 2 s before the end of the media.
   private static List<Long> exactStarts(Path source) throws Exception {
     var timeBase = videoTimeBase(source);
-    var origin = earliestStreamStart(source);
     var end = timeBase.ticksIn(mediaDuration(source));
     var twoSeconds = timeBase.ticksIn(new BigFraction(2, 1));
     var starts = new ArrayList<Long>();
     starts.add(0L);
-    var keyframes =
-        ffprobe(VIDEO_KEYFRAME_PTS, source)
-            .lines()
-            .map(line -> line.split(","))
-            .filter(parts -> parts[2].startsWith("K"))
-            .mapToLong(parts -> presentationTick(parts) - origin)
-            .toArray();
-    for (var tick : keyframes) {
+    for (var tick : keyframeTicks(source)) {
       if (tick >= starts.getLast() + twoSeconds && tick <= end - twoSeconds) {
         starts.add(tick);
       }
     }
 
     return List.copyOf(starts);
+  }
+
+  // Each video keyframe's presentation tick on the zero-based timeline, in decode order.
+  private static long[] keyframeTicks(Path source) throws Exception {
+    var origin = earliestStreamStart(source);
+    return ffprobe(VIDEO_KEYFRAME_PTS, source)
+        .lines()
+        .map(line -> line.split(","))
+        .filter(parts -> parts[2].startsWith("K"))
+        .mapToLong(parts -> presentationTick(parts) - origin)
+        .toArray();
   }
 
   private static final List<String> VIDEO_KEYFRAME_PTS =
@@ -8132,6 +8144,13 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  // Where each segment's first slot starts, in whole seconds.
+  private static List<Long> tenSecondKeyframeSegmentStartSeconds() {
+    return TEN_SECOND_KEYFRAME_SEGMENT_STARTS.stream()
+        .map(slot -> (long) slot * SLOT_SECONDS)
+        .toList();
+  }
+
   // Segment N's listed interval in ticks of the timescale; segment 0 keeps the AAC priming frame
   // from before zero, and the last runs to the end of the media.
   private static ListedInterval listedInterval(int number, long timescale) {
@@ -8147,10 +8166,10 @@ class WorkerMediaSmokeTest {
       from = Long.MIN_VALUE;
     }
 
-    return new ListedInterval(start, timescale, new AudioInterval(from, end));
+    return new ListedInterval(start, new AudioInterval(from, end));
   }
 
-  private record ListedInterval(long start, long timescale, AudioInterval interval) {}
+  private record ListedInterval(long start, AudioInterval interval) {}
 
   // The seekable source's frames and noise for 35 s with a keyframe every 240 frames, 10 s at
   // 24 fps, which libx264 with the default keyint=250 also leaves for a static scene: on 3 s slots,
