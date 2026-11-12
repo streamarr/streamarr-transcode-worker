@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-const script = fileURLToPath(new URL('../summarize.mjs', import.meta.url));
+const script = fileURLToPath(new URL('./summarize.mjs', import.meta.url));
 const engine = 'com.streamarr.transcode.engine';
 const probe = 'com.streamarr.transcode.probe';
 

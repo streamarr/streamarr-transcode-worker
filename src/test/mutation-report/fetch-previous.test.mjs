@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-const script = fileURLToPath(new URL('../fetch-previous.sh', import.meta.url));
+const script = fileURLToPath(new URL('./fetch-previous.sh', import.meta.url));
 
 // The fake gh answers `run list` with LIST_OUTPUT and LIST_EXIT, and `run download` by writing a
 // summary into the --dir it receives, unless DOWNLOAD_EXIT says the run kept no artifact.

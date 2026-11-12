@@ -90,7 +90,7 @@ class MutationTestingWorkflowTest {
     assertThat(kept)
         .containsEntry("name", "mutation-summary")
         .containsEntry("path", "${{ runner.temp }}/summary/summary.json");
-    assertThat(Files.readString(Path.of(".github/actions/mutation-report/fetch-previous.sh")))
+    assertThat(Files.readString(Path.of("src/test/mutation-report/fetch-previous.sh")))
         .contains("--name mutation-summary");
     assertThat(stepNamed(steps, "Fetch the previous summary from main").get("run").toString())
         .contains("fetch-previous.sh \"$RUNNER_TEMP/previous\"");

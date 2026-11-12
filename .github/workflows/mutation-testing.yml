@@ -44,7 +44,7 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .github/actions/mutation-report/fetch-previous.sh "$RUNNER_TEMP/previous"
+        run: src/test/mutation-report/fetch-previous.sh "$RUNNER_TEMP/previous"
       - name: Summarize the mutants no test detected
         if: always()
         env:
@@ -56,7 +56,7 @@ jobs:
             previous=(--previous "$RUNNER_TEMP/previous/summary.json")
           fi
           mkdir -p "$RUNNER_TEMP/summary"
-          node .github/actions/mutation-report/summarize.mjs \
+          node src/test/mutation-report/summarize.mjs \
             --report target/pit-reports/mutations.xml --commit "$COMMIT" --ref "$REF" \
             --write "$RUNNER_TEMP/summary/summary.json" "${previous[@]}" >>"$GITHUB_STEP_SUMMARY"
       - name: Keep the HTML report

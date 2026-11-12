@@ -75,11 +75,11 @@ function identity(mutant) {
 }
 
 function cell(text) {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\|/g, '\\|');
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('|', String.raw`\|`);
 }
 
 function code(text) {
-  return `\`${text.replace(/\|/g, '\\|')}\``;
+  return `\`${text.replaceAll('|', String.raw`\|`)}\``;
 }
 
 function statusCounts(mutants) {
@@ -90,7 +90,7 @@ function statusCounts(mutants) {
   const order = ['KILLED', 'TIMED_OUT', 'MEMORY_ERROR', 'RUN_ERROR', 'NON_VIABLE', 'SURVIVED', 'NO_COVERAGE'];
   const rank = (status) => (order.includes(status) ? order.indexOf(status) : order.length);
   const statuses = [...counts.keys()].sort((a, b) => rank(a) - rank(b));
-  const text = statuses.map((status) => `${status.toLowerCase().replace(/_/g, ' ')} ${counts.get(status)}`).join(', ');
+  const text = statuses.map((status) => `${label(status)} ${counts.get(status)}`).join(', ');
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
@@ -190,8 +190,12 @@ function undetectedTable(undetected, added) {
   ];
 }
 
+function label(status) {
+  return status.toLowerCase().replaceAll('_', ' ');
+}
+
 function status(mutant) {
-  return STATUS_LABELS[mutant.status] ?? mutant.status.toLowerCase().replace(/_/g, ' ');
+  return STATUS_LABELS[mutant.status] ?? label(mutant.status);
 }
 
 function fail(message) {
