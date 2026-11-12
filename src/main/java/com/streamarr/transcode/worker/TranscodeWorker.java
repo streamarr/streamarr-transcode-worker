@@ -980,7 +980,7 @@ public final class TranscodeWorker implements AutoCloseable {
         .forEach(attempt -> advancedProgressOf(attempt).ifPresent(this::tryReport));
   }
 
-  // FFmpeg writes nothing while a copy's audio input reads ahead, so the bytes that it has read
+  // FFmpeg writes nothing while an attempt's audio input reads ahead, so the bytes that it has read
   // are the attempt's progress then, and the server restarts its stall clock for them as it does
   // for output. The producer stops counting them once FFmpeg stops reading.
   private static Optional<EstablishWorkerSessionRequest> advancedProgressOf(ActiveAttempt attempt) {
