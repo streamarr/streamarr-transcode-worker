@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -99,6 +100,12 @@ public final class ScriptedProcess extends Process {
   private boolean pausedBySignal;
   private boolean reading;
   private long bytesRead;
+  // On System.nanoTime: the latest count, the count that found the last byte read, the count
+  // before that one, and the first request to terminate; 0 until it happens.
+  private long countedAtNanos;
+  private long lastReadCountedAtNanos;
+  private long countBeforeTheLastReadAtNanos;
+  private long terminatedAtNanos;
   private boolean quitArrivedWhilePausedBySignal;
   private boolean quitPendingUntilResumed;
   private boolean terminationPendingUntilResumed;
@@ -220,11 +227,37 @@ public final class ScriptedProcess extends Process {
 
   /** Counts the bytes that the process has read so far, as its launcher does. */
   public synchronized long countBytesRead() {
+    var now = System.nanoTime();
     if (reading) {
       bytesRead++;
+      countBeforeTheLastReadAtNanos = countedAtNanos;
+      lastReadCountedAtNanos = now;
     }
 
+    countedAtNanos = now;
     return bytesRead;
+  }
+
+  /** When the count that found the last byte that the process read was made, on System.nanoTime. */
+  public synchronized long lastReadCountedAtNanos() {
+    return lastReadCountedAtNanos;
+  }
+
+  /**
+   * When the count before the one that found the last byte read was made, on System.nanoTime: the
+   * process read that byte after this count.
+   */
+  public synchronized long countBeforeTheLastReadAtNanos() {
+    return countBeforeTheLastReadAtNanos;
+  }
+
+  /** When the process was first asked to terminate, on System.nanoTime. */
+  public synchronized OptionalLong terminatedAtNanos() {
+    if (terminatedAtNanos == 0) {
+      return OptionalLong.empty();
+    }
+
+    return OptionalLong.of(terminatedAtNanos);
   }
 
   /** The bytes that the process has read so far: one for each count made while it read. */
@@ -383,6 +416,10 @@ public final class ScriptedProcess extends Process {
   }
 
   private synchronized void terminate() {
+    if (!terminated) {
+      terminatedAtNanos = System.nanoTime();
+    }
+
     terminated = true;
     if (ignoresTermination) {
       return;
