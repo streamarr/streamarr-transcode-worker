@@ -43,9 +43,13 @@ function fixture(t) {
     directory,
     summaryFile,
     write: (...mutants) => writeFileSync(reportFile, report(...mutants)),
+    writeShard: (name, ...mutants) => writeFileSync(join(directory, name), report(...mutants)),
     summary: () => JSON.parse(readFileSync(summaryFile, 'utf8')),
-    run: ({ previous } = {}) => {
+    run: ({ previous, shards = [] } = {}) => {
       const args = [script, '--report', reportFile, '--commit', 'abcdef0123456789', '--ref', 'main'];
+      for (const shard of shards) {
+        args.push('--report', join(directory, shard));
+      }
       args.push('--write', summaryFile);
       if (previous !== undefined) {
         const previousFile = join(directory, 'previous.json');
@@ -82,6 +86,31 @@ test('Should score the mutants PIT detected when the report holds every status',
   );
   assert.match(result.stdout, /\| engine \| 7 \| 5 \| 1 \| 1 \| 71\.4% \|/);
   assert.match(result.stdout, /\| probe \| 1 \| 1 \| 0 \| 0 \| 100\.0% \|/);
+});
+
+test('Should score every shard together when the run is split into shards', (t) => {
+  const pit = fixture(t);
+  pit.write(mutant({ status: 'KILLED' }));
+  pit.writeShard('second.xml', mutant({ status: 'KILLED' }), mutant({ status: 'SURVIVED', method: 'second' }));
+
+  const result = pit.run({ shards: ['second.xml'] });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /production classes of `abcdef0` on `main` in 2 shards/);
+  assert.match(result.stdout, /\*\*Mutation score: 66\.7%\*\* \(2 of 3 mutants detected\)/);
+  assert.match(result.stdout, /\| `second` \| negated conditional \| survived \|/);
+  assert.equal(pit.summary().mutants, 3);
+});
+
+test('Should name a shard that wrote no report and score the others when one did not finish', (t) => {
+  const pit = fixture(t);
+  pit.write(mutant({ status: 'KILLED' }), mutant({ status: 'SURVIVED' }));
+
+  const result = pit.run({ shards: ['unfinished.xml'] });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /No report from `.*unfinished\.xml`: its shard did not finish, so the score leaves out its classes\./);
+  assert.match(result.stdout, /\*\*Mutation score: 50\.0%\*\* \(1 of 2 mutants detected\)/);
 });
 
 test('Should list each mutant no test detected when some escape the tests', (t) => {

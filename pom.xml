@@ -364,10 +364,10 @@
                                 <version>${pitest-junit5-plugin.version}</version>
                             </dependency>
                         </dependencies>
+                        <!-- Without targetClasses PIT mutates every package that holds production
+                             classes. The nightly workflow passes each shard's classes instead,
+                             with -DtargetClasses. -->
                         <configuration>
-                            <targetClasses>
-                                <param>com.streamarr.transcode.*</param>
-                            </targetClasses>
                             <targetTests>
                                 <param>com.streamarr.transcode.engine.*Test</param>
                                 <param>com.streamarr.transcode.probe.*Test</param>

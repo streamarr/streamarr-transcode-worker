@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // Writes the job summary of a nightly PIT run as Markdown on standard output, and the summary file
-// that the next night compares with.
+// that the next night compares with. A run split into shards passes one --report per shard.
 //
-// usage: summarize.mjs --report <mutations.xml> --commit <sha> --ref <branch> --write <summary.json>
-//                      [--previous <summary.json>]
+// usage: summarize.mjs --report <mutations.xml>... --commit <sha> --ref <branch>
+//                      --write <summary.json> [--previous <summary.json>]
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 
 const { values: options } = parseArgs({
   options: {
-    report: { type: 'string' },
+    report: { type: 'string', multiple: true },
     commit: { type: 'string' },
     ref: { type: 'string' },
     write: { type: 'string' },
@@ -203,10 +203,14 @@ function fail(message) {
   process.exit(1);
 }
 
-if (!existsSync(options.report)) {
+const reports = options.report.filter((report) => existsSync(report));
+if (reports.length === 0) {
   fail('PIT wrote no report. Read the log of the step that runs it.');
 }
-const mutants = parse(readFileSync(options.report, 'utf8'));
+const missing = options.report
+  .filter((report) => !reports.includes(report))
+  .map((report) => `No report from \`${report}\`: its shard did not finish, so the score leaves out its classes.`);
+const mutants = reports.flatMap((report) => parse(readFileSync(report, 'utf8')));
 if (mutants.length === 0) {
   fail("PIT's report lists no mutants. Read the log of the step that runs it.");
 }
@@ -230,8 +234,9 @@ console.log(
   [
     '## Mutation testing',
     '',
-    `PIT mutated the production classes of \`${options.commit.slice(0, 7)}\` on \`${options.ref}\` and ran the unit tests against each mutant. The HTML report is this run's \`mutation-report\` artifact.`,
+    `PIT mutated the production classes of \`${options.commit.slice(0, 7)}\` on \`${options.ref}\`${options.report.length > 1 ? ` in ${options.report.length} shards` : ''} and ran the unit tests against each mutant. Each shard's HTML report is one of this run's \`mutation-report-*\` artifacts.`,
     '',
+    ...missing.flatMap((line) => [line, '']),
     `**Mutation score: ${percent(detected, mutants.length)}** (${detected} of ${plural(mutants.length, 'mutant')} detected). Test strength: ${percent(detected, reached)} (${detected} of the ${reached} mutants that a test reaches).`,
     '',
     `${statusCounts(mutants)}.`,

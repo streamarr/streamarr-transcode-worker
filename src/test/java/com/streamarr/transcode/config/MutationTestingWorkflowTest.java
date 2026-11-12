@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.xpath.XPathConstants;
@@ -28,7 +29,8 @@ import org.yaml.snakeyaml.Yaml;
 class MutationTestingWorkflowTest {
 
   private static final String WORKFLOW = ".github/workflows/mutation-testing.yml";
-  private static final String JOB = "mutation";
+  private static final String SHARD_JOB = "mutation";
+  private static final String REPORT_JOB = "report";
   private static final String PROFILE = "mutation-testing";
   private static final String PIT_STEP = "Mutate the production classes under the unit tests";
   private static final String PITEST_CONFIGURATION =
@@ -51,13 +53,13 @@ class MutationTestingWorkflowTest {
   @DisplayName("Should read only the repository and its earlier runs when reporting mutants")
   void shouldReadOnlyTheRepositoryAndItsEarlierRunsWhenReportingMutants() throws IOException {
     var workflow = yaml(WORKFLOW);
-    var job = map(map(workflow.get("jobs")).get(JOB));
 
-    assertThat(map(workflow.get("jobs"))).containsOnlyKeys(JOB);
+    assertThat(map(workflow.get("jobs"))).containsOnlyKeys(SHARD_JOB, REPORT_JOB);
     assertThat(workflow).containsEntry("permissions", Map.of());
-    assertThat(map(job.get("permissions")))
+    assertThat(map(job(SHARD_JOB).get("permissions"))).containsOnly(entry("contents", "read"));
+    assertThat(map(job(REPORT_JOB).get("permissions")))
         .containsOnly(entry("contents", "read"), entry("actions", "read"));
-    assertThat(steps(job))
+    assertThat(Stream.concat(steps(job(SHARD_JOB)).stream(), steps(job(REPORT_JOB)).stream()))
         .allSatisfy(
             step -> {
               if (step.get("uses") instanceof String action) {
@@ -68,23 +70,46 @@ class MutationTestingWorkflowTest {
   }
 
   @Test
-  @DisplayName("Should report whatever PIT wrote when the mutation run fails")
-  void shouldReportWhateverPitWroteWhenTheMutationRunFails() throws IOException {
-    var steps = steps(map(map(yaml(WORKFLOW).get("jobs")).get(JOB)));
-    var pit = stepNamed(steps, PIT_STEP);
-    var reporting = steps.subList(steps.indexOf(pit) + 1, steps.size());
+  @DisplayName("Should mutate every class once when the run is split into shards")
+  void shouldMutateEveryClassOnceWhenTheRunIsSplitIntoShards() throws IOException {
+    var shards = map(yaml(WORKFLOW).get("env")).get("SHARDS");
+    var strategy = map(job(SHARD_JOB).get("strategy"));
 
-    assertThat(pit.get("run").toString()).contains("-P" + PROFILE, "mutationCoverage");
-    assertThat(pit).doesNotContainKey("continue-on-error");
-    assertThat(reporting)
-        .isNotEmpty()
-        .allSatisfy(step -> assertThat(step).containsEntry("if", "always()"));
+    assertThat(map(strategy.get("matrix")).get("shard"))
+        .isEqualTo(IntStream.range(0, (Integer) shards).boxed().toList());
+    assertThat(stepNamed(steps(job(SHARD_JOB)), PIT_STEP).get("run").toString())
+        .contains(
+            "-P" + PROFILE,
+            "\"-DtargetClasses=$(src/test/mutation-report/shard-classes.sh \"$SHARD\" \"$SHARDS\")\"",
+            "mutationCoverage");
+  }
+
+  @Test
+  @DisplayName("Should report what the other shards wrote when one shard fails")
+  void shouldReportWhatTheOtherShardsWroteWhenOneShardFails() throws IOException {
+    var shard = job(SHARD_JOB);
+    var keep = stepNamed(steps(shard), "Keep the HTML report");
+
+    assertThat(map(shard.get("strategy"))).containsEntry("fail-fast", false);
+    assertThat(stepNamed(steps(shard), PIT_STEP)).doesNotContainKey("continue-on-error");
+    assertThat(keep).containsEntry("if", "always()");
+    assertThat(map(keep.get("with")))
+        .containsEntry("name", "mutation-report-${{ matrix.shard }}")
+        .containsEntry("path", "target/pit-reports");
+    assertThat(job(REPORT_JOB))
+        .containsEntry("needs", SHARD_JOB)
+        .containsEntry("if", "${{ !cancelled() }}");
+    assertThat(map(stepNamed(steps(job(REPORT_JOB)), "Receive every shard's report").get("with")))
+        .containsEntry("pattern", "mutation-report-*")
+        .containsEntry("path", "${{ runner.temp }}/reports");
+    assertThat(summarizeStep())
+        .contains("--report \"$RUNNER_TEMP/reports/mutation-report-$shard/mutations.xml\"");
   }
 
   @Test
   @DisplayName("Should compare with the summary the last run kept when a run fetches it")
   void shouldCompareWithTheSummaryTheLastRunKeptWhenARunFetchesIt() throws IOException {
-    var steps = steps(map(map(yaml(WORKFLOW).get("jobs")).get(JOB)));
+    var steps = steps(job(REPORT_JOB));
     var kept = map(stepNamed(steps, "Keep the summary for the next night").get("with"));
 
     assertThat(kept)
@@ -94,7 +119,7 @@ class MutationTestingWorkflowTest {
         .contains("--name mutation-summary");
     assertThat(stepNamed(steps, "Fetch the previous summary from main").get("run").toString())
         .contains("fetch-previous.sh \"$RUNNER_TEMP/previous\"");
-    assertThat(stepNamed(steps, "Summarize the mutants no test detected").get("run").toString())
+    assertThat(summarizeStep())
         .contains(
             "--previous \"$RUNNER_TEMP/previous/summary.json\"",
             "--write \"$RUNNER_TEMP/summary/summary.json\"");
@@ -108,6 +133,7 @@ class MutationTestingWorkflowTest {
 
     assertThat(profile).isNotNull();
     assertThat(nodes(profile, "activation").getLength()).isZero();
+    assertThat(nodes(pom, PITEST_CONFIGURATION + "/targetClasses").getLength()).isZero();
     assertThat(
             nodes(pom, "/project/build//plugin[artifactId='pitest-maven']").getLength()
                 + nodes(pom, "/project/reporting//plugin[artifactId='pitest-maven']").getLength())
@@ -174,6 +200,16 @@ class MutationTestingWorkflowTest {
   private static NodeList nodes(Node context, String expression) throws XPathExpressionException {
     return (NodeList)
         XPathFactory.newInstance().newXPath().evaluate(expression, context, XPathConstants.NODESET);
+  }
+
+  private static Map<String, Object> job(String name) throws IOException {
+    return map(map(yaml(WORKFLOW).get("jobs")).get(name));
+  }
+
+  private static String summarizeStep() throws IOException {
+    return stepNamed(steps(job(REPORT_JOB)), "Summarize the mutants no test detected")
+        .get("run")
+        .toString();
   }
 
   private static Map<String, Object> yaml(String path) throws IOException {
