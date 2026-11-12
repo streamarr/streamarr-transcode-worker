@@ -48,6 +48,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -4067,6 +4068,43 @@ class ProducerTest {
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
     assertThat(process.bytesRead()).as("the counts of the bytes that FFmpeg read").isZero();
+    assertThat(producer.takeAdvancedBytesRead()).isEmpty();
+  }
+
+  // Outside Linux no count of the bytes that a process has read exists, so only output shows that
+  // FFmpeg works.
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall when FFmpeg writes nothing while its audio's"
+          + " input reads ahead and the system counts no bytes read")
+  void shouldFailTheAttemptAsAnEncoderStallWhenTheSystemCountsNoBytesReadWhileReadingAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var countingNoBytesRead =
+        new ProcessLauncher() {
+          @Override
+          public Process launch(List<String> command, UUID jobAttemptId) {
+            return process;
+          }
+
+          @Override
+          public OptionalLong bytesRead(Process launched) {
+            return OptionalLong.empty();
+          }
+        };
+
+    var producer =
+        producerFor(process, recording)
+            .launcher(countingNoBytesRead)
+            .pipeline(READING_AHEAD)
+            .stallTimeout(Duration.ofMillis(200))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
     assertThat(producer.takeAdvancedBytesRead()).isEmpty();
   }
 
