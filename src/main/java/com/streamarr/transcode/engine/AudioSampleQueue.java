@@ -151,7 +151,7 @@ final class AudioSampleQueue {
     }
 
     if (number < startSequenceNumber) {
-      prerollTail = Optional.of(AudioTail.of(sample, timescale));
+      prerollTail = Optional.of(tailOf(sample, timescale));
       return false;
     }
 
@@ -193,8 +193,13 @@ final class AudioSampleQueue {
     return fragment.tracks().audio().orElseThrow().timescale();
   }
 
-  private static AudioTail tailOf(CarriedSample carried) {
-    return AudioTail.of(carried.sample(), audioTimescaleOf(carried.fragment()));
+  /** Where the audio sample ends, and where one more sample as long would end after it. */
+  AudioTail tailOf(CarriedSample carried) {
+    return tailOf(carried.sample(), audioTimescaleOf(carried.fragment()));
+  }
+
+  private AudioTail tailOf(Sample sample, long timescale) {
+    return AudioTail.of(sample, timescale);
   }
 
   private record Queued(long number, CarriedSample sample) {}

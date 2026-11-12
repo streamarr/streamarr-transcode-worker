@@ -332,11 +332,7 @@ final class SegmentAssembler {
     }
 
     if (!samples.isEmpty()) {
-      var last = samples.getLast();
-      copiedAudioTail =
-          Optional.of(
-              AudioTail.of(
-                  last.sample(), last.fragment().tracks().audio().orElseThrow().timescale()));
+      copiedAudioTail = Optional.of(audio.tailOf(samples.getLast()));
     }
 
     if (videoDecision instanceof VideoDecision.Copy && !samples.isEmpty()) {
