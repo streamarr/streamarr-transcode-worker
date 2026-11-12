@@ -4048,6 +4048,10 @@ class ProducerTest {
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(failure.detail())
+        .isEqualTo(
+            "FFmpeg wrote no output, and the worker counted no bytes that it read, for PT1S while"
+                + " the producer read it");
     assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt))
         .as("the failure, counted from FFmpeg's last read")
         .isBetween(stallTimeout.minusMillis(300), stallTimeout.plusMillis(500));
@@ -4069,7 +4073,10 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(200)).start();
 
-    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(failure.detail())
+        .isEqualTo("FFmpeg wrote no output for PT0.2S while the producer read it");
     assertThat(process.bytesRead()).as("the counts of the bytes that FFmpeg read").isZero();
     assertThat(producer.takeAdvancedBytesRead()).isEmpty();
   }
