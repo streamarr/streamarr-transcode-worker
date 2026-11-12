@@ -30,6 +30,8 @@ const SUMMARY_FORMAT = 1;
 // GitHub keeps at most 1 MiB of one step's summary; the HTML report lists every mutant.
 const LISTED_MUTANTS = 500;
 
+const LEFT_OUT = 'its shard did not finish, so the score leaves out its classes.';
+
 const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
 
 function decode(text) {
@@ -53,6 +55,19 @@ function parse(xml) {
     mutator: element(body, 'mutator'),
     description: element(body, 'description'),
   }));
+}
+
+// PIT creates mutations.xml when its analysis starts and writes the closing root element only when
+// the analysis ends, so a shard that stopped early leaves no file, an empty one, or one cut short.
+function readReport(path) {
+  if (!existsSync(path)) {
+    return { unfinished: `No report from \`${path}\`: ${LEFT_OUT}` };
+  }
+  const xml = readFileSync(path, 'utf8');
+  if (!xml.trimEnd().endsWith('</mutations>')) {
+    return { unfinished: `The report from \`${path}\` is incomplete: ${LEFT_OUT}` };
+  }
+  return { mutants: parse(xml) };
 }
 
 function percent(part, whole) {
@@ -203,14 +218,13 @@ function fail(message) {
   process.exit(1);
 }
 
-const reports = options.report.filter((report) => existsSync(report));
-if (reports.length === 0) {
-  fail('PIT wrote no report. Read the log of the step that runs it.');
+const reports = options.report.map(readReport);
+const finished = reports.filter((report) => report.mutants !== undefined);
+if (finished.length === 0) {
+  fail('PIT did not finish a report. Read the log of the step that runs it.');
 }
-const missing = options.report
-  .filter((report) => !reports.includes(report))
-  .map((report) => `No report from \`${report}\`: its shard did not finish, so the score leaves out its classes.`);
-const mutants = reports.flatMap((report) => parse(readFileSync(report, 'utf8')));
+const unfinished = reports.filter((report) => report.unfinished !== undefined).map((report) => report.unfinished);
+const mutants = finished.flatMap((report) => report.mutants);
 if (mutants.length === 0) {
   fail("PIT's report lists no mutants. Read the log of the step that runs it.");
 }
@@ -227,10 +241,10 @@ const summary = {
 };
 writeFileSync(options.write, `${JSON.stringify(summary, null, 2)}\n`);
 
-// A partial run would count the missing shard's undetected mutants as gone.
+// A partial run would count the unfinished shard's undetected mutants as gone.
 const { previous, note } =
-  missing.length > 0
-    ? { note: 'A shard wrote no report, so nothing is compared with an earlier run.' }
+  unfinished.length > 0
+    ? { note: 'A shard did not finish, so nothing is compared with an earlier run.' }
     : readPrevious(options.previous);
 const { added, gone } = previous === undefined ? { added: new Set(), gone: 0 } : newcomers(undetected, previous);
 
@@ -240,7 +254,7 @@ console.log(
     '',
     `PIT mutated the production classes of \`${options.commit.slice(0, 7)}\` on \`${options.ref}\`${options.report.length > 1 ? ` in ${options.report.length} shards` : ''} and ran the unit tests against each mutant. Each shard's HTML report is one of this run's \`mutation-report-*\` artifacts.`,
     '',
-    ...missing.flatMap((line) => [line, '']),
+    ...unfinished.flatMap((line) => [line, '']),
     `**Mutation score: ${percent(detected, mutants.length)}** (${detected} of ${plural(mutants.length, 'mutant')} detected). Test strength: ${percent(detected, reached)} (${detected} of the ${reached} mutants that a test reaches).`,
     '',
     `${statusCounts(mutants)}.`,

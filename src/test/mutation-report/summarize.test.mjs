@@ -34,6 +34,10 @@ function report(...mutants) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<mutations partial="false">\n${mutants.join('\n')}\n</mutations>\n`;
 }
 
+function cutInLastMutant(text) {
+  return text.slice(0, text.lastIndexOf('<mutatedMethod>'));
+}
+
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'worker-mutation-report-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -123,10 +127,36 @@ test('Should compare nothing when a shard wrote no report and an earlier run lef
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /A shard wrote no report, so nothing is compared with an earlier run\./);
+  assert.match(result.stdout, /A shard did not finish, so nothing is compared with an earlier run\./);
   assert.doesNotMatch(result.stdout, /Since the previous successful run/);
   assert.doesNotMatch(result.stdout, /survived \(new\)/);
 });
+
+for (const [name, cut] of [
+  ['stops in the middle of a mutant', cutInLastMutant],
+  ['is empty', () => ''],
+]) {
+  test(`Should leave out a shard and compare nothing when its report ${name}`, (t) => {
+    const pit = fixture(t);
+    pit.write(mutant({ status: 'KILLED' }), mutant({ status: 'SURVIVED' }));
+    const shard = [mutant({ status: 'KILLED' }), mutant({ status: 'SURVIVED', method: 'cut' })];
+    pit.writeShard('cut.xml', ...shard);
+    assert.equal(pit.run({ shards: ['cut.xml'] }).status, 0);
+    const previous = { ...pit.summary(), commit: '0123456789abcdef' };
+    writeFileSync(join(pit.directory, 'cut.xml'), cut(report(...shard)));
+
+    const result = pit.run({ shards: ['cut.xml'], previous });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /The report from `.*cut\.xml` is incomplete: its shard did not finish, so the score leaves out its classes\./,
+    );
+    assert.match(result.stdout, /\*\*Mutation score: 50\.0%\*\* \(1 of 2 mutants detected\)/);
+    assert.match(result.stdout, /A shard did not finish, so nothing is compared with an earlier run\./);
+    assert.doesNotMatch(result.stdout, /Since the previous successful run/);
+  });
+}
 
 test('Should list each mutant no test detected when some escape the tests', (t) => {
   const pit = fixture(t);
@@ -358,7 +388,21 @@ test('Should fail with a pointer to the log when PIT wrote no report', (t) => {
   const result = pit.run();
 
   assert.equal(result.status, 1);
-  assert.match(result.stdout, /PIT wrote no report\. Read the log of the step that runs it\./);
+  assert.match(result.stdout, /PIT did not finish a report\. Read the log of the step that runs it\./);
+});
+
+test('Should fail with a pointer to the log when the only report stops before its end', (t) => {
+  const pit = fixture(t);
+  writeFileSync(
+    join(pit.directory, 'mutations.xml'),
+    cutInLastMutant(report(mutant({ status: 'KILLED' }), mutant({ status: 'SURVIVED' }))),
+  );
+
+  const result = pit.run();
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /PIT did not finish a report\. Read the log of the step that runs it\./);
+  assert.doesNotMatch(result.stdout, /Mutation score/);
 });
 
 test('Should fail with a pointer to the log when PIT wrote a report without mutants', (t) => {
