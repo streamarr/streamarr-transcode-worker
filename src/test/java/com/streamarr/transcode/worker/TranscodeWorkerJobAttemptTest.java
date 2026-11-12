@@ -2375,13 +2375,7 @@ class TranscodeWorkerJobAttemptTest {
     var output = bytesOf(ENCODED_RECORDING);
     var pause = endOfFragment(output, 1);
     var launcher = new ScriptedProcessLauncher(_ -> readingProcess(output, pause));
-    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
-    job.getDecisionBuilder()
-        .getAudioBuilder()
-        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
-        .setCodec("aac")
-        .setChannels(2)
-        .setBitrateBitsPerSecond(128_000);
+    var job = copyThatEncodesItsAudioJobBuilder();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -2402,6 +2396,18 @@ class TranscodeWorkerJobAttemptTest {
           .as("the reports that the output's end grew: it grew once, in the first fragment")
           .hasSize(1);
     }
+  }
+
+  // A job that copies its video and encodes its audio, whose audio's input reads ahead.
+  private static VariantJob.Builder copyThatEncodesItsAudioJobBuilder() {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000);
+    return job;
   }
 
   private static ScriptedProcess readingProcess(byte[] output, int pause) {
