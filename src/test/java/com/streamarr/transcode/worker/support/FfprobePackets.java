@@ -11,7 +11,16 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 
-/** The packets ffprobe reads from a fragmented MP4 output, in the order it reads them. */
+/**
+ * The packets ffprobe reads from a fragmented MP4 output, in the order it reads them.
+ *
+ * <p>ffprobe reports every video {@code pts} later than the sample's own presentation time by the
+ * deepest reordering delay of the output it reads (ADR 0037, evidence on initialization segment
+ * identity). When an output's smallest composition offset is zero or below, moving every offset
+ * earlier by the same ticks deepens that delay by as many ticks and leaves every {@code pts} as it
+ * was, so equal listings do not show equal presentation times. {@link
+ * com.streamarr.transcode.fixtures.Mp4Samples} reads the times that the bytes carry.
+ */
 public final class FfprobePackets {
 
   private static final int VIDEO_STREAM = 0;
