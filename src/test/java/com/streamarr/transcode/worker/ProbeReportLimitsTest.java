@@ -24,10 +24,12 @@ import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.probe.ProbeReports;
 import java.util.List;
+import java.util.Locale;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -184,18 +186,47 @@ class ProbeReportLimitsTest {
     assertThat(limits.apply(PROBE, report)).isSameAs(report);
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(Kind.class)
   @DisplayName(
-      "Should fail the probe as too large when its encoded report is one byte longer than the"
-          + " length limit")
-  void shouldFailTheProbeAsTooLargeWhenItsEncodedReportIsOneByteLongerThanTheLengthLimit() {
-    var report = reportOf(PROBE, 3, List.of(3));
+      "Should fail the probe attempt as too large, whatever its kind, when its encoded report is"
+          + " one byte longer than the length limit")
+  void shouldFailTheProbeAsTooLargeWhenItsEncodedReportIsOneByteLongerThanTheLengthLimit(
+      Kind kind) {
+    var report = kind.report();
     var limits =
         ProbeReportLimits.builder().reportLengthBytes(report.getSerializedSize() - 1L).build();
 
-    assertThat(limits.apply(PROBE, report))
+    assertThat(limits.apply(kind.request, report))
         .isEqualTo(
-            ProbeReports.resultOnly(failure(PROBE, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE)));
+            ProbeReports.resultOnly(
+                failure(kind.request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE)));
+  }
+
+  // Each kind of probe attempt, with a report that stays within the keyframe limit and the
+  // interval limit (ADR 0062 fails each kind beyond the length limit).
+  private enum Kind {
+    A_PROBE(PROBE),
+    A_KEYFRAME_PACKET_SCAN(KEYFRAME_PACKET_SCAN),
+    A_BITRATE_SCAN_CHUNK(BITRATE_SCAN_CHUNK);
+
+    private final ProbeRequest request;
+
+    Kind(ProbeRequest request) {
+      this.request = request;
+    }
+
+    private ProbeAttemptReport report() {
+      return switch (this) {
+        case A_PROBE, A_KEYFRAME_PACKET_SCAN -> reportOf(request, 3, List.of(3));
+        case A_BITRATE_SCAN_CHUNK -> chunkReportOf(List.of(3));
+      };
+    }
+
+    @Override
+    public String toString() {
+      return name().toLowerCase(Locale.ROOT).replace('_', ' ');
+    }
   }
 
   @Test
