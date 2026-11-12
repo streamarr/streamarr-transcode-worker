@@ -35,6 +35,10 @@ public class TranscodeCapabilityService {
       Stream.concat(Stream.of("-frag_duration"), FfmpegCommandBuilder.MP4_MOVFLAGS.stream())
           .toList();
 
+  // The line of a filter's help that lists the start option.
+  private static final Pattern GAP_FILL_START_OPTION =
+      Pattern.compile("(?m)^\\s+" + GapFillFilter.START_OPTION + "\\s");
+
   private static final long VALIDATION_DEADLINE_SECONDS = 10;
 
   private static final Pattern HW_ENCODER_PATTERN =
@@ -79,6 +83,12 @@ public class TranscodeCapabilityService {
     var mp4MuxerProbe = probeRequiredMp4MuxerOptions();
     if (!mp4MuxerProbe.successful()) {
       markUnavailable(mp4MuxerProbe.unavailableReason());
+      return;
+    }
+
+    var gapFillProbe = probeGapFillFilter();
+    if (!gapFillProbe.successful()) {
+      markUnavailable(gapFillProbe.unavailableReason());
       return;
     }
 
@@ -291,6 +301,27 @@ public class TranscodeCapabilityService {
           if (!missingOptions.isEmpty()) {
             return CapabilityProbeResult.failure(
                 "Missing mp4 muxer options: " + String.join(", ", missingOptions));
+          }
+
+          return CapabilityProbeResult.success();
+        });
+  }
+
+  // Every audio encode runs the fork's agapfill filter, which no other FFmpeg has: one without it
+  // answers that the filter is unknown and exits 0. Without the filter, the encodes that reach a
+  // gap in their audio would place samples away from their own times.
+  private CapabilityProbeResult probeGapFillFilter() {
+    return probeHelp(
+        "filter=" + GapFillFilter.NAME,
+        GapFillFilter.NAME + " filter",
+        output -> {
+          if (!GAP_FILL_START_OPTION.matcher(output).find()) {
+            return CapabilityProbeResult.failure(
+                "FFmpeg lacks the "
+                    + GapFillFilter.NAME
+                    + " audio filter with its "
+                    + GapFillFilter.START_OPTION
+                    + " option");
           }
 
           return CapabilityProbeResult.success();

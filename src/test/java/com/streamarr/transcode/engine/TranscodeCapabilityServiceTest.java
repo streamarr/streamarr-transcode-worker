@@ -1,5 +1,7 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.fixtures.FfmpegFilterHelpFixtures.GAP_FILL_FILTER_HELP;
+import static com.streamarr.transcode.fixtures.FfmpegFilterHelpFixtures.UNKNOWN_GAP_FILL_FILTER_HELP;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -116,6 +118,55 @@ class TranscodeCapabilityServiceTest {
     assertThat(service.isFfmpegAvailable()).isFalse();
     assertThat(service.getUnavailableReason())
         .isEqualTo("Missing mp4 muxer options: -frag_duration, cmaf");
+  }
+
+  // Every audio encode runs the fork's agapfill filter. An FFmpeg without it answers its help with
+  // the filter's name as unknown and exits 0.
+  @Test
+  @DisplayName(
+      "Should report FFmpeg unavailable and run no test encode when it lacks the agapfill filter")
+  void shouldReportFfmpegUnavailableAndRunNoTestEncodeWhenItLacksTheGapFillFilter() {
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.3", 0),
+            "agapfill", createProcess(UNKNOWN_GAP_FILL_FILTER_HELP, 0));
+    var commands = new ArrayDeque<List<String>>();
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              commands.add(command.command());
+              return resolveProcess(command, outputs);
+            });
+
+    service.detectCapabilities();
+
+    assertThat(service.isFfmpegAvailable()).isFalse();
+    assertThat(service.getUnavailableReason())
+        .isEqualTo("FFmpeg lacks the agapfill audio filter with its start option");
+    assertThat(service.workerVerifiedEncoders()).isEmpty();
+    assertThat(commands)
+        .as("the commands that detection ran")
+        .noneMatch(command -> command.contains("-c:v"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the agapfill filter's probe failure when its capability probe exits"
+          + " unsuccessfully")
+  void shouldReportTheGapFillFiltersProbeFailureWhenItsCapabilityProbeExitsUnsuccessfully() {
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.3", 0),
+            "agapfill", createProcess(GAP_FILL_FILTER_HELP, 1));
+    var service =
+        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
+
+    service.detectCapabilities();
+
+    assertThat(service.isFfmpegAvailable()).isFalse();
+    assertThat(service.getUnavailableReason())
+        .isEqualTo("FFmpeg agapfill filter capability probe failed");
   }
 
   @Test
@@ -699,6 +750,10 @@ class TranscodeCapabilityServiceTest {
 
     if (cmdStr.contains("muxer=mp4")) {
       return outputs.getOrDefault("mp4", createProcess(FRAGMENTED_MP4_MUXER_HELP, 0));
+    }
+
+    if (cmdStr.contains("filter=agapfill")) {
+      return outputs.getOrDefault("agapfill", createProcess(GAP_FILL_FILTER_HELP, 0));
     }
 
     if (cmdStr.contains("-hwaccels")) {

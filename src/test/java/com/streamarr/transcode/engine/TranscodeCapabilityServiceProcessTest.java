@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.fixtures.FfmpegFilterHelpFixtures.GAP_FILL_FILTER_HELP;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,6 +43,18 @@ class TranscodeCapabilityServiceProcessTest {
   void shouldReadTheMp4MuxerOptionsWhenTheMuxerHelpWritesMoreThanAPipeHoldsToStandardError()
       throws Exception {
     var service = detectCapabilities(FloodedCommand.MP4_MUXER_HELP);
+
+    assertThat(service.isFfmpegAvailable()).isTrue();
+    assertThat(service.getUnavailableReason()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the agapfill filter's options when its help writes more than a pipe holds to"
+          + " standard error")
+  void shouldReadTheGapFillFiltersOptionsWhenItsHelpWritesMoreThanAPipeHoldsToStandardError()
+      throws Exception {
+    var service = detectCapabilities(FloodedCommand.GAP_FILL_HELP);
 
     assertThat(service.isFfmpegAvailable()).isTrue();
     assertThat(service.getUnavailableReason()).isEmpty();
@@ -106,6 +119,11 @@ class TranscodeCapabilityServiceProcessTest {
         %s
         HELP
             ;;
+          *filter=agapfill*) %s
+            cat <<'HELP'
+        %s
+        HELP
+            ;;
           -encoders) %s
             echo ' V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)' ;;
           -hwaccels) %s
@@ -118,6 +136,8 @@ class TranscodeCapabilityServiceProcessTest {
                 flooded.writesFor(FloodedCommand.VERSION),
                 flooded.writesFor(FloodedCommand.MP4_MUXER_HELP),
                 FRAGMENTED_MP4_MUXER_HELP,
+                flooded.writesFor(FloodedCommand.GAP_FILL_HELP),
+                GAP_FILL_FILTER_HELP,
                 flooded.writesFor(FloodedCommand.ENCODERS),
                 flooded.writesFor(FloodedCommand.HWACCELS),
                 flooded.writesFor(FloodedCommand.TEST_ENCODE)));
@@ -129,6 +149,7 @@ class TranscodeCapabilityServiceProcessTest {
     // The check uses only the exit status of the version check and of each test encode.
     VERSION("flood; flood >&2"),
     MP4_MUXER_HELP("flood >&2"),
+    GAP_FILL_HELP("flood >&2"),
     ENCODERS("flood >&2"),
     HWACCELS("flood >&2"),
     TEST_ENCODE("flood; flood >&2");
