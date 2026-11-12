@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.fakes.ScriptedKeyframeSource;
 import com.streamarr.transcode.fakes.ScriptedProcess;
@@ -15,10 +16,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -33,6 +37,29 @@ class KeyframeReadPositionTest {
   private static final Duration ONE_MICROSECOND = Duration.ofNanos(1_000);
   // FFmpeg's command line tool moves a seek this much, 3/23 s, earlier for a stream with B-frames.
   private static final Duration B_FRAME_READ_BACK = Duration.ofNanos(130_434_783);
+  // A stored seek position that no search check uses, and the seek argument of its read.
+  private static final Duration STORED_POSITION = Duration.ofMillis(21_800);
+  private static final String STORED_POSITION_ARGUMENT = "21.8";
+  // A first picture check's copies, in the order FFmpeg reads them, of a read up to 24.5 s: a
+  // second past the search time of 23.5 s.
+  private static final String COPIES_BEFORE_A_SECOND_PAST_THE_SEARCH_TIME =
+      """
+      #tb 0: 1/1000
+      #tb 1: 1/1000
+      0, 24250, 24333, 250, 1000, 0x0a1b2c3d, F=0x0
+      1, 24250, 24250, 250, 300, 0x0a1b2c3d
+      0, 24499, 24583, 250, 1000, 0x0a1b2c3d, F=0x0
+      1, 24750, 24750, 250, 300, 0x0a1b2c3d
+      """;
+  private static final String COPIES_UP_TO_A_SECOND_PAST_THE_SEARCH_TIME =
+      """
+      #tb 0: 1/1000
+      #tb 1: 1/1000
+      0, 24250, 24333, 250, 1000, 0x0a1b2c3d, F=0x0
+      1, 24250, 24250, 250, 300, 0x0a1b2c3d
+      0, 24500, 24583, 250, 1000, 0x0a1b2c3d, F=0x0
+      1, 24500, 24500, 250, 300, 0x0a1b2c3d
+      """;
 
   private final AtomicLong bytesRead = new AtomicLong();
 
@@ -143,7 +170,7 @@ class KeyframeReadPositionTest {
     assertThat(readPosition).contains(Duration.ZERO);
     assertThat(source.scannedIntervals()).isEmpty();
     assertThat(source.readChecks()).isEmpty();
-    assertThat(source.firstPictureReadEnds()).isEmpty();
+    assertThat(source.firstPictureChecks()).isEmpty();
   }
 
   // The video's keyframes stop at 10 s and its pictures at 20 s, before segment 12's start at 24 s.
@@ -259,8 +286,6 @@ class KeyframeReadPositionTest {
     var firstPicture =
         """
         #tb 0: 1/1000
-        #tb 1: 1/1000
-        1, 10000, -9223372036854775808, 250, 1000, 0x0a1b2c3d
         0, 10000, 10000, 1, 500, 0x0a1b2c3d
         """;
     var engine =
@@ -333,9 +358,7 @@ class KeyframeReadPositionTest {
                 storing(decodeTimeOf(22), searching(seconds("23.5"), 24)), bytesRead::addAndGet);
 
     assertThat(readPosition).contains(decodeTimeOf(22));
-    assertThat(source.firstPictureReadEnds())
-        .singleElement()
-        .satisfies(end -> assertThat(end).isBetween(seconds("24.5"), seconds("24.500002")));
+    assertThat(source.firstPictureChecks()).containsExactly(decodeTimeOf(22));
     assertThat(source.readChecks()).isEmpty();
     assertThat(source.scannedIntervals()).isEmpty();
   }
@@ -403,7 +426,8 @@ class KeyframeReadPositionTest {
   }
 
   // From the recovery point at 22 s the decoder shows its first picture at 27 s, 5 s later, after
-  // the second past the search time, 24.5 s, at which each read of it stops.
+  // the second past the search time, 24.5 s, at which each check of it stops reading. The scripted
+  // check shows that picture, which counts as none in time.
   @Test
   @DisplayName(
       "Should read from the keyframe before when the decoder shows no picture from the last keyframe"
@@ -416,10 +440,91 @@ class KeyframeReadPositionTest {
         engineReading(source).readPosition(searching(seconds("23.5"), 24), bytesRead::addAndGet);
 
     assertThat(readPosition).contains(decodeTimeOf(20));
-    // Each seek and length round up to whole microseconds.
-    assertThat(source.firstPictureReadEnds())
-        .isNotEmpty()
-        .allSatisfy(end -> assertThat(end).isBetween(seconds("24.5"), seconds("24.500002")));
+  }
+
+  // The stored position's read lands inside a GOP whose decoder shows nothing before 24.5 s, a
+  // second past the search time. FFmpeg writes the packets that the check copies as it reads them.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should stop the first picture check with q, and search, when a copied video packet decodes a"
+          + " second past the search time before the decoder shows a picture")
+  void shouldStopTheFirstPictureCheckWhenACopiedVideoPacketDecodesASecondPastTheSearchTime()
+      throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(COPIES_UP_TO_A_SECOND_PAST_THE_SEARCH_TIME)
+            .exitTiming(ScriptedProcess.ExitTiming.AT_QUIT)
+            .build();
+    var source = everyTwoSecondsUpTo(30, 30);
+
+    var readPosition =
+        engine(checkingTheStoredPositionWith(check, source))
+            .readPosition(
+                storing(STORED_POSITION, searching(seconds("23.5"), 24)), bytesRead::addAndGet);
+
+    assertThat(check.stdinText()).isEqualTo("q");
+    assertThat(readPosition).contains(decodeTimeOf(22));
+  }
+
+  // The check's last copied video packet decodes at 24.499 s, a millisecond before the second past
+  // the search time; the audio packet after it, at 24.75 s, does not end the read.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should let the first picture check read on without a q while every copied video packet"
+          + " decodes before a second past the search time")
+  void shouldLetTheFirstPictureCheckReadOnWhileEveryCopiedVideoPacketDecodesBeforeTheReadEnd()
+      throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(COPIES_BEFORE_A_SECOND_PAST_THE_SEARCH_TIME)
+            .exitTiming(ScriptedProcess.ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var engine = engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(30, 30)));
+    var request = storing(STORED_POSITION, searching(seconds("23.5"), 24));
+    var reading = new FutureTask<>(() -> engine.readPosition(request, bytesRead::addAndGet));
+    Thread.ofVirtual().start(reading);
+
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(() -> assertThat(bytesRead).as("every copied packet").hasValue(2_600));
+    assertThat(check.stdinText()).isEmpty();
+    check.exit();
+
+    assertThat(reading.get(5, TimeUnit.SECONDS)).contains(decodeTimeOf(22));
+  }
+
+  // The decoder shows the picture at 23.5 s only once FFmpeg, stopped by the q, decodes the
+  // packets that it has read.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should keep the stored seek position when the decoder shows its picture in time only after"
+          + " the q stops the first picture check")
+  void shouldKeepTheStoredSeekPositionWhenTheDecoderShowsItsPictureOnlyAfterTheQ()
+      throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(
+                "#tb 0: 1/1000\n0, 23500, 23500, 1, 500, 0x0a1b2c3d\n"
+                    .getBytes(StandardCharsets.US_ASCII))
+            .pauseAfter(0)
+            .resumesOnQuit(true)
+            .stderr(COPIES_UP_TO_A_SECOND_PAST_THE_SEARCH_TIME)
+            .build();
+    var source = everyTwoSecondsUpTo(30, 30);
+
+    var readPosition =
+        engine(checkingTheStoredPositionWith(check, source))
+            .readPosition(
+                storing(STORED_POSITION, searching(seconds("23.5"), 24)), bytesRead::addAndGet);
+
+    assertThat(check.stdinText()).isEqualTo("q");
+    assertThat(readPosition).contains(STORED_POSITION);
+    assertThat(source.scannedIntervals()).isEmpty();
   }
 
   // No keyframe's read shows a picture before the video ends at 30 s.
@@ -510,6 +615,40 @@ class KeyframeReadPositionTest {
             .storedSeekPosition(Optional.empty());
 
     assertThatIllegalArgumentException().isThrownBy(target::build);
+  }
+
+  // A time base of 1/0 gives the copied packet no time that the worker can read. Without its end,
+  // the scripted FFmpeg would wait for the reader of its copies, as a real one would.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should fail the search, and end the check's FFmpeg, when the time of a packet that the first"
+          + " picture check copied cannot be read")
+  void shouldFailTheSearchAndEndTheChecksFfmpegWhenACopiedPacketsTimeCannotBeRead() {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr("#tb 0: 1/0\n0, 24250, 24333, 250, 1000, 0x0a1b2c3d, F=0x0\n")
+            .exitTiming(ScriptedProcess.ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var engine = engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(30, 30)));
+    var request = storing(STORED_POSITION, searching(seconds("23.5"), 24));
+
+    assertThatExceptionOfType(TranscodeException.class)
+        .isThrownBy(() -> engine.readPosition(request, bytesRead::addAndGet));
+    assertThat(check.wasDestroyedForcibly()).isTrue();
+  }
+
+  // The stored position's first picture check runs the given FFmpeg; every other check and scan
+  // reads the source.
+  private static ProcessLauncher checkingTheStoredPositionWith(
+      ScriptedProcess check, ScriptedKeyframeSource source) {
+    return ScriptedProcessLauncher.forCommands(
+        (command, _) ->
+            ScriptedKeyframeSource.isFirstPictureCheck(command)
+                    && command.contains(STORED_POSITION_ARGUMENT)
+                ? check
+                : source.scan(command));
   }
 
   private FfmpegTranscodeEngine engineReading(ScriptedKeyframeSource source) {

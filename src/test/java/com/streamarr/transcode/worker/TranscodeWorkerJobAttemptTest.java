@@ -2600,6 +2600,49 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // The server stores the keyframe at 22 s, which decodes at 21.917 s. Its first picture check has
+  // copied two packets, and its decoder has shown no picture yet.
+  @Test
+  @DisplayName(
+      "Should report the bytes that a stored seek position's first picture check has copied while"
+          + " its decoder shows no picture")
+  void shouldReportTheBytesThatAStoredPositionsFirstPictureCheckCopiedWhileItShowsNoPicture()
+      throws Exception {
+    var copies =
+        """
+        #tb 0: 1/1000
+        #tb 1: 1/1000
+        0, 21917, 22000, 250, 1000, 0x0a1b2c3d
+        1, 21917, 21917, 250, 300, 0x0a1b2c3d
+        """;
+    var picture = "#tb 0: 1/1000\n0, 22000, 22000, 1, 500, 0x0a1b2c3d\n".getBytes(US_ASCII);
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (_, _) ->
+                ScriptedProcess.builder().output(picture).pauseAfter(0).stderr(copies).build());
+    var job = heldJobSearchingForItsKeyframe();
+    job.getExecutionBuilder().getSeekPositionBuilder().setSeconds(21).setNanos(917_000_000);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      await().atMost(EVENT_LIMIT).until(() -> !progressReportsOf(connection).isEmpty());
+      assertThat(progressReportsOf(connection).getFirst())
+          .satisfies(
+              progress -> {
+                assertThat(progress.getKeyframeSearchBytesRead())
+                    .as("a 1,000-byte video packet and a 300-byte audio packet")
+                    .isEqualTo(1_300);
+                assertThat(progress.hasOutputEnd()).isFalse();
+              });
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId())))
+          .singleElement()
+          .satisfies(command -> assertThat(command).contains("wrapped_avframe"));
+    }
+  }
+
   @Test
   @DisplayName(
       "Should report the attempt stopped and end the scan's FFmpeg when a stop arrives while an"

@@ -21,12 +21,12 @@ import lombok.Builder;
  * source that seeks by presentation time, as an MP4 source does, lands on the last keyframe that
  * presents at or before the seek and reads the packets that present from the seek on. A read check
  * runs two FFmpegs. The landing check writes the first video packet from where its seek lands,
- * beside an audio packet. The first picture check writes, when the decoder shows a picture by the
- * end of its read, the video packets from where its seek lands, each beside an audio packet, up to
- * that picture, which it writes once a packet decodes at or after its presentation time; it writes
- * nothing when the decoder shows none, as FFmpeg's muxer waits for the picture. The decoder starts
- * at the first keyframe that the read reaches and shows its first picture there, or a recovery
- * delay after it.
+ * beside an audio packet. The first picture check copies the video packets from where its seek
+ * lands, each beside an audio packet, to its error output, up to the first packet that decodes at
+ * or after the decoder's first picture, or else to the video's end. It then writes that picture,
+ * however late, to its output and exits: a picture after the search time counts as none. The
+ * decoder starts at the first keyframe that the read reaches and shows its first picture there, or
+ * a recovery delay after it.
  */
 public final class ScriptedKeyframeSource {
 
@@ -42,7 +42,7 @@ public final class ScriptedKeyframeSource {
   private final Settings settings;
   private final List<List<Duration>> scanned = new ArrayList<>();
   private final List<Duration> readChecks = new ArrayList<>();
-  private final List<Duration> firstPictureReadEnds = new ArrayList<>();
+  private final List<Duration> firstPictureChecks = new ArrayList<>();
   private long bytesWritten;
 
   public ScriptedKeyframeSource(List<Duration> keyframes, int videoEndSeconds) {
@@ -96,14 +96,14 @@ public final class ScriptedKeyframeSource {
     var micros = argumentAfter(command, "-ss").orElse(Duration.ZERO).toNanos() / 1_000;
     var framecrc = "#tb 0: 1/1000000\n0, %d, %d, 1, 1000, 0x0a1b2c3d\n".formatted(micros, micros);
     if (isFirstPictureCheck(command)) {
-      framecrc =
-          """
-          #tb 0: 1/1000000
-          #tb 1: 1/1000000
-          1, %d, %d, 1, 1000, 0x0a1b2c3d
-          0, %d, %d, 1, 500, 0x0a1b2c3d
-          """
-              .formatted(micros, micros, micros, micros);
+      return ScriptedProcess.builder()
+          .output(
+              "#tb 0: 1/1000000\n0, %d, %d, 1, 500, 0x0a1b2c3d\n"
+                  .formatted(micros, micros)
+                  .getBytes(StandardCharsets.US_ASCII))
+          .stderr(framecrc)
+          .outputAwaitsErrorOutput(true)
+          .build();
     }
 
     return ScriptedProcess.builder().output(framecrc.getBytes(StandardCharsets.US_ASCII)).build();
@@ -129,23 +129,21 @@ public final class ScriptedKeyframeSource {
         settings.toBuilder().recoveryDelays(Map.copyOf(delays)).build());
   }
 
-  /** The scan's or read check's framecrc that the command names, as a process that writes it. */
-  public ScriptedProcess scan(List<String> command) {
-    return ScriptedProcess.builder().output(framecrcOf(command)).build();
+  /** The FFmpeg of the scan or read check that the command names. */
+  public synchronized ScriptedProcess scan(List<String> command) {
+    var seek = argumentAfter(command, "-ss");
+    if (isFirstPictureCheck(command)) {
+      return firstPictureCheck(seek.orElse(Duration.ZERO));
+    }
+
+    if (isLandingCheck(command)) {
+      return ScriptedProcess.builder().output(landingCheck(seek.orElseThrow())).build();
+    }
+
+    return ScriptedProcess.builder().output(scanOf(seek, command)).build();
   }
 
-  /** The framecrc that a scan or read check with the command writes. */
-  public synchronized byte[] framecrcOf(List<String> command) {
-    var seek = argumentAfter(command, "-ss");
-    if (isLandingCheck(command)) {
-      return landingCheck(seek.orElseThrow());
-    }
-
-    if (isFirstPictureCheck(command)) {
-      var from = seek.orElse(Duration.ZERO);
-      return firstPictureCheck(from, from.plus(argumentAfter(command, "-t").orElseThrow()));
-    }
-
+  private byte[] scanOf(Optional<Duration> seek, List<String> command) {
     var from = seek.orElse(Duration.ZERO);
     var until = from.plus(argumentAfter(command, "-t").orElseThrow());
     scanned.add(List.of(from, until));
@@ -165,9 +163,9 @@ public final class ScriptedKeyframeSource {
     return List.copyOf(readChecks);
   }
 
-  /** Where each first picture check stops reading, in check order. */
-  public synchronized List<Duration> firstPictureReadEnds() {
-    return List.copyOf(firstPictureReadEnds);
+  /** The seek of each first picture check, in check order. */
+  public synchronized List<Duration> firstPictureChecks() {
+    return List.copyOf(firstPictureChecks);
   }
 
   /** Each scanned interval's start and end, in scan order. */
@@ -193,30 +191,29 @@ public final class ScriptedKeyframeSource {
     return framecrc.toString().getBytes(StandardCharsets.US_ASCII);
   }
 
-  private byte[] firstPictureCheck(Duration seek, Duration readEnd) {
-    firstPictureReadEnds.add(readEnd);
+  private ScriptedProcess firstPictureCheck(Duration seek) {
+    firstPictureChecks.add(seek);
     var read = picturesReadFrom(seek);
     var firstPicture =
         read.stream()
             .filter(settings.keyframes()::contains)
             .findFirst()
-            .flatMap(this::firstPictureFrom)
-            .filter(picture -> picture.compareTo(readEnd) <= 0);
-    if (firstPicture.isEmpty()) {
-      return new byte[0];
-    }
-
-    var framecrc = new StringBuilder("#tb 0: 1/1000\n#tb 1: 1/1000\n#tb 2: 1/1000\n");
+            .flatMap(this::firstPictureFrom);
+    var copies = new StringBuilder("#tb 0: 1/1000\n#tb 1: 1/1000\n");
     for (var time : read) {
-      framecrc.append(videoRecord("1", time));
-      framecrc.append(audioRecord("2", time.minus(REORDER_DELAY).toMillis()));
-      if (isDecodedBy(time, firstPicture.get())) {
+      copies.append(videoRecord("0", time));
+      copies.append(audioRecord("1", time.minus(REORDER_DELAY).toMillis()));
+      if (firstPicture.filter(picture -> isDecodedBy(time, picture)).isPresent()) {
         break;
       }
     }
 
-    framecrc.append(pictureRecord(firstPicture.get()));
-    return framecrc.toString().getBytes(StandardCharsets.US_ASCII);
+    var picture = firstPicture.map(time -> "#tb 0: 1/1000\n" + pictureRecord(time)).orElse("");
+    return ScriptedProcess.builder()
+        .output(picture.getBytes(StandardCharsets.US_ASCII))
+        .stderr(copies.toString())
+        .outputAwaitsErrorOutput(true)
+        .build();
   }
 
   // The packet decodes at or after the picture's presentation time.

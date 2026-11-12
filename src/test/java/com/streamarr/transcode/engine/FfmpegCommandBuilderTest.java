@@ -2467,24 +2467,23 @@ class FfmpegCommandBuilderTest {
             "pipe:1");
   }
 
+  // FFmpeg acts on the worker's q at its next progress report, which comes every 10 ms.
   @Test
   @DisplayName(
-      "Should decode the chosen video stream's first picture with one thread, beside its copied"
-          + " packets and the chosen audio's, from where the attempt's seek to the position lands"
-          + " for the length and on the attempt's timeline, to a framecrc on standard output when"
-          + " building a first picture check")
-  void shouldDecodeTheFirstPictureFromWhereASeekLandsForTheLengthForAFirstPictureCheck() {
+      "Should decode the chosen video stream's first picture with one thread to a framecrc on"
+          + " standard output, and copy the chosen video and audio streams' packets to a framecrc on"
+          + " standard error, from where the attempt's seek lands, when building a first picture"
+          + " check")
+  void shouldDecodeTheFirstPictureAndCopyThePacketsToStandardErrorForAFirstPictureCheck() {
     var cmd =
         builder.buildFirstPictureCommand(
-            Path.of("/media/source.ts"),
-            chosenStreams(),
-            Duration.ofMillis(8_000),
-            Duration.ofMillis(3_500));
+            Path.of("/media/source.ts"), chosenStreams(), Duration.ofMillis(8_000));
 
     assertThat(cmd)
         .containsExactly(
             "ffmpeg",
-            "-nostdin",
+            "-stats_period",
+            "0.01",
             "-v",
             "quiet",
             "-copyts",
@@ -2494,12 +2493,27 @@ class FfmpegCommandBuilderTest {
             "-ss",
             "8",
             "-noaccurate_seek",
-            "-t",
-            "3.5",
             "-i",
             "/media/source.ts",
             "-map",
             "0:2",
+            "-c:v:0",
+            "wrapped_avframe",
+            "-fps_mode:v:0",
+            "passthrough",
+            "-enc_time_base:v:0",
+            "demux",
+            "-frames:v:0",
+            "1",
+            "-flush_packets",
+            "1",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "pipe:1",
             "-map",
             "0:2",
             "-map",
@@ -2517,14 +2531,6 @@ class FfmpegCommandBuilderTest {
             "-copyinkf",
             "-copypriorss",
             "1",
-            "-c:v:0",
-            "wrapped_avframe",
-            "-fps_mode:v:0",
-            "passthrough",
-            "-enc_time_base:v:0",
-            "demux",
-            "-frames:v:0",
-            "1",
             "-flush_packets",
             "1",
             "-map_metadata",
@@ -2533,7 +2539,7 @@ class FfmpegCommandBuilderTest {
             "-1",
             "-f",
             "framecrc",
-            "pipe:1");
+            "pipe:2");
   }
 
   @Test
@@ -2542,11 +2548,11 @@ class FfmpegCommandBuilderTest {
   void shouldSeekNowhereWhenBuildingAFirstPictureCheckFromTheStartOfTheTimeline() {
     var cmd =
         builder.buildFirstPictureCommand(
-            Path.of("/media/source.ts"), chosenStreams(), Duration.ZERO, Duration.ofSeconds(6));
+            Path.of("/media/source.ts"), chosenStreams(), Duration.ZERO);
 
     assertThat(cmd)
         .doesNotContain("-ss", "-noaccurate_seek")
-        .containsSequence("-threads", "1", "-t", "6", "-i", "/media/source.ts");
+        .containsSequence("-threads", "1", "-i", "/media/source.ts");
   }
 
   // A held encode of the video at index 2 and the audio at index 1. The timeline's zero is the
