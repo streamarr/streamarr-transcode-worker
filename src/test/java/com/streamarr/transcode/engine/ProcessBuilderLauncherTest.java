@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fixtures.RecordingFixtures;
 import java.io.IOException;
 import java.io.InputStream;
@@ -103,6 +104,15 @@ class ProcessBuilderLauncherTest {
       throws IOException, InterruptedException {
     var process = launcher.launch(List.of("true"), UUID.randomUUID());
     assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+    assertThat(launcher.bytesRead(process)).isEmpty();
+  }
+
+  // A process without a handle names no process whose count the system keeps.
+  @Test
+  @DisplayName("Should count no bytes read for a process that has no handle")
+  void shouldCountNoBytesReadForAProcessThatHasNoHandle() {
+    var process = ScriptedProcess.builder().output(new byte[0]).hasNoHandle(true).build();
 
     assertThat(launcher.bytesRead(process)).isEmpty();
   }

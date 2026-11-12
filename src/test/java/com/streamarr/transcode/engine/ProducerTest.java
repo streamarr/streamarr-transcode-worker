@@ -4111,6 +4111,30 @@ class ProducerTest {
     assertThat(producer.takeAdvancedBytesRead()).isEmpty();
   }
 
+  // A launcher may hand the producer a process without a handle, as a wrapper of the JDK's process
+  // does unless it passes the handle on. The system's count of its reads then names no process.
+  @Test
+  @DisplayName(
+      "Should complete the attempt when its audio's input reads ahead and FFmpeg's process has no"
+          + " handle to count its reads by")
+  void shouldCompleteTheAttemptWhenFfmpegsProcessHasNoHandleToCountItsReadsBy() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).hasNoHandle(true).build();
+    ProcessLauncher countingThroughTheSystem = (_, _) -> process;
+
+    var producer =
+        producerFor(process, recording)
+            .launcher(countingThroughTheSystem)
+            .pipeline(READING_AHEAD)
+            .start();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(producer.takeAdvancedBytesRead()).isEmpty();
+  }
+
   @Test
   @DisplayName(
       "Should give the bytes that FFmpeg has read once they have grown, and nothing once FFmpeg"
