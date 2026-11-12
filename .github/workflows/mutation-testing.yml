@@ -1,0 +1,113 @@
+name: Mutation testing
+
+# PIT mutates the production classes and runs the unit tests against each mutant, then reports the
+# mutants that no test detected. It only reports: no pull request runs it, no required check names
+# it, and no score fails it. A red run means PIT or the report could not finish.
+on:
+  schedule:
+    # 07:17 UTC: night in the Americas and early morning in Europe, away from the top of the hour.
+    - cron: '17 7 * * *'
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: mutation-testing
+  cancel-in-progress: false
+
+env:
+  # Every class in one job took about four hours on four cores, too close to a hosted job's limit.
+  SHARDS: 4
+
+jobs:
+  mutation:
+    name: Mutate shard ${{ matrix.shard }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # No Maven cache: a cache this run saved first would lack what CI's builds need.
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: zulu
+          java-version: '25'
+      - name: Mutate the production classes under the unit tests
+        env:
+          SHARD: ${{ matrix.shard }}
+        # The listing is its own statement so that its failure stops the step: without
+        # targetClasses PIT would mutate every class. The report goes in a directory named after
+        # the shard's artifact, so the artifact holds that directory.
+        run: |
+          classes="$(src/test/mutation-report/shard-classes.sh "$SHARD" "$SHARDS")"
+          ./mvnw -B -Pmutation-testing -Djacoco.skip=true "-DtargetClasses=$classes" \
+            "-DreportsDirectory=target/pit-reports/mutation-report-$SHARD" \
+            test-compile org.pitest:pitest-maven:mutationCoverage
+      - name: Keep the HTML report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-report-${{ matrix.shard }}
+          path: target/pit-reports
+          if-no-files-found: ignore
+          retention-days: 30
+
+  report:
+    name: Report mutants the unit tests miss
+    needs: mutation
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: buildpacks/ffmpeg/.nvmrc
+          package-manager-cache: false
+      # Without merge-multiple, the only artifact of a run where one shard kept a report would land
+      # straight in the path, outside the directory of its name that the summary reads it from.
+      - name: Receive every shard's report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutation-report-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/reports
+      - name: Fetch the previous summary from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: src/test/mutation-report/fetch-previous.sh "$RUNNER_TEMP/previous"
+      - name: Summarize the mutants no test detected
+        env:
+          COMMIT: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+        run: |
+          reports=()
+          for (( shard = 0; shard < SHARDS; shard++ )); do
+            reports+=(--report "$RUNNER_TEMP/reports/mutation-report-$shard/mutations.xml")
+          done
+          previous=()
+          if [[ -f "$RUNNER_TEMP/previous/summary.json" ]]; then
+            previous=(--previous "$RUNNER_TEMP/previous/summary.json")
+          fi
+          mkdir -p "$RUNNER_TEMP/summary"
+          node src/test/mutation-report/summarize.mjs "${reports[@]}" --commit "$COMMIT" --ref "$REF" \
+            --write "$RUNNER_TEMP/summary/summary.json" "${previous[@]}" >>"$GITHUB_STEP_SUMMARY"
+      - name: Keep the summary for the next night
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-summary
+          path: ${{ runner.temp }}/summary/summary.json
+          if-no-files-found: ignore
+          retention-days: 90

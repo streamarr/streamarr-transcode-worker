@@ -341,4 +341,60 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <!-- Run by the nightly mutation-testing workflow only:
+                 ./mvnw -Pmutation-testing test-compile org.pitest:pitest-maven:mutationCoverage -->
+            <id>mutation-testing</id>
+            <properties>
+                <pitest-maven.version>1.30.2</pitest-maven.version>
+                <pitest-junit5-plugin.version>1.2.3</pitest-junit5-plugin.version>
+                <pitest.threads>4</pitest.threads>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-maven</artifactId>
+                        <version>${pitest-maven.version}</version>
+                        <dependencies>
+                            <dependency>
+                                <groupId>org.pitest</groupId>
+                                <artifactId>pitest-junit5-plugin</artifactId>
+                                <version>${pitest-junit5-plugin.version}</version>
+                            </dependency>
+                        </dependencies>
+                        <!-- Without targetClasses PIT mutates every package that holds production
+                             classes. The nightly workflow passes each shard's classes instead,
+                             with -DtargetClasses. -->
+                        <configuration>
+                            <targetTests>
+                                <param>com.streamarr.transcode.engine.*Test</param>
+                                <param>com.streamarr.transcode.probe.*Test</param>
+                                <param>com.streamarr.transcode.worker.*Test</param>
+                            </targetTests>
+                            <excludedGroups>
+                                <param>SmokeTest</param>
+                                <param>IntegrationTest</param>
+                                <param>ImageTest</param>
+                            </excludedGroups>
+                            <jvmArgs>
+                                <jvmArg>${native.access.args}</jvmArg>
+                                <!-- The heap CI's unit tests run in: a quarter of a 16 GB runner.
+                                     ProducerTest's class needs more than 2 GB in one JVM, and a
+                                     mutant that allocates without end stops at this bound. -->
+                                <jvmArg>-Xmx4g</jvmArg>
+                            </jvmArgs>
+                            <threads>${pitest.threads}</threads>
+                            <timestampedReports>false</timestampedReports>
+                            <outputFormats>
+                                <param>HTML</param>
+                                <param>XML</param>
+                            </outputFormats>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
