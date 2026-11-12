@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -279,29 +280,41 @@ public class TranscodeCapabilityService {
   }
 
   private CapabilityProbeResult probeRequiredMp4MuxerOptions() {
+    return probeHelp(
+        "muxer=mp4",
+        "mp4 muxer",
+        output -> {
+          var missingOptions =
+              REQUIRED_MP4_MUXER_OPTIONS.stream()
+                  .filter(option -> !output.contains(option))
+                  .toList();
+          if (!missingOptions.isEmpty()) {
+            return CapabilityProbeResult.failure(
+                "Missing mp4 muxer options: " + String.join(", ", missingOptions));
+          }
+
+          return CapabilityProbeResult.success();
+        });
+  }
+
+  // Reads FFmpeg's help on the topic and checks it, as the subject's capability probe.
+  private CapabilityProbeResult probeHelp(
+      String topic, String subject, Function<String, CapabilityProbeResult> check) {
     try {
-      var process =
-          processFactory.start(ffmpegReadingStandardOutput("-hide_banner", "-h", "muxer=mp4"));
+      var process = processFactory.start(ffmpegReadingStandardOutput("-hide_banner", "-h", topic));
       var output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
       if (process.waitFor() != 0) {
-        return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe failed");
+        return CapabilityProbeResult.failure("FFmpeg " + subject + " capability probe failed");
       }
 
-      var missingOptions =
-          REQUIRED_MP4_MUXER_OPTIONS.stream().filter(option -> !output.contains(option)).toList();
-      if (!missingOptions.isEmpty()) {
-        return CapabilityProbeResult.failure(
-            "Missing mp4 muxer options: " + String.join(", ", missingOptions));
-      }
-
-      return CapabilityProbeResult.success();
+      return check.apply(output);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      log.debug("FFmpeg mp4 muxer capability check interrupted", e);
-      return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe interrupted");
+      log.debug("FFmpeg {} capability check interrupted", subject, e);
+      return CapabilityProbeResult.failure("FFmpeg " + subject + " capability probe interrupted");
     } catch (Exception e) {
-      log.debug("FFmpeg mp4 muxer capability check failed", e);
-      return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe failed");
+      log.debug("FFmpeg {} capability check failed", subject, e);
+      return CapabilityProbeResult.failure("FFmpeg " + subject + " capability probe failed");
     }
   }
 
