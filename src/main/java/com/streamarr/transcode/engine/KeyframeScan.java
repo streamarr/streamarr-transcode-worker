@@ -119,9 +119,11 @@ final class KeyframeScan {
    * of where the read lands. One FFmpeg decodes the chosen video from where that seek lands, as the
    * attempt's decoder does, and copies the packets that it reads to a second output, whose bytes
    * count as read. Once a copied video packet decodes at or after a second past the latest
-   * picture's time, or ends at the chosen video's end when the request carries it, FFmpeg stops
-   * reading and decodes the packets that it has read. Without the video's end, a read whose video
-   * ends before then and shows no picture copies on to the end of the file.
+   * picture's time, FFmpeg stops reading and decodes the packets that it has read. When the request
+   * carries the chosen video's end, the packet that ends there also stops the read, unless it
+   * decodes before the latest picture's time and presents after it: the packets after it can then
+   * still present by that time. Any other read whose video ends first and that shows no picture
+   * copies on to the end of the file.
    */
   SeekRead firstDecodedPicture(Duration seekPosition, Duration latestPicture)
       throws InterruptedException {
@@ -261,11 +263,23 @@ final class KeyframeScan {
     }
   }
 
-  // Every video packet after the one that ends the video presents before it, so the decoder needs
-  // no packet that the read copies later.
   private boolean endsTheRead(Packet packet, Duration latestPicture) {
-    return packet.decodeTime().compareTo(readEnd(latestPicture)) >= 0
-        || request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent();
+    if (packet.decodeTime().compareTo(readEnd(latestPicture)) >= 0) {
+      return true;
+    }
+
+    return request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent()
+        && leavesNoLaterPictureInTime(packet, latestPicture);
+  }
+
+  // The leading pictures that follow a last keyframe in decode order can present by the latest
+  // picture's time although the keyframe ends the video. Every packet after the one that ends the
+  // video decodes after it and presents no earlier than it decodes, so none presents by then when
+  // that packet decodes at or after that time. When it presents by then, so does any keyframe that
+  // the read holds, and no keyframe follows the picture that presents last.
+  private static boolean leavesNoLaterPictureInTime(Packet packet, Duration latestPicture) {
+    return packet.decodeTime().compareTo(latestPicture) >= 0
+        || packet.presentationTime().compareTo(latestPicture) <= 0;
   }
 
   private static Duration readEnd(Duration latestPicture) {

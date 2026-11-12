@@ -19,6 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongConsumer;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -701,6 +702,110 @@ class KeyframeReadPositionTest {
             bytesRead::addAndGet);
 
     assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
+  }
+
+  // The read lands on the video's last keyframe, which presents last, from 23.75 s up to the
+  // video's end at 24 s. Its three leading pictures follow it in decode order, need no picture
+  // before it, as HEVC's RADL pictures do, and present from 23 s, before the search time of 23.5 s.
+  // FFmpeg shows the decoder's picture at 23 s only at the end of the file, once the worker has
+  // read every copy.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should let the first picture check read on past the keyframe that ends the video when its"
+          + " leading pictures can present by the search time")
+  void shouldLetTheCheckReadOnPastTheKeyframeThatEndsTheVideoWhenItsLeadingPicturesCanBeInTime()
+      throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(
+                "#tb 0: 1/1000\n0, 23000, 23000, 1, 500, 0x0a1b2c3d\n"
+                    .getBytes(StandardCharsets.US_ASCII))
+            .pauseAfter(0)
+            .stderr(
+                """
+                #tb 0: 1/1000
+                #tb 1: 1/1000
+                0, 22500, 23750, 250, 1000, 0x0a1b2c3d
+                1, 22500, 22500, 250, 300, 0x0a1b2c3d
+                0, 22750, 23250, 250, 1000, 0x0a1b2c3d, F=0x0
+                0, 23000, 23000, 250, 1000, 0x0a1b2c3d, F=0x0
+                0, 23250, 23500, 250, 1000, 0x0a1b2c3d, F=0x0
+                1, 60000, 60000, 250, 300, 0x0a1b2c3d
+                1, 600000, 600000, 250, 300, 0x0a1b2c3d
+                """)
+            .build();
+    var bytesOfEveryCopy = 4 * 1000 + 3 * 300;
+    LongConsumer readingToTheEndOfTheFile =
+        bytes -> {
+          if (bytesRead.addAndGet(bytes) == bytesOfEveryCopy) {
+            check.resume();
+          }
+        };
+
+    var readPosition =
+        engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(22, 24)))
+            .readPosition(
+                endingVideoAt(
+                    Duration.ofSeconds(24),
+                    storing(STORED_POSITION, searching(seconds("23.5"), 24))),
+                readingToTheEndOfTheFile);
+
+    assertThat(check.stdinText()).as("no q before the leading pictures").isEmpty();
+    assertThat(readPosition).contains(STORED_POSITION);
+  }
+
+  // Every video packet after the one that ends the video decodes after it and presents no earlier
+  // than it decodes. When that packet decodes at the search time, no later packet presents by it;
+  // when it presents at the search time, so does the keyframe before it.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("packetsThatEndTheVideoAtTheSearchTimesBounds")
+  @Timeout(10)
+  @DisplayName(
+      "Should stop the first picture check at the packet that ends the video when it decodes or"
+          + " presents at the search time")
+  void shouldStopTheCheckAtThePacketThatEndsTheVideoWhenItDecodesOrPresentsAtTheSearchTime(
+      String boundCase, String copies, Duration videoEnd) throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(copies)
+            .exitTiming(ScriptedProcess.ExitTiming.AT_QUIT)
+            .build();
+
+    engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(20, 22)))
+        .readPosition(
+            endingVideoAt(
+                videoEnd, storing(STORED_POSITION, holding(searching(seconds("23.5"), 24)))),
+            bytesRead::addAndGet);
+
+    assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
+  }
+
+  static Stream<Arguments> packetsThatEndTheVideoAtTheSearchTimesBounds() {
+    return Stream.of(
+        Arguments.of(
+            "it decodes at 23.5 s and presents up to the video's end at 24 s",
+            """
+            #tb 0: 1/1000
+            #tb 1: 1/1000
+            0, 23000, 23250, 250, 1000, 0x0a1b2c3d
+            1, 23000, 23000, 250, 300, 0x0a1b2c3d
+            0, 23500, 23750, 250, 1000, 0x0a1b2c3d, F=0x0
+            1, 600000, 600000, 250, 300, 0x0a1b2c3d
+            """,
+            Duration.ofSeconds(24)),
+        Arguments.of(
+            "it decodes at 23.25 s and presents at 23.5 s, up to the video's end at 23.75 s",
+            """
+            #tb 0: 1/1000
+            #tb 1: 1/1000
+            0, 22750, 23000, 250, 1000, 0x0a1b2c3d
+            1, 22750, 22750, 250, 300, 0x0a1b2c3d
+            0, 23250, 23500, 250, 1000, 0x0a1b2c3d, F=0x0
+            1, 600000, 600000, 250, 300, 0x0a1b2c3d
+            """,
+            Duration.ofMillis(23_750)));
   }
 
   // No keyframe's read shows a picture before the video ends at 30 s.

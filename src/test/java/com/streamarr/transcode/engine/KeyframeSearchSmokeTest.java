@@ -202,6 +202,27 @@ class KeyframeSearchSmokeTest {
     assertThat(launcher.input()).as("the q that stops the check at the video's end").isEqualTo("q");
   }
 
+  // The video's last keyframe presents last, from 4 s up to the video's end at 4.25 s, and decodes
+  // at 2.75 s. Its leading pictures follow it in decode order and present from 3.25 s. A read from
+  // 4 s lands on the keyframe, so the decoder shows a picture by 3.5 s only from those pictures.
+  @Test
+  @DisplayName(
+      "Should send no q at the keyframe that ends the video when its leading pictures can present"
+          + " by the latest picture's time")
+  void shouldSendNoQAtTheKeyframeThatEndsTheVideoWhenItsLeadingPicturesCanBeInTime()
+      throws Exception {
+    var source = videoWhoseLastKeyframeIsFollowedByPicturesThatPresentBeforeIt();
+    var probed = probe(source);
+    assertThat(probed.videoEnd()).as("the video's end").isEqualTo(Duration.ofMillis(4250));
+    var launcher = new InputRecordingLauncher();
+    var scan = firstPictureCheck(source, probed.videoEnd(), launcher);
+
+    var read = scan.firstDecodedPicture(Duration.ofSeconds(4), Duration.ofMillis(3500));
+
+    assertThat(read).isEqualTo(new KeyframeScan.SeekRead.FirstPicture(Duration.ofMillis(3250)));
+    assertThat(launcher.input()).as("no q before the leading pictures").isEmpty();
+  }
+
   // The pinned FFmpeg writes this source's video from about 4.1 s on after its audio at 110 s. A
   // read from the keyframe at 4 s copies that keyframe, then the audio, then the rest of the video.
   // A check that stopped on copied audio 10 s past its read end rejected that read, whose decoder
@@ -317,6 +338,36 @@ class KeyframeSearchSmokeTest {
             "128k",
             "-output_ts_offset",
             "0.024",
+            "-f",
+            "mp4",
+            source.toString()));
+    return source;
+  }
+
+  // 4.25 s of HEVC at 128x72 and 4 fps with keyframes at 0 and 4 s, and 30 s of AAC, in MP4. x265
+  // codes the three pictures before the last keyframe after it, as RADL pictures that need no
+  // picture before it.
+  private Path videoWhoseLastKeyframeIsFollowedByPicturesThatPresentBeforeIt() throws Exception {
+    var source = root.resolve("leading-pictures.mp4");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=4:duration=4.25",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=duration=30:color=pink:sample_rate=48000:amplitude=0.1",
+            "-c:v",
+            "libx265",
+            "-x265-params",
+            "keyint=16:min-keyint=16:bframes=3:b-adapt=0:open-gop=0:radl=3:scenecut=0"
+                + ":log-level=error",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
             "-f",
             "mp4",
             source.toString()));
