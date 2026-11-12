@@ -763,7 +763,7 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should ask FFmpeg to quit gracefully when the worker closes during an upload")
   void shouldAskFfmpegToQuitGracefullyWhenTheWorkerClosesDuringAnUpload() throws Exception {
     var service = new ControllableWorkerService();
-    service.acknowledgeUploads = false;
+    service.stopAcknowledgingUploads();
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -814,7 +814,7 @@ class TranscodeWorkerControlPlaneIT {
       "Should read no further output when the control plane has not acknowledged a segment")
   void shouldReadNoFurtherOutputWhenTheControlPlaneHasNotAcknowledgedASegment() throws Exception {
     var service = new ControllableWorkerService();
-    service.acknowledgeUploads = false;
+    service.stopAcknowledgingUploads();
     var recording = recording(ENCODED_RECORDING);
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJob();
@@ -832,8 +832,7 @@ class TranscodeWorkerControlPlaneIT {
           .containsExactly("init.mp4");
       assertThat(process.hasReadToEndOfOutput()).isFalse();
 
-      service.acknowledgeUploads = true;
-      service.acknowledgePendingUpload();
+      service.resumeAcknowledgingUploads();
       service.awaitCompleted(job);
 
       assertThat(service.uploads)
@@ -1093,7 +1092,12 @@ class TranscodeWorkerControlPlaneIT {
     private StreamObserver<UploadSegmentResponse> pendingUpload;
     private int pendingLength;
 
-    private void acknowledgePendingUpload() {
+    private void stopAcknowledgingUploads() {
+      acknowledgeUploads = false;
+    }
+
+    private void resumeAcknowledgingUploads() {
+      acknowledgeUploads = true;
       pendingUpload.onNext(
           UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(pendingLength).build());
       pendingUpload.onCompleted();
