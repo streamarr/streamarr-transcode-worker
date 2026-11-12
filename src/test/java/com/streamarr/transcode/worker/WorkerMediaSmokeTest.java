@@ -1,5 +1,7 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.fixtures.DetectedCapabilities.realCapabilities;
+import static com.streamarr.transcode.fixtures.DetectedCapabilities.softwareCapabilities;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
@@ -275,9 +277,12 @@ class WorkerMediaSmokeTest {
   // The 90 s that the truncated source's index promises, in 6 s segments.
   private static final int TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT = 15;
   private static final Duration ONE_FRAME_AT_24_FPS = Duration.ofNanos(1_000_000_000L / 24 + 1);
-  // 1,764 s of audio in 6 s segments after the same 64 s of video.
-  private static final int LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT = 294;
-  private static final Duration HALF_OF_THE_LONG_AUDIO = Duration.ofSeconds(882);
+  // The same 64 s of video beside 300 s and beside 1,764 s of audio, in 6 s segments.
+  private static final int FIVE_MINUTE_AUDIO_SECONDS = 300;
+  private static final int FIVE_MINUTE_AUDIO_SEGMENT_COUNT = 50;
+  private static final Duration HALF_OF_THE_FIVE_MINUTE_AUDIO = Duration.ofSeconds(150);
+  private static final int HALF_HOUR_AUDIO_SECONDS = 1764;
+  private static final int HALF_HOUR_AUDIO_SEGMENT_COUNT = 294;
   // The seekable sources' 6 s period at their 24 fps.
   private static final int FRAMES_IN_A_PERIOD = 144;
   // The longest frame among the audio codecs these tests encode: AC-3 and E-AC-3 code 1,536
@@ -6588,7 +6593,10 @@ class WorkerMediaSmokeTest {
   }
 
   @ParameterizedTest(name = "{0} from segment {2}")
-  @MethodSource("videoEndsBeforeAudioSourcesAndStarts")
+  @MethodSource({
+    "videoEndsBeforeAudioSourcesAndStarts",
+    "halfAnHourOfAudioFromTheFirstSegmentAfterTheVideosEnd"
+  })
   @DisplayName(
       "Should upload every advertised segment, each opening at a keyframe with one period of"
           + " video and only its own interval's audio, when an encode holds the last frame of video"
@@ -6642,8 +6650,9 @@ class WorkerMediaSmokeTest {
                 VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT),
             Arguments.of(
                 Named.<ThrowingSupplier<Path>>of(
-                    "1,764 s of 5.1 AC-3", WorkerMediaSmokeTest::longAudioAfterVideoEndSource),
-                LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT))
+                    "300 s of 5.1 AC-3",
+                    () -> videoEndsEarlyInItsAudioSource(FIVE_MINUTE_AUDIO_SECONDS)),
+                FIVE_MINUTE_AUDIO_SEGMENT_COUNT))
         .flatMap(
             source ->
                 Stream.of(
@@ -6653,18 +6662,30 @@ class WorkerMediaSmokeTest {
                     .map(start -> Arguments.of(source.get()[0], source.get()[1], start)));
   }
 
+  // One start only: an attempt from any start encodes the audio to its end and holds the last
+  // frame through the same 283 segments after the video's end.
+  static Stream<Arguments> halfAnHourOfAudioFromTheFirstSegmentAfterTheVideosEnd() {
+    return Stream.of(
+        Arguments.of(
+            Named.<ThrowingSupplier<Path>>of(
+                "1,764 s of 5.1 AC-3",
+                () -> videoEndsEarlyInItsAudioSource(HALF_HOUR_AUDIO_SECONDS)),
+            HALF_HOUR_AUDIO_SEGMENT_COUNT,
+            VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1));
+  }
+
   // The first segment after the video's end needs one period of held pictures and of audio, so it
-  // must not wait for the downmix of the 1,700 s of audio after it. What FFmpeg had written when
+  // must not wait for the downmix of the 228 s of audio after it. What FFmpeg had written when
   // that segment's upload started shows how far past it FFmpeg had encoded the audio.
   @Test
   @DisplayName(
       "Should upload the first segment after the video's end before encoding the audio after it"
-          + " when an encode holds the last frame and downmixes half an hour of 5.1 audio")
+          + " when an encode holds the last frame and downmixes five minutes of 5.1 audio")
   void shouldUploadTheFirstSegmentAfterTheVideosEndBeforeEncodingTheAudioAfterItWhenAHoldRuns()
       throws Exception {
-    var source = longAudioAfterVideoEndSource();
+    var source = videoEndsEarlyInItsAudioSource(FIVE_MINUTE_AUDIO_SECONDS);
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    paddedTo(job, LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT);
+    paddedTo(job, FIVE_MINUTE_AUDIO_SEGMENT_COUNT);
     job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
     job.getDecisionBuilder()
         .getAudioBuilder()
@@ -6693,11 +6714,9 @@ class WorkerMediaSmokeTest {
         .as("the audio FFmpeg had written when %s's upload started", segment)
         .isNotEmpty();
     assertThat(written.latestSampleEnd())
-        .as(
-            "how far FFmpeg had written when %s's upload started; the audio ends at 1,764 s",
-            segment)
+        .as("how far FFmpeg had written when %s's upload started; the audio ends at 300 s", segment)
         .isGreaterThan(Duration.ofSeconds(6L * firstSegmentAfterTheVideo))
-        .isLessThan(HALF_OF_THE_LONG_AUDIO);
+        .isLessThan(HALF_OF_THE_FIVE_MINUTE_AUDIO);
   }
 
   // The output's boxes up to the end of its last whole mdat, so that a snapshot taken while FFmpeg
@@ -8763,11 +8782,12 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
-  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 64 s, and 1,764 s of pink noise as
-  // 5.1 AC-3 at 384 kb/s: the video ends inside segment 10, and the audio runs on through
-  // segment 293.
-  private static synchronized Path longAudioAfterVideoEndSource() throws Exception {
-    var source = seekableSources.resolve("long-audio-after-video-end.mp4");
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 64 s, and pink noise as 5.1 AC-3 at
+  // 384 kb/s for the audio's seconds: the video ends inside segment 10, and the audio runs on.
+  private static synchronized Path videoEndsEarlyInItsAudioSource(int audioSeconds)
+      throws Exception {
+    var source =
+        seekableSources.resolve("video-ends-64-s-into-" + audioSeconds + "-s-of-audio.mp4");
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(
           List.of(
@@ -8778,8 +8798,9 @@ class WorkerMediaSmokeTest {
               "-f",
               "lavfi",
               "-i",
-              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=1764,"
-                  + "pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration="
+                  + audioSeconds
+                  + ",pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
               "-c:v",
               "libx264",
               "-g",
@@ -9413,8 +9434,6 @@ class WorkerMediaSmokeTest {
 
   private static FfmpegTranscodeEngine engine(
       TranscodeCapabilityService capabilities, ProcessLauncher launcher) {
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", DEFAULT_FRAGMENTATION_TARGET))
         .capabilityService(capabilities)
@@ -9434,23 +9453,6 @@ class WorkerMediaSmokeTest {
       adjusted.set(parameters, command.get(parameters) + ":lp=1");
       return launcher.launch(adjusted, jobAttemptId);
     };
-  }
-
-  private static TranscodeCapabilityService realCapabilities() {
-    return new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-  }
-
-  // Lists no hardware encoder, so that each codec family runs its software encoder.
-  private static TranscodeCapabilityService softwareCapabilities() {
-    return new TranscodeCapabilityService(
-        "ffmpeg",
-        command -> {
-          if (command.command().contains("-encoders")) {
-            return new ProcessBuilder("true").start();
-          }
-
-          return command.start();
-        });
   }
 
   // A tiny H.264 and AAC source for more than a thousand 1 s segments, recorded once.

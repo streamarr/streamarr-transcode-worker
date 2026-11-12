@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
+import com.streamarr.transcode.fixtures.DetectedCapabilities;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -251,13 +252,10 @@ class BitstreamRewriteSmokeTest {
   }
 
   private static Delivered copied(VideoDecision.Copy copy, int firstSegment) {
-    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     var engine =
         FfmpegTranscodeEngine.builder()
             .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
-            .capabilityService(capabilities)
+            .capabilityService(DetectedCapabilities.realCapabilities())
             .launcher(new ProcessBuilderLauncher())
             .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
             .build();

@@ -120,7 +120,98 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         Arguments.of(
             "the 10-bit test writes a truncated moov",
             EncodeFeature.TEN_BIT,
-            TestEncodeOutput.of(truncatedMoov())));
+            TestEncodeOutput.of(truncatedMoov())),
+        Arguments.of(
+            "the 10-bit test writes a sample entry without its decoder configuration record",
+            EncodeFeature.TEN_BIT,
+            TestEncodeOutput.of(HevcCopies.initializationSegment(box("hvc1", new byte[78])))));
+  }
+
+  @Test
+  @DisplayName("Should not list an encode feature when its test encode cannot start")
+  void shouldNotListAnEncodeFeatureWhenItsTestEncodeCannotStart() {
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              // Only the HLG test encode names the ARIB STD-B67 transfer.
+              if (command.command().stream().anyMatch(arg -> arg.contains("arib-std-b67"))) {
+                throw new IOException("Cannot run program \"ffmpeg\"");
+              }
+
+              return resolve(command, test -> TestEncodeOutput.faithful(test).process());
+            });
+
+    service.detectCapabilities();
+
+    assertThat(featuresByEncoder(service))
+        .containsEntry("libx265", Set.of(TEN_BIT, PQ, DOLBY_VISION_TO_PQ))
+        .containsEntry("libsvtav1", Set.of(TEN_BIT, PQ, DOLBY_VISION_TO_PQ));
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass libx265 its level, tier and colour parameters when a feature's test encode runs"
+          + " with it")
+  void shouldPassLibx265ItsLevelTierAndColourParametersWhenAFeaturesTestEncodeRunsWithIt() {
+    var commands = featureTestCommandsOfADetectionWith("libx265");
+
+    assertThat(commands)
+        .hasSize(EncodeFeature.values().length)
+        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-svtav1-params"))
+        .extracting(command -> parametersAfter("-x265-params", command))
+        .allSatisfy(
+            parameters -> assertThat(parameters).matches("level-idc=\\d+:high-tier=0(:.+)?"))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).doesNotContain("transfer="))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).contains("transfer=arib-std-b67"))
+        .filteredOn(parameters -> parameters.contains("transfer=smpte2084"))
+        .hasSize(2);
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass libsvtav1 its colour parameters when a feature's test encode runs with it")
+  void shouldPassLibsvtav1ItsColourParametersWhenAFeaturesTestEncodeRunsWithIt() {
+    var commands = featureTestCommandsOfADetectionWith("libsvtav1");
+
+    assertThat(commands)
+        .hasSize(EncodeFeature.values().length)
+        .allSatisfy(command -> assertThat(command).isNotEmpty().doesNotContain("-x265-params"))
+        .extracting(command -> parametersAfter("-svtav1-params", command))
+        .satisfiesOnlyOnce(parameters -> assertThat(parameters).isEmpty())
+        .satisfiesOnlyOnce(
+            parameters -> assertThat(parameters).contains("transfer-characteristics=arib-std-b67"))
+        .filteredOn(parameters -> parameters.contains("transfer-characteristics=smpte2084"))
+        .hasSize(2);
+  }
+
+  // The commands of the feature test encodes that one detection runs with the encoder.
+  private static List<List<String>> featureTestCommandsOfADetectionWith(String encoder) {
+    var commands = new ArrayList<List<String>>();
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              commands.add(List.copyOf(command.command()));
+              return resolve(command, test -> TestEncodeOutput.faithful(test).process());
+            });
+
+    service.detectCapabilities();
+
+    return commands.stream()
+        .filter(command -> command.contains("pipe:1"))
+        .filter(command -> command.contains(encoder))
+        .toList();
+  }
+
+  // The value that follows the option in the command; empty when the command lacks the option.
+  private static String parametersAfter(String option, List<String> command) {
+    var index = command.indexOf(option);
+    if (index < 0) {
+      return "";
+    }
+
+    return command.get(index + 1);
   }
 
   @Test
