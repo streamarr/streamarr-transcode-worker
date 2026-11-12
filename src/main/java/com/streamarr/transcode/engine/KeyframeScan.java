@@ -47,11 +47,9 @@ final class KeyframeScan {
   // receives the packets that the pictures before that time reference, which B-frames place up to
   // a few frames later.
   private static final Duration REFERENCES_PAST_THE_LATEST_PICTURE = Duration.ofSeconds(1);
-  // The server's video end and a check's copies subtract the container's start time in different
-  // units: the probe as ffprobe prints it, in whole microseconds, and FFmpeg's -start_at_zero in
-  // the stream's ticks. So the packet that ends the video can end up to half a microsecond before
-  // the server's video end.
-  private static final Duration START_TIME_ROUNDING = Duration.ofNanos(1_000);
+  // A microsecond covers the rounding of the server's video end and of a check's times to whole
+  // microseconds or nanoseconds.
+  private static final Duration TIME_ROUNDING = Duration.ofNanos(1_000);
   private static final int QUIT = 'q';
   private static final long NANOS_PER_SECOND = Duration.ofSeconds(1).toNanos();
 
@@ -268,10 +266,20 @@ final class KeyframeScan {
   // no packet that the read copies later.
   private boolean endsTheRead(Packet packet, Duration readEnd) {
     return packet.decodeTime().compareTo(readEnd) >= 0
-        || request
-            .videoEnd()
-            .filter(end -> packet.presentationEnd().compareTo(end.minus(START_TIME_ROUNDING)) >= 0)
-            .isPresent();
+        || request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent();
+  }
+
+  // The server's video end subtracts the container's start time as ffprobe prints it, in whole
+  // microseconds. FFmpeg's -start_at_zero subtracts that start rounded to the nearest of the
+  // packet's ticks, so on the check's timeline the packet that ends the video can end up to half a
+  // tick before the server's video end.
+  private static boolean endsTheVideo(Packet packet, Duration videoEnd) {
+    return packet
+            .presentationEnd()
+            .plus(packet.tick().dividedBy(2))
+            .plus(TIME_ROUNDING)
+            .compareTo(videoEnd)
+        >= 0;
   }
 
   private static void awaitCopies(FutureTask<Void> copies) throws InterruptedException {
@@ -383,6 +391,7 @@ final class KeyframeScan {
           Packet.builder().stream(stream)
               .presentationTime(durationOf(timeBase, presentationTime))
               .presentationEnd(durationOf(timeBase, Math.addExact(presentationTime, duration)))
+              .tick(durationOf(timeBase, 1))
               .decodeTime(durationOf(timeBase, decodeTime))
               .isKeyframe(isKeyframe(packetRecord))
               .build());
@@ -410,13 +419,15 @@ final class KeyframeScan {
 
   /**
    * A packet of one of a framecrc's streams, on the attempt's zero-based timeline. {@code
-   * presentationEnd} is its presentation time plus its duration.
+   * presentationEnd} is its presentation time plus its duration, and {@code tick} is how long one
+   * tick of its time base lasts.
    */
   @Builder
   private record Packet(
       String stream,
       Duration presentationTime,
       Duration presentationEnd,
+      Duration tick,
       Duration decodeTime,
       boolean isKeyframe) {
 

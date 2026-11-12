@@ -178,6 +178,30 @@ class KeyframeSearchSmokeTest {
     assertThat(launcher.input()).as("the q that stops the check at the video's end").isEqualTo("q");
   }
 
+  // The MP4's AAC starts 2 ms in, 24.576 of the video's ticks of 1/12288 s. FFmpeg's
+  // -start_at_zero rounds that start to 25 ticks, so on the check's timeline the video ends 34.5 µs
+  // before the server's video end, which subtracts 2 ms. A read from 5.99 s lands on the video's
+  // last packet, its keyframe at 5.98 s, whose picture the decoder holds until FFmpeg flushes it,
+  // on q or at the end of the file.
+  @Test
+  @DisplayName(
+      "Should send q once the copied video packet that ends the video is read when the container's"
+          + " start lies between two of the video's ticks")
+  void shouldSendQAtTheVideosEndWhenTheContainersStartLiesBetweenTwoOfTheVideosTicks()
+      throws Exception {
+    var source = videoWhoseTimelineStartsBetweenTwoOfItsTicks();
+    var probed = probe(source);
+    assertThat(probed.start()).as("the container's start").isEqualByComparingTo("0.002");
+    assertThat(probed.timeBases()).as("the video's time base").containsEntry(0, "1/12288");
+    var launcher = new InputRecordingLauncher();
+    var scan = firstPictureCheck(source, probed.videoEnd(), launcher);
+
+    var read = scan.firstDecodedPicture(Duration.ofMillis(5990), Duration.ofMillis(5990));
+
+    assertThat(read).isInstanceOf(KeyframeScan.SeekRead.FirstPicture.class);
+    assertThat(launcher.input()).as("the q that stops the check at the video's end").isEqualTo("q");
+  }
+
   // The pinned FFmpeg writes this source's video from about 4.1 s on after its audio at 110 s. A
   // read from the keyframe at 4 s copies that keyframe, then the audio, then the rest of the video.
   // A check that stopped on copied audio 10 s past its read end rejected that read, whose decoder
@@ -261,6 +285,40 @@ class KeyframeSearchSmokeTest {
             "copy",
             "-f",
             "mpegts",
+            source.toString()));
+    return source;
+  }
+
+  // 6 s of H.264 at 128x72 and 24 fps with keyframes at 0, 2 and 4 s and on its last picture, and
+  // 30 s of AAC, encoded in one FFmpeg into MP4 with every time 24 ms later.
+  private Path videoWhoseTimelineStartsBetweenTwoOfItsTicks() throws Exception {
+    var source = root.resolve("start-between-ticks.mp4");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=24:duration=6",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=duration=30:color=pink:sample_rate=48000:amplitude=0.1",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-g",
+            "48",
+            "-force_key_frames",
+            "0,2,4,5.958",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-output_ts_offset",
+            "0.024",
+            "-f",
+            "mp4",
             source.toString()));
     return source;
   }
