@@ -4059,6 +4059,44 @@ class ProducerTest {
         .isLessThan(stallTimeout);
   }
 
+  // A count that comes two stall timeouts after the one before it, as when the system does not run
+  // the watchdog meanwhile, finds that the scripted FFmpeg read, as does every count after it. The
+  // watchdog counts every 20 ms here.
+  @Test
+  @DisplayName(
+      "Should keep the attempt running when a count of the bytes that FFmpeg has read comes later"
+          + " than the stall timeout and finds that FFmpeg read, while its audio's input reads"
+          + " ahead")
+  void shouldKeepTheAttemptRunningWhenACountThatComesLaterThanTheStallTimeoutFindsThatFfmpegRead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var stallTimeout = Duration.ofMillis(200);
+    var producer =
+        producerFor(process, recording).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    process.delayNextCount(stallTimeout.multipliedBy(2));
+    var readBeforeTheDelayedCount = process.bytesRead();
+
+    awaiting()
+        .until(
+            () ->
+                process.bytesRead() >= readBeforeTheDelayedCount + 3
+                    || producer.outcome().isDone());
+
+    assertThat(producer.outcome())
+        .as("the attempt, after the delayed count and two more")
+        .isNotDone();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+  }
+
   // The scripted FFmpeg reads one more byte at every count, so a count taken while the worker
   // pauses FFmpeg would show in its bytes read. The watchdog counts every 200 ms here.
   @Test
