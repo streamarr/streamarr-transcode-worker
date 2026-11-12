@@ -125,8 +125,7 @@ final class KeyframeScan {
    */
   SeekRead firstDecodedPicture(Duration seekPosition, Duration latestPicture)
       throws InterruptedException {
-    var readEnd = latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE);
-    if (readEnd.compareTo(seekPosition) <= 0) {
+    if (readEnd(latestPicture).compareTo(seekPosition) <= 0) {
       return new SeekRead.NoPictureInTime();
     }
 
@@ -134,7 +133,7 @@ final class KeyframeScan {
         launch(
             commandBuilder.buildFirstPictureCommand(
                 request.sourcePath(), request.transcodeDecision(), seekPosition));
-    var copies = new FutureTask<Void>(() -> readCopiesUpTo(readEnd, process), null);
+    var copies = new FutureTask<Void>(() -> readCopies(latestPicture, process), null);
     Thread.ofVirtual().name("first-picture-copies-" + request.attemptId()).start(copies);
     try {
       return read(process, this::readFirstPicture)
@@ -238,7 +237,7 @@ final class KeyframeScan {
   // and decode the packets that it has read; the forcible end of FFmpeg closes the error output.
   // A reader that fails ends FFmpeg, which would otherwise wait for the reader to take its error
   // output.
-  private void readCopiesUpTo(Duration readEnd, Process process) {
+  private void readCopies(Duration latestPicture, Process process) {
     var stopped = false;
     var framecrc = new Framecrc(Optional.empty());
     try (var copies = linesOf(process.getErrorStream())) {
@@ -247,7 +246,7 @@ final class KeyframeScan {
             framecrc
                 .packetOf(line)
                 .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
-                .filter(packet -> endsTheRead(packet, readEnd))
+                .filter(packet -> endsTheRead(packet, latestPicture))
                 .isPresent();
         if (endsTheRead && !stopped) {
           stopped = true;
@@ -264,9 +263,13 @@ final class KeyframeScan {
 
   // Every video packet after the one that ends the video presents before it, so the decoder needs
   // no packet that the read copies later.
-  private boolean endsTheRead(Packet packet, Duration readEnd) {
-    return packet.decodeTime().compareTo(readEnd) >= 0
+  private boolean endsTheRead(Packet packet, Duration latestPicture) {
+    return packet.decodeTime().compareTo(readEnd(latestPicture)) >= 0
         || request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent();
+  }
+
+  private static Duration readEnd(Duration latestPicture) {
+    return latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE);
   }
 
   // The server's video end subtracts the container's start time as ffprobe prints it, in whole
