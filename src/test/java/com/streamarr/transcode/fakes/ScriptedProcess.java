@@ -205,10 +205,6 @@ public final class ScriptedProcess extends Process {
     exit.complete(exitCode);
   }
 
-  /**
-   * How many bytes of its output the reader has taken. A pipe holds only a bounded amount of
-   * FFmpeg's output that nobody has read, so FFmpeg blocks once the reader stops taking bytes.
-   */
   /** From now on, every count of the bytes that the process has read finds one more. */
   public synchronized void startReading() {
     reading = true;
@@ -233,6 +229,10 @@ public final class ScriptedProcess extends Process {
     return bytesRead;
   }
 
+  /**
+   * How many bytes of its output the reader has taken. A pipe holds only a bounded amount of
+   * FFmpeg's output that nobody has read, so FFmpeg blocks once the reader stops taking bytes.
+   */
   public synchronized int bytesTaken() {
     return position;
   }
