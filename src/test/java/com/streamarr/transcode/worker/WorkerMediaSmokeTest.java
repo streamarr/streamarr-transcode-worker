@@ -291,6 +291,23 @@ class WorkerMediaSmokeTest {
   // 18 s of video and 10 s of FLAC audio in three 6 s segments.
   private static final int FLAC_SOURCE_SEGMENT_COUNT = 3;
   private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
+
+  // The rising-tone sources: 24 s of video, four 6 s segments, and a tone whose frequency climbs
+  // from 200 Hz by 80 Hz each second, so no stretch of it equals another.
+  private static final int RISING_TONE_SOURCE_SEGMENT_COUNT = 4;
+  private static final int RISING_TONE_SAMPLE_RATE = 48_000;
+  // The sources' video ends at 24 s, which the jobs advertise as their end, in audio samples.
+  private static final int RISING_TONE_SOURCE_VIDEO_END_TICKS =
+      RISING_TONE_SOURCE_SEGMENT_COUNT * 6 * RISING_TONE_SAMPLE_RATE;
+  private static final int RISING_TONE_SOURCE_VIDEO_FRAME_TICKS = RISING_TONE_SAMPLE_RATE / 24;
+  private static final String RISING_TONE_SOURCE_VIDEO = "testsrc=size=64x36:rate=24:duration=24";
+  private static final String RISING_TONE =
+      "aevalsrc=0.5*sin(2*PI*(200+40*t)*t):sample_rate=" + RISING_TONE_SAMPLE_RATE + ":duration=";
+  private static final int RISING_TONE_SECONDS = 10;
+  private static final int LATE_RISING_TONE_START_SECONDS = 8;
+  private static final String PACKET_FLAGS = "flags";
+  // Room for the 24 s that a rising-tone job advertises and the last encoder frame past it.
+  private static final int AUDIO_TIMELINE_SAMPLES = 26 * RISING_TONE_SAMPLE_RATE;
   // FFmpeg's FLAC encoder codes 4,608 samples a frame at 48 kHz, less than 0.1 s.
   private static final int FLAC_SAMPLES_PAST_THE_END_AT_MOST = 4_800;
 
@@ -6880,6 +6897,323 @@ class WorkerMediaSmokeTest {
     assertThat(paddedSamples.length)
         .isGreaterThanOrEqualTo(advertisedEndBytes)
         .isLessThanOrEqualTo(advertisedEndBytes + FLAC_SAMPLES_PAST_THE_END_AT_MOST * 2);
+  }
+
+  // ADR 0058 lets copied audio end up to one frame before encoded video. The copy changes nothing:
+  // every packet keeps its bytes and its time, and the last 30 ms of the picture have no audio.
+  @Test
+  @DisplayName(
+      "Should upload every audio packet of the source unchanged at its own time when copied audio"
+          + " ends within one video frame of the held video's end")
+  void shouldUploadEverySourceAudioPacketUnchangedWhenCopiedAudioEndsWithinAFrameOfTheVideosEnd()
+      throws Exception {
+    var source = aacAudioEndsBeforeVideoSource(Duration.ofMillis(30));
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            heldVideoBesideCopiedAudioJob(source).build());
+
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(uploadNames(RISING_TONE_SOURCE_SEGMENT_COUNT));
+    var sourceAudio = sourceAudioPacketsOf(source);
+    // ffprobe flags the source's priming packet as discarded from the source's edit list, which
+    // says nothing of the packet's bytes or time.
+    assertThat(audioPacketsOf(uploads))
+        .isNotEmpty()
+        .usingRecursiveFieldByFieldElementComparatorIgnoringFields(PACKET_FLAGS)
+        .containsExactlyElementsOf(sourceAudio);
+    assertThat(RISING_TONE_SOURCE_VIDEO_END_TICKS - endOf(sourceAudio.getLast()))
+        .as("how long the 24 fps video outlasts the audio, in 48 kHz ticks")
+        .isBetween(1L, (long) RISING_TONE_SOURCE_VIDEO_FRAME_TICKS);
+  }
+
+  // The audio ends 60 ms before the video's end, more than a 24 fps frame, so the worker refuses
+  // the segment that holds that end. Every segment before it holds the source's own packets.
+  @Test
+  @DisplayName(
+      "Should report copied audio that ran short and upload the earlier audio packets unchanged at"
+          + " their own times when copied audio ends more than a frame before the held video's end")
+  void shouldReportCopiedAudioThatRanShortAndUploadTheEarlierPacketsUnchangedWhenItEndsAFrameEarly()
+      throws Exception {
+    var source = aacAudioEndsBeforeVideoSource(Duration.ofMillis(60));
+
+    var failed =
+        executeExpectingFailure(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            heldVideoBesideCopiedAudioJob(source).build());
+
+    assertThat(failed.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPIED_AUDIO_RAN_SHORT);
+    var lastSegment = RISING_TONE_SOURCE_SEGMENT_COUNT - 1;
+    assertThat(failed.uploads().names()).containsExactlyElementsOf(uploadNames(lastSegment));
+    var sourceAudio = sourceAudioPacketsOf(source);
+    assertThat(RISING_TONE_SOURCE_VIDEO_END_TICKS - endOf(sourceAudio.getLast()))
+        .as("how long the 24 fps video outlasts the audio, in 48 kHz ticks")
+        .isGreaterThan(RISING_TONE_SOURCE_VIDEO_FRAME_TICKS);
+    assertThat(audioPacketsOf(failed.uploads()))
+        .isNotEmpty()
+        .usingRecursiveFieldByFieldElementComparatorIgnoringFields(PACKET_FLAGS)
+        .containsExactlyElementsOf(
+            sourceAudio.stream()
+                .filter(packet -> packet.pts() < lastSegment * SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS)
+                .toList());
+  }
+
+  // The recovery of ADR 0058 encodes the audio and pads it. The encode must move no sample: a
+  // rising tone repeats no value pattern, so a sample at another time would not compare equal.
+  @Test
+  @DisplayName(
+      "Should present every source sample at its own time, then only digital silence without a"
+          + " break up to the advertised end, when a lossless encode pads audio that ends 14 s"
+          + " before held video")
+  void shouldPresentEverySourceSampleAtItsOwnTimeThenOnlySilenceWhenAPaddedEncodeHoldsTheVideo()
+      throws Exception {
+    var source = flacRisingToneSource(0);
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            heldVideoBesidePaddedFlacJob(source).build());
+
+    var sourceAudio = audioTimelineOf(Files.readAllBytes(source));
+    var uploadedAudio = audioTimelineOf(uploads.contentOf(uploads.names()));
+    var sourceEnd = RISING_TONE_SECONDS * RISING_TONE_SAMPLE_RATE;
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(uploadNames(RISING_TONE_SOURCE_SEGMENT_COUNT));
+    assertThat(sourceAudio.presentedRuns()).containsExactly(List.of(0, sourceEnd));
+    assertThat(uploadedAudio.presentedRuns())
+        .as("one unbroken run of samples from zero to the advertised end at 24 s")
+        .singleElement()
+        .satisfies(
+            run -> {
+              assertThat(run.getFirst()).isZero();
+              assertThat(run.getLast())
+                  .isBetween(
+                      RISING_TONE_SOURCE_VIDEO_END_TICKS,
+                      RISING_TONE_SOURCE_VIDEO_END_TICKS + FLAC_SAMPLES_PAST_THE_END_AT_MOST);
+            });
+    assertThat(uploadedAudio.samplesBetween(0, sourceEnd))
+        .as("the uploaded samples where the source has audio")
+        .isEqualTo(sourceAudio.samplesBetween(0, sourceEnd));
+    assertThat(uploadedAudio.samplesBetween(sourceEnd, RISING_TONE_SOURCE_VIDEO_END_TICKS))
+        .as("the uploaded samples after the source's audio")
+        .containsOnly((short) 0);
+  }
+
+  // The audio starts 8 s after the video, more than a 6 s segment. Whether the time before the
+  // audio holds samples is left open here: the run that holds the audio may start at or before it.
+  @Test
+  @DisplayName(
+      "Should present every source sample at its own time, no sound before it, and only digital"
+          + " silence without a break after it up to the advertised end, when a lossless encode"
+          + " pads audio that starts more than a segment after the video")
+  void shouldPresentEverySourceSampleAtItsOwnTimeWhenAPaddedEncodeReadsAudioThatStartsLate()
+      throws Exception {
+    var source = flacRisingToneSource(LATE_RISING_TONE_START_SECONDS);
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            heldVideoBesidePaddedFlacJob(source).build());
+
+    var sourceAudio = audioTimelineOf(Files.readAllBytes(source));
+    var uploadedAudio = audioTimelineOf(uploads.contentOf(uploads.names()));
+    var start = LATE_RISING_TONE_START_SECONDS * RISING_TONE_SAMPLE_RATE;
+    var end = start + RISING_TONE_SECONDS * RISING_TONE_SAMPLE_RATE;
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(uploadNames(RISING_TONE_SOURCE_SEGMENT_COUNT));
+    assertThat(sourceAudio.presentedRuns()).containsExactly(List.of(start, end));
+    assertThat(uploadedAudio.presentedRuns().getLast())
+        .as("the unbroken run of samples that holds the audio and reaches the advertised end")
+        .satisfies(
+            run -> {
+              assertThat(run.getFirst()).isLessThanOrEqualTo(start);
+              assertThat(run.getLast())
+                  .isBetween(
+                      RISING_TONE_SOURCE_VIDEO_END_TICKS,
+                      RISING_TONE_SOURCE_VIDEO_END_TICKS + FLAC_SAMPLES_PAST_THE_END_AT_MOST);
+            });
+    assertThat(uploadedAudio.samplesBetween(start, end))
+        .as("the uploaded samples where the source has audio")
+        .isEqualTo(sourceAudio.samplesBetween(start, end));
+    assertThat(uploadedAudio.samplesBetween(0, start))
+        .as("the uploaded samples before the source's audio")
+        .containsOnly((short) 0);
+    assertThat(uploadedAudio.samplesBetween(end, RISING_TONE_SOURCE_VIDEO_END_TICKS))
+        .as("the uploaded samples after the source's audio")
+        .containsOnly((short) 0);
+  }
+
+  // An encode of the rising-tone sources' video that holds its last frame to the advertised end at
+  // 24 s, beside a copy of their AAC audio, which the job names.
+  private static VariantJob.Builder heldVideoBesideCopiedAudioJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(RISING_TONE_SOURCE_SEGMENT_COUNT);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds(RISING_TONE_SOURCE_SEGMENT_COUNT * 6L);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(1);
+    return job;
+  }
+
+  // An encode of the rising-tone sources' video that holds its last frame, beside a mono FLAC
+  // encode of the audio that the job names, padded to the advertised end at 24 s.
+  private static VariantJob.Builder heldVideoBesidePaddedFlacJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, RISING_TONE_SOURCE_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getDecisionBuilder().getAudioBuilder().setCodec("flac").setChannels(1).setStreamIndex(1);
+    return job;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 24 s, in MP4 so that ffprobe reads the
+  // audio's times in 48 kHz ticks, and a rising tone as AAC that ends this long before the video.
+  private static synchronized Path aacAudioEndsBeforeVideoSource(Duration beforeTheVideosEnd)
+      throws Exception {
+    var source =
+        seekableSources.resolve("aac-ends-" + beforeTheVideosEnd.toMillis() + "ms-early.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var audioSeconds =
+          BigDecimal.valueOf(
+                  RISING_TONE_SOURCE_SEGMENT_COUNT * 6_000L - beforeTheVideosEnd.toMillis())
+              .movePointLeft(3);
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE_SOURCE_VIDEO,
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE + audioSeconds.toPlainString(),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The same video in Matroska, which keeps each packet's own time, and 10 s of the rising tone as
+  // 16-bit mono FLAC that starts this long after the video.
+  private static synchronized Path flacRisingToneSource(int startSeconds) throws Exception {
+    var source = seekableSources.resolve("flac-rising-tone-from-" + startSeconds + "s.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE_SOURCE_VIDEO,
+              "-itsoffset",
+              Integer.toString(startSeconds),
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE + RISING_TONE_SECONDS,
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s16"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  private List<Packet> sourceAudioPacketsOf(Path source) throws Exception {
+    return FfprobePackets.of(Files.readAllBytes(source), root).stream()
+        .filter(Packet::isAudio)
+        .toList();
+  }
+
+  private static long endOf(Packet packet) {
+    return packet.pts() + packet.duration();
+  }
+
+  // The first audio stream's decoded 16-bit samples, each at its presentation time counted in
+  // 48 kHz samples from zero. ffprobe states where each decoded frame starts, so a time that no
+  // frame covers holds no sample, and a frame at another time than its source's moves its samples.
+  private AudioTimeline audioTimelineOf(byte[] media) throws Exception {
+    var file = Files.createTempFile(root, "timeline", ".media");
+    Files.write(file, media);
+    var frames =
+        runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "frame=pts_time,nb_samples",
+                "-of",
+                "csv=p=0",
+                file.toString()));
+    var decoded =
+        ByteBuffer.wrap(decodedAudio(file, "0:a:0")).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
+    var samples = new short[AUDIO_TIMELINE_SAMPLES];
+    var presented = new boolean[AUDIO_TIMELINE_SAMPLES];
+    for (var frame : frames.lines().filter(line -> !line.isBlank()).toList()) {
+      var fields = frame.split(",");
+      var start =
+          new BigDecimal(fields[0])
+              .multiply(BigDecimal.valueOf(RISING_TONE_SAMPLE_RATE))
+              .setScale(0, RoundingMode.HALF_UP)
+              .intValueExact();
+      var count = Integer.parseInt(fields[1]);
+      assertThat(IntStream.range(start, start + count).noneMatch(time -> presented[time]))
+          .as("the frame at sample %s overlaps no earlier frame", start)
+          .isTrue();
+      decoded.get(samples, start, count);
+      Arrays.fill(presented, start, start + count, true);
+    }
+
+    assertThat(decoded.hasRemaining()).as("ffprobe's frames hold every decoded sample").isFalse();
+    return new AudioTimeline(samples, presented);
+  }
+
+  private record AudioTimeline(short[] samples, boolean[] presented) {
+
+    // Each unbroken run of times that hold a sample, as its first time and the time after its last.
+    List<List<Integer>> presentedRuns() {
+      var runs = new ArrayList<List<Integer>>();
+      var start = -1;
+      for (var time = 0; time <= presented.length; time++) {
+        var holdsASample = time < presented.length && presented[time];
+        if (holdsASample && start < 0) {
+          start = time;
+        }
+
+        if (!holdsASample && start >= 0) {
+          runs.add(List.of(start, time));
+          start = -1;
+        }
+      }
+
+      return runs;
+    }
+
+    short[] samplesBetween(int start, int end) {
+      return Arrays.copyOfRange(samples, start, end);
+    }
   }
 
   // The encoder takes 48 kHz stereo floats, so FFmpeg resamples and downmixes the 96 kHz 16-bit 5.1

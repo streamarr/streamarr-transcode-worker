@@ -36,6 +36,8 @@ final class FragmentedMp4Exception extends RuntimeException {
     MULTIPLE_VIDEO_TRACKS,
     /** The job names its audio stream, but the initialization segment declares no sound track. */
     NO_SOUND_TRACK,
+    /** A media segment's video outlasts the copied audio that the job requires. */
+    COPIED_AUDIO_RAN_SHORT,
     SKIPPED_SEGMENT_NUMBER,
     /**
      * A keyframe, or an audio sample, starts before the one of its track that arrived before it.

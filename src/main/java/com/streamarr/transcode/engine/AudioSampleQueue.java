@@ -4,9 +4,14 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.stream.Stream;
 
 /**
@@ -37,6 +42,14 @@ final class AudioSampleQueue {
   // Before any audio sample, none has run backwards.
   private long lastPresentationTime = Long.MIN_VALUE;
   private long droppedLateSampleCount;
+  // How many of the samples that arrived before the latest last each duration. The most common
+  // duration is one full audio frame: an encoder shortens only the audio's last frame, which
+  // arrives last, the sample before a gap in the audio lasts longer than a frame, and a source's
+  // times rounded to the millisecond shorten or lengthen only a few copied frames.
+  private final Map<Long, Long> earlierSampleDurationCounts = new HashMap<>();
+  private OptionalLong latestSampleDuration = OptionalLong.empty();
+  private Optional<AudioTail> prerollTail = Optional.empty();
+  private Optional<AudioTail> discardedTail = Optional.empty();
 
   /**
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence; empty
@@ -101,13 +114,29 @@ final class AudioSampleQueue {
   /** Drops the samples held for segments after this one. */
   void discardAfter(long number) {
     while (!held.isEmpty() && held.peekLast().number() > number) {
-      held.removeLast();
+      var dropped = held.removeLast().sample();
+      discardedTail = discardedTail.or(() -> Optional.of(tailOf(dropped)));
     }
+  }
+
+  /**
+   * Where the latest sample that {@link #discardAfter} dropped ends; empty when it dropped none.
+   */
+  Optional<AudioTail> discardedTail() {
+    return discardedTail;
   }
 
   /** The audio samples dropped because they arrived after their segment closed. */
   long droppedLateSampleCount() {
     return droppedLateSampleCount;
+  }
+
+  /**
+   * Where the last preroll sample ends, which the segment before the attempt's first carries; empty
+   * when no preroll sample arrived.
+   */
+  Optional<AudioTail> prerollTail() {
+    return prerollTail;
   }
 
   Stream<Fragment> heldFragments() {
@@ -122,6 +151,9 @@ final class AudioSampleQueue {
   // false when it drops it.
   private boolean tryHold(Fragment fragment, Sample sample) {
     requireNoRegression(sample);
+    latestSampleDuration.ifPresent(
+        latest -> earlierSampleDurationCounts.merge(latest, 1L, Long::sum));
+    latestSampleDuration = OptionalLong.of(sample.duration());
     var timescale = audioTimescaleOf(fragment);
     if (startsAtOrAfterThePaddedEnd(sample.presentationTime(), timescale)) {
       return false;
@@ -133,6 +165,7 @@ final class AudioSampleQueue {
     }
 
     if (number < startSequenceNumber) {
+      prerollTail = Optional.of(tailOf(sample, timescale));
       return false;
     }
 
@@ -172,6 +205,29 @@ final class AudioSampleQueue {
 
   private static long audioTimescaleOf(Fragment fragment) {
     return fragment.tracks().audio().orElseThrow().timescale();
+  }
+
+  /**
+   * Where the audio sample ends, and where one more full audio frame would end after it: a frame at
+   * least as long as the sample and as the duration most samples that arrived before the latest
+   * share, the shorter of two as common.
+   */
+  AudioTail tailOf(CarriedSample carried) {
+    return tailOf(carried.sample(), audioTimescaleOf(carried.fragment()));
+  }
+
+  private AudioTail tailOf(Sample sample, long timescale) {
+    var duration = sample.duration();
+    return AudioTail.of(
+        sample, timescale, Math.max(duration, mostCommonEarlierSampleDuration().orElse(duration)));
+  }
+
+  private Optional<Long> mostCommonEarlierSampleDuration() {
+    return earlierSampleDurationCounts.entrySet().stream()
+        .max(
+            Entry.<Long, Long>comparingByValue()
+                .thenComparing(Entry.comparingByKey(Comparator.reverseOrder())))
+        .map(Entry::getKey);
   }
 
   private record Queued(long number, CarriedSample sample) {}

@@ -32,6 +32,7 @@ import lombok.NonNull;
  */
 final class SegmentAssembler {
 
+  private final SegmentIntervals intervals;
   private final SegmentGrouper grouper;
   private final AudioSampleQueue audio;
   private final VideoProgress video;
@@ -41,6 +42,9 @@ final class SegmentAssembler {
   private final Optional<OutputFrameRate> encodedFrameRate;
   private final VideoDecision videoDecision;
   private final boolean requiresSoundTrack;
+  private final boolean copiesAudio;
+  private final MediaTime minimumCopyDuration;
+  private Optional<AudioTail> copiedAudioTail = Optional.empty();
   // Set by the initialization segment, which the reader returns before any fragment.
   private Optional<VideoSampleRewrite> sampleRewrite = Optional.empty();
   // An AV1 encode's initialization segment, held until the first fragment that carries video.
@@ -58,6 +62,8 @@ final class SegmentAssembler {
    *     empty when the attempt copies the video, whose sample durations follow the source
    * @param videoDecision the video that the initialization segment must declare
    * @param requiresSoundTrack whether the initialization segment must declare a sound track
+   * @param copiesAudio whether the attempt copies the source's audio packets, so that the assembler
+   *     refuses a media segment whose video outlasts that audio when it requires a sound track
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence, at or
    *     after which the assembler drops every audio sample; empty for any other attempt
    */
@@ -69,7 +75,9 @@ final class SegmentAssembler {
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
       boolean requiresSoundTrack,
+      boolean copiesAudio,
       @NonNull Optional<Duration> paddedAudioEnd) {
+    this.intervals = intervals;
     this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
     this.audio = new AudioSampleQueue(intervals, startSequenceNumber, paddedAudioEnd);
     this.video = new VideoProgress(intervals);
@@ -77,6 +85,8 @@ final class SegmentAssembler {
     this.encodedFrameRate = encodedFrameRate;
     this.videoDecision = videoDecision;
     this.requiresSoundTrack = requiresSoundTrack;
+    this.copiesAudio = copiesAudio;
+    this.minimumCopyDuration = intervals.shortestInterval();
   }
 
   /**
@@ -88,9 +98,10 @@ final class SegmentAssembler {
    *     track that it requires or other video than the decision, when the first video sample of an
    *     AV1 encode holds no sequence header that matches its {@code av1C}, when a video sample that
    *     the copy rewrites cannot be read, when the grouper refuses the fragment, when it holds a
-   *     short video sample or an audio sample that starts before the one before it, or when the
+   *     short video sample or an audio sample that starts before the one before it, when the
    *     rewritten initialization segment or a segment it closes is larger than the segment cap once
-   *     rebuilt, after which nothing is delivered, not even the segments it would close
+   *     rebuilt, or when a segment it closes has video beyond the copied audio it requires, after
+   *     which nothing is delivered, not even the segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
@@ -167,7 +178,7 @@ final class SegmentAssembler {
    */
   void dropAudioAfterTheLastSegment() {
     heldInitializationSegment = Optional.empty();
-    grouper.finish().map(AwaitingSegment::of).ifPresent(awaitingAudio::addLast);
+    grouper.finish().map(AwaitingSegment::lastOf).ifPresent(awaitingAudio::addLast);
     if (!awaitingAudio.isEmpty()) {
       audio.discardAfter(awaitingAudio.getLast().sequenceNumber());
     }
@@ -178,7 +189,8 @@ final class SegmentAssembler {
    * only the audio of its own interval; the audio after the last segment's interval is dropped
    * first.
    *
-   * @throws FragmentedMp4Exception when one is larger than the segment cap once rebuilt
+   * @throws FragmentedMp4Exception when one is larger than the segment cap once rebuilt, or has
+   *     video beyond the copied audio it requires
    */
   List<ClosedSegment> finish() {
     dropAudioAfterTheLastSegment();
@@ -291,6 +303,8 @@ final class SegmentAssembler {
     var segment = awaitingAudio.removeFirst();
     var audioSamples = new ArrayList<>(audio.close(segment.sequenceNumber()));
     audioSamples.addAll(furtherAudio);
+    requireCopiedAudio(segment, audioSamples);
+
     var rebuilt =
         RebuiltSegment.builder()
             .sequenceNumber(segment.sequenceNumber())
@@ -312,6 +326,89 @@ final class SegmentAssembler {
     return rebuilt;
   }
 
+  private void requireCopiedAudio(AwaitingSegment segment, List<CarriedSample> samples) {
+    if (!copiesAudio || !requiresSoundTrack) {
+      return;
+    }
+
+    if (!samples.isEmpty()) {
+      copiedAudioTail = Optional.of(audio.tailOf(samples.getLast()));
+    }
+
+    if (videoDecision instanceof VideoDecision.Copy && !samples.isEmpty()) {
+      return;
+    }
+
+    var videoSamples = segment.videoSamples();
+    var timescale = videoSamples.getFirst().fragment().tracks().video().orElseThrow().timescale();
+    var lastPictureEnd =
+        videoSamples.stream()
+            .mapToLong(
+                carried ->
+                    Math.addExact(carried.sample().presentationTime(), carried.sample().duration()))
+            .max()
+            .orElseThrow();
+    // The segment takes only the audio that starts inside its interval, so the audio beside video
+    // that a late keyframe leaves past the interval's end belongs to the next segment. The output's
+    // last segment has no next segment to carry it.
+    var end = lastPictureEnd;
+    if (!segment.lastOfTheOutput()) {
+      end = Math.min(end, intervals.endOf(segment.sequenceNumber(), timescale).orElse(end));
+    }
+
+    var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
+    // The audio after the output's last segment's interval was dropped, because no keyframe opened
+    // the interval it belongs to; it still shows how far the copied audio reaches beside the
+    // segment's pictures past its interval.
+    var audioTail = audio.discardedTail().or(() -> copiedAudioTail.or(audio::prerollTail));
+    if (audioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
+      return;
+    }
+
+    var frameDuration =
+        videoSamples.stream().mapToLong(carried -> carried.sample().duration()).max().orElseThrow();
+    var beforeLastFrame = new MediaTime(end - frameDuration, new TimeBase(1, timescale));
+    if (videoDecision instanceof VideoDecision.Encode
+        && audioTail
+            .filter(tail -> tail.coversToWithinOneFrame(videoEnd, beforeLastFrame))
+            .isPresent()) {
+      return;
+    }
+
+    // A short copy may end with one final picture after its last audio packet. That still takes
+    // the normal short-copy path; a complete interval without audio needs an audio encode, and so
+    // does any segment that a later one follows.
+    if (videoDecision instanceof VideoDecision.Copy
+        && segment.lastOfTheOutput()
+        && endsBeforeItsIntervalsEnd(segment, lastPictureEnd, timescale)) {
+      return;
+    }
+
+    throw new FragmentedMp4Exception(
+        Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
+  }
+
+  // Whether the segment's last picture ends before its own interval does, wherever its first
+  // picture starts: a keyframe can come late, and a picture can be presented before the keyframe
+  // it follows. The last listed segment of a job without an advertised end runs to the end of the
+  // media and has no interval end, so its video is measured against the job's shortest interval.
+  private boolean endsBeforeItsIntervalsEnd(
+      AwaitingSegment segment, long lastPictureEnd, long timescale) {
+    var intervalEnd = intervals.endOf(segment.sequenceNumber(), timescale);
+    if (intervalEnd.isPresent()) {
+      return lastPictureEnd < intervalEnd.getAsLong();
+    }
+
+    var start =
+        segment.videoSamples().stream()
+            .mapToLong(carried -> carried.sample().presentationTime())
+            .min()
+            .orElseThrow();
+    return new MediaTime(lastPictureEnd - start, new TimeBase(1, timescale))
+            .compareTo(minimumCopyDuration)
+        < 0;
+  }
+
   private Set<Fragment> heldFragments() {
     var held = Collections.newSetFromMap(new IdentityHashMap<Fragment, Boolean>());
     held.addAll(grouper.heldFragments());
@@ -325,10 +422,15 @@ final class SegmentAssembler {
   // assembler references exactly the fragments heldFragments() counts. The audio queue holds the
   // fragments of the audio the segment still takes; the grouper's other fragments of it, such as
   // an audio-only fragment of an earlier segment's audio, hold nothing it delivers.
-  private record AwaitingSegment(int sequenceNumber, List<CarriedSample> videoSamples) {
+  private record AwaitingSegment(
+      int sequenceNumber, List<CarriedSample> videoSamples, boolean lastOfTheOutput) {
 
     static AwaitingSegment of(MediaSegment segment) {
-      return new AwaitingSegment(segment.sequenceNumber(), segment.videoSamples());
+      return new AwaitingSegment(segment.sequenceNumber(), segment.videoSamples(), false);
+    }
+
+    static AwaitingSegment lastOf(MediaSegment segment) {
+      return new AwaitingSegment(segment.sequenceNumber(), segment.videoSamples(), true);
     }
   }
 
