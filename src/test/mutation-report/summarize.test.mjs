@@ -113,6 +113,21 @@ test('Should name a shard that wrote no report and score the others when one did
   assert.match(result.stdout, /\*\*Mutation score: 50\.0%\*\* \(1 of 2 mutants detected\)/);
 });
 
+test('Should compare nothing when a shard wrote no report and an earlier run left a summary', (t) => {
+  const pit = fixture(t);
+  pit.write(mutant({ status: 'KILLED' }), mutant({ status: 'SURVIVED' }));
+
+  const result = pit.run({
+    shards: ['unfinished.xml'],
+    previous: { format: 1, commit: 'fedcba9876543210', mutants: 4, detected: 2, undetected: [] },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /A shard wrote no report, so nothing is compared with an earlier run\./);
+  assert.doesNotMatch(result.stdout, /Since the previous successful run/);
+  assert.doesNotMatch(result.stdout, /survived \(new\)/);
+});
+
 test('Should list each mutant no test detected when some escape the tests', (t) => {
   const pit = fixture(t);
   pit.write(

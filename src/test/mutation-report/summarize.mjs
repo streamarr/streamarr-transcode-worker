@@ -227,7 +227,11 @@ const summary = {
 };
 writeFileSync(options.write, `${JSON.stringify(summary, null, 2)}\n`);
 
-const { previous, note } = readPrevious(options.previous);
+// A partial run would count the missing shard's undetected mutants as gone.
+const { previous, note } =
+  missing.length > 0
+    ? { note: 'A shard wrote no report, so nothing is compared with an earlier run.' }
+    : readPrevious(options.previous);
 const { added, gone } = previous === undefined ? { added: new Set(), gone: 0 } : newcomers(undetected, previous);
 
 console.log(
