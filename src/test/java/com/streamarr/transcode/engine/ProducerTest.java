@@ -673,6 +673,76 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // 60 pictures of 1/60 s, 16.7 ms each. The copied audio is 45 frames of 1,024 ticks, 21.3 ms
+  // each, and a last frame its encoder shortened to 928 ticks, 19.3 ms. It ends at 0.979 s, 20.7 ms
+  // before the video.
+  @Test
+  @DisplayName(
+      "Should deliver an encoded segment when its copied audio ends within one full audio frame of"
+          + " its video after a shortened last frame")
+  void
+      shouldDeliverAnEncodedSegmentWhenItsCopiedAudioEndsWithinOneFullAudioFrameOfItsVideoAfterAShortenedLastFrame() {
+    var producer =
+        producerOfEncodedSixtyFramesPerSecondBeside(
+            joined(audioSamples(45, 1_024), audioSamples(1, 928)));
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The same video. The copied audio is 50 samples of 920 ticks, 19.2 ms each, and a last sample of
+  // 1,040 ticks, 21.7 ms. It ends at 0.98 s, 20 ms before the video: within its own last frame,
+  // though more than one of the shorter samples before it.
+  @Test
+  @DisplayName(
+      "Should deliver an encoded segment when its copied audio ends within its own last frame of its"
+          + " video after shorter frames")
+  void
+      shouldDeliverAnEncodedSegmentWhenItsCopiedAudioEndsWithinItsOwnLastFrameOfItsVideoAfterShorterFrames() {
+    var producer =
+        producerOfEncodedSixtyFramesPerSecondBeside(
+            joined(audioSamples(50, 920), audioSamples(1, 1_040)));
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The same video. The copied audio's first sample lasts 8,192 ticks, 171 ms, as the sample before
+  // a gap in the audio does. Then come 37 frames of 1,024 ticks and a last frame shortened to 384
+  // ticks. It ends at 0.968 s, 32 ms before the video: more than one full frame, though less than
+  // that first sample.
+  @Test
+  @DisplayName(
+      "Should refuse an encoded segment when its copied audio ends more than one full audio frame"
+          + " before its video although an earlier sample spans a gap")
+  void
+      shouldRefuseAnEncodedSegmentWhenItsCopiedAudioEndsMoreThanOneFullAudioFrameBeforeItsVideoAlthoughAnEarlierSampleSpansAGap() {
+    var producer =
+        producerOfEncodedSixtyFramesPerSecondBeside(
+            joined(audioSamples(1, 8_192), audioSamples(37, 1_024), audioSamples(1, 384)));
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
+  }
+
+  // One second of encoded video at 60 fps, and copied audio of these durations from 0 s.
+  private Producer producerOfEncodedSixtyFramesPerSecondBeside(Integer[] audioSampleDurations) {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(400)
+                .videoSampleCount(60)
+                .audioFrom(0, audioSampleDurations)
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    return producerOfOneSecondSegments(process)
+        .copiesAudio(true)
+        .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+        .requiresSoundTrack(true)
+        .start();
+  }
+
   // The audio of a segment is the samples that start inside its interval, so the video that a late
   // keyframe leaves past the interval's end has its audio in the next segment.
   @Test
@@ -786,6 +856,11 @@ class ProducerTest {
   // This many audio samples, each lasting this many ticks of the audio's 48,000.
   private static Integer[] audioSamples(int count, int duration) {
     return IntStream.range(0, count).mapToObj(_ -> duration).toArray(Integer[]::new);
+  }
+
+  // The audio samples of each run, one run after another.
+  private static Integer[] joined(Integer[]... runs) {
+    return Arrays.stream(runs).flatMap(Arrays::stream).toArray(Integer[]::new);
   }
 
   static Stream<Recording> recordingsWhoseAudioLastsAsLongAsTheirVideo() {

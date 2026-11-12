@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.stream.Stream;
 
 /**
@@ -37,6 +38,11 @@ final class AudioSampleQueue {
   // Before any audio sample, none has run backwards.
   private long lastPresentationTime = Long.MIN_VALUE;
   private long droppedLateSampleCount;
+  // How long one full audio frame lasts: the shortest sample that arrived before the latest. An
+  // encoder shortens only the audio's last frame, which arrives last, and the sample before a gap
+  // in the audio lasts longer than a frame.
+  private OptionalLong shortestEarlierSampleDuration = OptionalLong.empty();
+  private OptionalLong latestSampleDuration = OptionalLong.empty();
   private Optional<AudioTail> prerollTail = Optional.empty();
   private Optional<AudioTail> discardedTail = Optional.empty();
 
@@ -140,6 +146,11 @@ final class AudioSampleQueue {
   // false when it drops it.
   private boolean tryHold(Fragment fragment, Sample sample) {
     requireNoRegression(sample);
+    latestSampleDuration.ifPresent(
+        latest ->
+            shortestEarlierSampleDuration =
+                OptionalLong.of(Math.min(latest, shortestEarlierSampleDuration.orElse(latest))));
+    latestSampleDuration = OptionalLong.of(sample.duration());
     var timescale = audioTimescaleOf(fragment);
     if (startsAtOrAfterThePaddedEnd(sample.presentationTime(), timescale)) {
       return false;
@@ -193,13 +204,18 @@ final class AudioSampleQueue {
     return fragment.tracks().audio().orElseThrow().timescale();
   }
 
-  /** Where the audio sample ends, and where one more sample as long would end after it. */
+  /**
+   * Where the audio sample ends, and where one more full audio frame would end after it: a frame at
+   * least as long as the sample and as the shortest sample that arrived before the latest.
+   */
   AudioTail tailOf(CarriedSample carried) {
     return tailOf(carried.sample(), audioTimescaleOf(carried.fragment()));
   }
 
   private AudioTail tailOf(Sample sample, long timescale) {
-    return AudioTail.of(sample, timescale);
+    var duration = sample.duration();
+    return AudioTail.of(
+        sample, timescale, Math.max(duration, shortestEarlierSampleDuration.orElse(duration)));
   }
 
   private record Queued(long number, CarriedSample sample) {}
