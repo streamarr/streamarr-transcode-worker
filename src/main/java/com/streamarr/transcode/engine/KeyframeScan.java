@@ -38,6 +38,9 @@ final class KeyframeScan {
   // What framecrc prints for a time the packet does not carry: FFmpeg's AV_NOPTS_VALUE.
   private static final long NO_TIME = Long.MIN_VALUE;
   private static final int KEYFRAME = 0x1;
+  // AV_PKT_FLAG_DISCARD: the demuxer marks a packet that the decoder decodes but does not present,
+  // as an MP4 edit list marks its preroll.
+  private static final int DISCARD = 0x4;
   // A scan, a landing check and a first picture check's copies write the chosen video stream's
   // packets as their stream 0. A first picture check writes the decoder's pictures as the stream 0
   // of its other output.
@@ -378,6 +381,7 @@ final class KeyframeScan {
               .tick(durationOf(timeBase, 1))
               .decodeTime(durationOf(timeBase, decodeTime))
               .isKeyframe(isKeyframe(packetRecord))
+              .isPresented(isPresented(packetRecord))
               .build());
     }
   }
@@ -385,11 +389,18 @@ final class KeyframeScan {
   // A keyframe that its container marks to decode but not to present, as an edit list marks its
   // preroll, still starts decoding.
   private static boolean isKeyframe(Matcher packetRecord) {
-    var flags =
-        Optional.ofNullable(packetRecord.group(6))
-            .map(value -> Integer.parseUnsignedInt(value, 16))
-            .orElse(KEYFRAME);
-    return (flags & KEYFRAME) != 0;
+    return (flagsOf(packetRecord) & KEYFRAME) != 0;
+  }
+
+  private static boolean isPresented(Matcher packetRecord) {
+    return (flagsOf(packetRecord) & DISCARD) == 0;
+  }
+
+  // framecrc omits the flags of a packet whose only flag is AV_PKT_FLAG_KEY.
+  private static int flagsOf(Matcher packetRecord) {
+    return Optional.ofNullable(packetRecord.group(6))
+        .map(value -> Integer.parseUnsignedInt(value, 16))
+        .orElse(KEYFRAME);
   }
 
   private static Duration durationOf(TimeBase timeBase, long ticks) {
@@ -403,8 +414,9 @@ final class KeyframeScan {
 
   /**
    * A packet of one of a framecrc's streams, on the attempt's zero-based timeline. {@code
-   * presentationEnd} is its presentation time plus its duration, and {@code tick} is how long one
-   * tick of its time base lasts.
+   * presentationEnd} is its presentation time plus its duration, {@code tick} is how long one tick
+   * of its time base lasts, and {@code isPresented} is false for a packet that its container marks
+   * to decode but not to present.
    */
   @Builder
   private record Packet(
@@ -413,7 +425,8 @@ final class KeyframeScan {
       Duration presentationEnd,
       Duration tick,
       Duration decodeTime,
-      boolean isKeyframe) {
+      boolean isKeyframe,
+      boolean isPresented) {
 
     Keyframe times() {
       return new Keyframe(presentationTime, decodeTime);
