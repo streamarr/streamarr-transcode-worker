@@ -1171,8 +1171,7 @@ class WorkerMediaSmokeTest {
   }
 
   // ADR 0054, unchanged packets: H.264 in Annex B form, as MPEG-TS and AVI carry it, and AAC in
-  // ADTS
-  // frames change in a copy, so the scan reports the keyframes and no measurement.
+  // ADTS frames change in a copy, so the scan reports the keyframes and no measurement.
   @ParameterizedTest(name = "{0}")
   @ValueSource(strings = {"mpegts.ts", "avi.avi"})
   @DisplayName(

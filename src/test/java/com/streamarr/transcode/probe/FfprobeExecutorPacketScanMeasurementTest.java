@@ -284,8 +284,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
   }
 
   // FFmpeg's stream copy passes a video packet whose source gave it no presentation time on with
-  // its
-  // decode time, and the packet that decodes last here presents last: 22,500 + 3,750 - 0.
+  // its decode time, and the packet that decodes last here presents last: 22,500 + 3,750 - 0.
   @Test
   @DisplayName(
       "Should end a stream's measured duration at its last packet's decode time when that packet"

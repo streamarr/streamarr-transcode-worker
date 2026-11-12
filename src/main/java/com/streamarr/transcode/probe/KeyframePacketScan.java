@@ -199,7 +199,8 @@ final class KeyframePacketScan {
   }
 
   // -copyts keeps each packet's time from the source; the report subtracts the start time.
-  // -copyinkf keeps the packets before each stream's first keyframe, which a copy also writes.
+  // -copyinkf keeps the packets before each stream's first keyframe. A stream copy drops them, but
+  // ADR 0054 counts them in the first keyframe interval, as a bitrate scan does.
   private static List<String> arguments(ProbedSource probed, List<ScannedStream> scanned) {
     var arguments =
         new ArrayList<>(
