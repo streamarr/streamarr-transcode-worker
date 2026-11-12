@@ -4,11 +4,12 @@ import java.time.Duration;
 
 /**
  * The agapfill audio filter of Streamarr's FFmpeg fork (ADR 0057). It writes digital silence for
- * every step longer than 2 ms between the end of one audio frame and the next frame's timestamp,
- * and, from a start, before the first frame. A step of 2 ms or less, forward or backward, passes
- * through, and the frame keeps its own timestamp, as it does without the filter. A longer overlap
- * passes whole at the end of the frame before it. An encoder, which cuts its frames by sample
- * count, then meets no gap longer than 2 ms, and no sample is dropped.
+ * every forward step longer than 2 ms between the end of one audio frame and the next frame's
+ * timestamp, and, from a start, before the first frame. A step of 2 ms or less, forward or
+ * backward, passes through: the output takes the same step, as it does without the filter. A longer
+ * overlap passes whole at the end of the frame before it, and the audio after it stays that much
+ * later than its timestamps until a gap. An encoder, which cuts its frames by sample count, then
+ * meets no gap longer than 2 ms, and no sample is dropped.
  */
 final class GapFillFilter {
 
