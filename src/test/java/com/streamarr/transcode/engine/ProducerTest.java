@@ -4018,9 +4018,11 @@ class ProducerTest {
         .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
-  // The watchdog dates the bytes that a count finds to the count before it, so an FFmpeg that
-  // stops reading stalls within the stall timeout of its last read and at the earliest two counts,
-  // 200 ms, before that. The 500 ms after it leave time for the test's threads to run.
+  // The watchdog dates the bytes that a count finds to the count before it, the earliest moment
+  // they can have been read. The scripted FFmpeg reads its last byte between that count and the
+  // one that finds it, so the stall comes no sooner than the stall timeout after the first and
+  // within the stall timeout of the second. The watchdog counts every 200 ms here, which leaves the
+  // producer that long to end FFmpeg once the stall is decided.
   @Test
   @DisplayName(
       "Should fail the attempt as an encoder stall within the stall timeout of FFmpeg's last read"
@@ -4033,26 +4035,63 @@ class ProducerTest {
             .pauseAfter(insideThirdMediaSegment(recording))
             .build();
     process.startReading();
-    var stallTimeout = Duration.ofSeconds(1);
+    var stallTimeout = Duration.ofSeconds(2);
     var producer =
         producerFor(process, recording).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
     assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     var readAtThePause = process.bytesRead();
-    awaiting().until(() -> process.bytesRead() >= readAtThePause + 15);
+    awaiting().until(() -> process.bytesRead() >= readAtThePause + 3);
 
     process.stopReading();
-    var stoppedAt = System.nanoTime();
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
     assertThat(failure.detail())
         .isEqualTo(
-            "FFmpeg wrote no output, and the worker counted no bytes that it read, for PT1S while"
+            "FFmpeg wrote no output, and the worker counted no bytes that it read, for PT2S while"
                 + " the producer read it");
-    assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt))
-        .as("the failure, counted from FFmpeg's last read")
-        .isBetween(stallTimeout.minusMillis(300), stallTimeout.plusMillis(500));
-    assertThat(process.wasTerminated()).isTrue();
+    var stalledAt = process.terminatedAtNanos().orElseThrow();
+    assertThat(Duration.ofNanos(stalledAt - process.countBeforeTheLastReadAtNanos()))
+        .as("from the count before the one that found FFmpeg's last read to the stall")
+        .isGreaterThanOrEqualTo(stallTimeout);
+    assertThat(Duration.ofNanos(stalledAt - process.lastReadCountedAtNanos()))
+        .as("from the count that found FFmpeg's last read to the stall")
+        .isLessThan(stallTimeout);
+  }
+
+  // The scripted FFmpeg reads one more byte at every count, so a count taken while the worker
+  // pauses FFmpeg would show in its bytes read. The watchdog counts every 200 ms here.
+  @Test
+  @DisplayName(
+      "Should count none of the bytes that FFmpeg reads while the worker pauses it, and count them"
+          + " again once it continues, when its audio's input reads ahead")
+  void shouldCountNoBytesReadWhileTheWorkerPausesFfmpegWhenItsAudiosInputReadsAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer =
+        producerFor(process, recording)
+            .pipeline(READING_AHEAD)
+            .stallTimeout(Duration.ofSeconds(2))
+            .start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    awaiting().until(producer::pauseFfmpeg);
+
+    process.startReading();
+
+    await("no count of the bytes that FFmpeg read while the worker paused it")
+        .during(Duration.ofMillis(600))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> process.bytesRead() == 0);
+    producer.resumeFfmpeg();
+    awaiting().until(() -> process.bytesRead() > 0);
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
