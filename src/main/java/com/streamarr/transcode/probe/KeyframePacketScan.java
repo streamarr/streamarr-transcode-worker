@@ -328,7 +328,7 @@ final class KeyframePacketScan {
       }
 
       streamEnds.get(packet.outputStream()).extendBy(packet);
-      if (packet.outputStream() == 0 && packet.isKeyframe() && !isKeptKeyframe(packet)) {
+      if (packet.outputStream() == 0 && packet.isKeyframe() && !tryKeepKeyframe(packet)) {
         return false;
       }
 
@@ -336,7 +336,7 @@ final class KeyframePacketScan {
       return true;
     }
 
-    private boolean isKeptKeyframe(Packet packet) {
+    private boolean tryKeepKeyframe(Packet packet) {
       var time = keyframeTime(timesOf(packet));
       if (time.isEmpty()) {
         missingTime = true;
