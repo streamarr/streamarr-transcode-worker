@@ -154,24 +154,32 @@ final class KeyframeScan {
         interval.until().minus(interval.from()));
   }
 
-  // The read runs on a thread of its own, so an interrupt ends the wait at once; the forcible end
-  // of FFmpeg then ends the read, also once the reader has read what it needs.
   private <T> T run(List<String> command, OutputReader<T> reader) throws InterruptedException {
-    Process process;
+    var process = launch(command);
     try {
-      process = launcher.launch(command, request.attemptId());
+      return read(process, reader);
+    } finally {
+      process.destroyForcibly();
+    }
+  }
+
+  private Process launch(List<String> command) {
+    try {
+      return launcher.launch(command, request.attemptId());
     } catch (IOException e) {
       throw new TranscodeException("FFmpeg could not start a keyframe scan", e);
     }
+  }
 
+  // The read runs on a thread of its own, so an interrupt ends the wait at once; the caller's
+  // forcible end of FFmpeg then ends the read, also once the reader has read what it needs.
+  private <T> T read(Process process, OutputReader<T> reader) throws InterruptedException {
     var reading = new FutureTask<>(() -> reader.read(process));
     Thread.ofVirtual().name("keyframe-scan-" + request.attemptId()).start(reading);
     try {
       return reading.get();
     } catch (ExecutionException e) {
       throw new TranscodeException("A keyframe scan failed", e.getCause());
-    } finally {
-      process.destroyForcibly();
     }
   }
 

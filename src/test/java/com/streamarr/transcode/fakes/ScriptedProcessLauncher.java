@@ -8,6 +8,7 @@ import com.streamarr.transcode.engine.PausedProcess;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,9 +22,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class ScriptedProcessLauncher implements ProcessLauncher {
 
-  // The last arguments of a read check or keyframe scan, reversed.
+  // The output of a read check or keyframe scan, which the media FFmpeg never writes.
   private static final List<String> FRAMECRC_TO_STANDARD_OUTPUT =
-      List.of("pipe:1", "framecrc", "-f");
+      List.of("-f", "framecrc", "pipe:1");
 
   private final CommandScript script;
   private final Map<UUID, List<Launch>> launches = new ConcurrentHashMap<>();
@@ -120,8 +121,7 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
   public List<String> mediaCommand(UUID jobAttemptId) {
     var media =
         commands(jobAttemptId).stream()
-            .filter(
-                command -> !command.reversed().subList(0, 3).equals(FRAMECRC_TO_STANDARD_OUTPUT))
+            .filter(command -> Collections.indexOfSubList(command, FRAMECRC_TO_STANDARD_OUTPUT) < 0)
             .toList();
     assertThat(media).as("media FFmpegs launched for job attempt %s", jobAttemptId).hasSize(1);
     return media.getFirst();

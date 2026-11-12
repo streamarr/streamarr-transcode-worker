@@ -103,6 +103,7 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -3652,13 +3653,12 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
-  // The FFmpegs that produce the attempt's media, without the keyframe search's inspections, whose
-  // only output is a framecrc of the packets they read on standard output.
+  // The FFmpegs that produce the attempt's media, without the keyframe search's inspections, which
+  // write a framecrc to standard output.
   private static List<List<String>> mediaFfmpegsOf(List<List<String>> commands) {
     return commands.stream()
         .filter(
-            command ->
-                !command.reversed().subList(0, 3).equals(List.of("pipe:1", "framecrc", "-f")))
+            command -> Collections.indexOfSubList(command, List.of("-f", "framecrc", "pipe:1")) < 0)
         .toList();
   }
 
