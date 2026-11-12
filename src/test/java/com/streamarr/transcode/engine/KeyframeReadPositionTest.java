@@ -126,6 +126,26 @@ class KeyframeReadPositionTest {
     assertThat(source.scannedIntervals().getLast().getFirst()).isZero();
   }
 
+  // On the 2 s grid, segment 1 starts at 2 s, and the search's first interval, one period before
+  // the search time of 1.5 s, would start before the source's start. The keyframe at 1 s presents
+  // in time, but a seek to its time could land in a later copy of a time that the source repeats.
+  @Test
+  @DisplayName(
+      "Should read from the source's start without a scan or a read check when the search's first"
+          + " interval reaches the source's start")
+  void shouldReadFromTheSourcesStartWithoutAScanWhenTheSearchsFirstIntervalReachesIt()
+      throws Exception {
+    var source = new ScriptedKeyframeSource(List.of(Duration.ZERO, Duration.ofSeconds(1)), 20);
+
+    var readPosition =
+        engineReading(source).readPosition(searching(seconds("1.5"), 2), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(Duration.ZERO);
+    assertThat(source.scannedIntervals()).isEmpty();
+    assertThat(source.readChecks()).isEmpty();
+    assertThat(source.firstPictureReadEnds()).isEmpty();
+  }
+
   // The video's keyframes stop at 10 s and its pictures at 20 s, before segment 12's start at 24 s.
   // The first scan reads to 25 s and meets no picture at or after 24 s.
   @Test

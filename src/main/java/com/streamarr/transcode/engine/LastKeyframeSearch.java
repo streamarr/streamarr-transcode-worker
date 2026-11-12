@@ -17,15 +17,17 @@ import lombok.NonNull;
  * keyframe of the chosen video that presents at or before the search time and from which the
  * attempt's own read shows a picture at or before that time. A check decodes the read from a seek
  * position up to its first picture. The attempt keeps the server's stored seek position when its
- * read shows a picture in time. Otherwise the search scans intervals that run back from the search
- * time, the first one a segment period long and each one twice as long as the one after it, until
- * one holds a keyframe that presents early enough. The attempt reads from the first of that
- * keyframe's presentation time, its decode time and FFmpeg's B-frame read-back before its decode
- * time whose read shows a picture in time. When none does, as when a decoder that starts at a
- * recovery point shows its first picture later, the search goes back to the keyframe before. An
- * encode that holds the last picture past the video's end reads from the last keyframe at least 0.5
- * s before the video's last keyframe instead, so that a deinterlacer sees the history before the
- * held picture that an attempt from an earlier segment gives it.
+ * read shows a picture in time. Otherwise, when the search's first interval, a segment period long,
+ * reaches the source's start, the attempt reads from the start without a scan. Otherwise the search
+ * scans intervals that run back from the search time, the first one a segment period long and each
+ * one twice as long as the one after it, until one holds a keyframe that presents early enough. The
+ * attempt reads from the first of that keyframe's presentation time, its decode time and FFmpeg's
+ * B-frame read-back before its decode time whose read shows a picture in time. When none does, as
+ * when a decoder that starts at a recovery point shows its first picture later, the search goes
+ * back to the keyframe before. An encode that holds the last picture past the video's end reads
+ * from the last keyframe at least 0.5 s before the video's last keyframe instead, so that a
+ * deinterlacer sees the history before the held picture that an attempt from an earlier segment
+ * gives it.
  */
 final class LastKeyframeSearch {
 
@@ -78,7 +80,18 @@ final class LastKeyframeSearch {
       return stored.get();
     }
 
+    if (firstIntervalReachesTheStart(target)) {
+      return Duration.ZERO;
+    }
+
     return new Search(target, scan).readPosition();
+  }
+
+  // A read from the source's start needs no seek, so it cannot land in the later copy of a time
+  // that a source whose timestamps start again repeats. It decodes no more than the first interval
+  // before the search time.
+  private static boolean firstIntervalReachesTheStart(Target target) {
+    return target.searchTime().compareTo(target.firstInterval()) <= 0;
   }
 
   // A read whose decoder shows a picture by the search time decodes every picture of the first
