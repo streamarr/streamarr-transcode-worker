@@ -280,6 +280,8 @@ class WorkerMediaSmokeTest {
   // 40 s with keyframes 20 s apart: segment 6, the last, holds the 4 s from 36 s.
   private static final int SPARSE_KEYFRAME_SOURCE_SECONDS = 40;
   private static final int SPARSE_KEYFRAME_SEGMENT_COUNT = 7;
+  // The capture that starts inside a GOP holds about 57.6 s: segment 9, the last, starts at 54 s.
+  private static final int CAPTURE_SEGMENT_COUNT = 10;
   // The longest frame among the audio codecs these tests encode: AC-3 and E-AC-3 code 1,536
   // samples a frame, AAC 1,024.
   private static final long LONGEST_AUDIO_FRAME_TICKS = 1536;
@@ -7228,7 +7230,9 @@ class WorkerMediaSmokeTest {
 
   // A stored keyframe position that lies after the keyframe that fills segment 3's start reads
   // from inside the GOP from 0 s, so the first picture that the attempt decodes is the keyframe
-  // at 20 s.
+  // at 20 s. The job's search time lies past that keyframe, so the worker's check of the read
+  // passes, and only the refusal of the first segment stands between the attempt and a segment
+  // that lacks its first 2 s.
   @Test
   @DisplayName(
       "Should fail with a first segment that opened late and upload no media segment when an"
@@ -7238,6 +7242,10 @@ class WorkerMediaSmokeTest {
     var source = sparseKeyframeSource("ts", false);
     var job = sparseKeyframeJob(source, 3);
     setSeekPosition(job.getExecutionBuilder(), new BigDecimal("17.5"));
+    job.getExecutionBuilder()
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(20)
+        .setNanos(500_000_000);
 
     var failed =
         executeExpectingFailure(engine(softwareCapabilities()), source.getParent(), job.build());
@@ -7245,6 +7253,164 @@ class WorkerMediaSmokeTest {
     assertThat(failed.failure().getFailure())
         .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_FIRST_SEGMENT_OPENED_LATE);
     assertThat(failed.uploads().names()).as("no media segment").doesNotContain(segmentName(3));
+  }
+
+  // At 1 fps a frame presents on every segment start; at 24000/1001 fps the first frame of
+  // segment 5 presents 0.03 s after its start, 30 s. The worker refuses a first segment that opens
+  // after its first frame, so a frame that misses the start by less than a frame must not trip it.
+  @ParameterizedTest(name = "{0}/{1} fps from segment {2}")
+  @CsvSource({"1, 1, 4", "24000, 1001, 5"})
+  @DisplayName(
+      "Should deliver the first segment with the pictures of the attempt from the source's start"
+          + " when an encode at a rate whose frames need not present on segment starts searches for"
+          + " its keyframe")
+  void shouldDeliverTheFirstSegmentWithThePicturesFromTheStartWhenAnEncodeAtAnyRateSearches(
+      int numerator, int denominator, int startSequenceNumber) throws Exception {
+    var source = sparseKeyframeSourceAt(numerator, denominator);
+    var fromTheStart = sparseKeyframeJob(source, 0);
+    var searching = searchingJob(source, startSequenceNumber);
+    for (var job : List.of(fromTheStart, searching)) {
+      job.getExecutionBuilder()
+          .setOutputFrameRate(
+              Fraction.newBuilder().setNumerator(numerator).setDenominator(denominator));
+    }
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), searching.build());
+
+    assertThat(videoPresentationTimesOf(uploads, startSequenceNumber))
+        .as("segment %d's pictures", startSequenceNumber)
+        .isNotEmpty()
+        .isEqualTo(
+            videoPresentationTimesOf(
+                execute(engine(softwareCapabilities()), source.getParent(), fromTheStart.build()),
+                startSequenceNumber));
+  }
+
+  // x264's periodic intra refresh writes no IDR picture after the first: every 5 s a recovery
+  // point, which the parser flags as a keyframe, starts a refresh that ends about 1.6 s later at
+  // 320x180, when the decoder shows its first picture. The decoder that starts at the last
+  // recovery point before 35.5 s shows nothing until after segment 6's start, 36 s; the one 5 s
+  // earlier fills it. Before segment 1 only the first picture, an IDR picture, fills its start.
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {1, 6})
+  @DisplayName(
+      "Should deliver the first segment with the pictures of the attempt from the source's start"
+          + " when an encode searches a source whose keyframes are intra refresh recovery points")
+  void shouldDeliverTheFirstSegmentWithThePicturesFromTheStartWhenKeyframesAreRecoveryPoints(
+      int startSequenceNumber) throws Exception {
+    var source = intraRefreshSource();
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            searchingJob(source, startSequenceNumber).build());
+
+    assertThat(videoPresentationTimesOf(uploads, startSequenceNumber))
+        .as("segment %d's pictures", startSequenceNumber)
+        .isNotEmpty()
+        .isEqualTo(
+            videoPresentationTimesOf(
+                execute(
+                    engine(softwareCapabilities()),
+                    source.getParent(),
+                    sparseKeyframeJob(source, 0).build()),
+                startSequenceNumber));
+  }
+
+  // A capture that starts inside a GOP holds no parameter set before its first keyframe, 8 s in,
+  // so FFmpeg's probe decodes no picture in its 5 s, misses the B-frames and does not move a seek
+  // 3/23 s earlier. The seek to the server's stored keyframe, at its decode time, then reads from
+  // the packet after it, and the decoder shows nothing until the keyframe 10 s later. An attempt
+  // from the source's start opens no segment 0, so the attempt from segment 2, which decodes from
+  // the capture's first keyframe on, gives the pictures to compare.
+  @Test
+  @DisplayName(
+      "Should deliver the first segment with the pictures of an attempt from an earlier segment"
+          + " when the seek to the server's stored keyframe reads from the packet after it")
+  void shouldDeliverTheFirstSegmentWithThePicturesFromTheStartWhenTheStoredKeyframesSeekMissesIt()
+      throws Exception {
+    var source = captureStartingInsideAGop();
+    var keyframe = fourthKeyframeOf(source);
+    var startSequenceNumber =
+        keyframe
+            .presentationTime()
+            .add(new BigDecimal("0.5"))
+            .divide(BigDecimal.valueOf(6), 0, RoundingMode.CEILING)
+            .intValueExact();
+    var stored =
+        decodeTimeOfTheLastKeyframePresentedBy(
+            source, BigDecimal.valueOf(startSequenceNumber * 6L).subtract(new BigDecimal("0.5")));
+    assertThat(stored).as("the stored keyframe").isEqualTo(keyframe.decodeTime());
+    assertThat(firstVideoDecodeTimeReadFrom(source, stored))
+        .as("where a read from the stored position starts")
+        .isGreaterThan(stored);
+    var job = searchingJob(source, startSequenceNumber);
+    job.getExecutionBuilder().setMediaSegmentCount(CAPTURE_SEGMENT_COUNT);
+    setSeekPosition(job.getExecutionBuilder(), stored);
+    var fromSegment2 = searchingJob(source, 2);
+    fromSegment2.getExecutionBuilder().setMediaSegmentCount(CAPTURE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(videoPresentationTimesOf(uploads, startSequenceNumber))
+        .as("segment %d's pictures", startSequenceNumber)
+        .isNotEmpty()
+        .isEqualTo(
+            videoPresentationTimesOf(
+                execute(engine(softwareCapabilities()), source.getParent(), fromSegment2.build()),
+                startSequenceNumber));
+  }
+
+  private static VideoPacket fourthKeyframeOf(Path source) throws Exception {
+    return videoPacketsOnZeroBasedTimeline(source).stream()
+        .filter(VideoPacket::keyframe)
+        .skip(3)
+        .findFirst()
+        .orElseThrow();
+  }
+
+  // The decode time of the first video packet that FFmpeg reads after a seek to the position, on
+  // the timeline of the attempt's own streams.
+  private static BigDecimal firstVideoDecodeTimeReadFrom(Path source, BigDecimal position)
+      throws Exception {
+    var framecrc = Files.createTempFile(seekableSources, "first-packet", ".framecrc");
+    runFfmpeg(
+        List.of(
+            "-copyts",
+            "-start_at_zero",
+            "-ss",
+            position.toPlainString(),
+            "-i",
+            source.toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-c",
+            "copy",
+            "-copyinkf",
+            "-frames:v",
+            "1",
+            "-f",
+            "framecrc"),
+        framecrc);
+    var lines = Files.readAllLines(framecrc);
+    var timeBase =
+        lines.stream()
+            .filter(line -> line.startsWith("#tb 0: "))
+            .map(line -> line.substring("#tb 0: ".length()).split("/"))
+            .findFirst()
+            .orElseThrow();
+    var decodeTicks =
+        lines.stream()
+            .filter(line -> line.startsWith("0,"))
+            .map(line -> line.split(",")[1].strip())
+            .findFirst()
+            .orElseThrow();
+    return new BigDecimal(decodeTicks)
+        .multiply(new BigDecimal(timeBase[0]))
+        .divide(new BigDecimal(timeBase[1]), 9, RoundingMode.HALF_EVEN);
   }
 
   // The segment's first picture, a keyframe, presents on its start, and the segment holds the
@@ -7292,6 +7458,137 @@ class WorkerMediaSmokeTest {
         .setStartSequenceNumber(startSequenceNumber)
         .setSeekPositionSeconds(startSequenceNumber * 6);
     return job;
+  }
+
+  // 40 s of H.264 at the rate with keyframes about 20 s apart, beside AAC, in MPEG-TS.
+  private static synchronized Path sparseKeyframeSourceAt(int numerator, int denominator)
+      throws Exception {
+    var source =
+        seekableSources.resolve(
+            "keyframes-20-s-apart-at-" + numerator + "-" + denominator + "-fps.ts");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var keyint = String.valueOf(20 * numerator / denominator);
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=" + numerator + "/" + denominator,
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+            "-t",
+            String.valueOf(SPARSE_KEYFRAME_SOURCE_SECONDS),
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-x264-params",
+            "keyint=" + keyint + ":min-keyint=" + keyint + ":scenecut=0",
+            "-c:a",
+            "aac",
+            "-f",
+            "mpegts"),
+        source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  // 40 s of H.264 at 320x180 and 24 fps whose only IDR picture is the first, with a recovery point
+  // every 5 s that starts a periodic intra refresh, beside AAC, in MPEG-TS. A picture as small as
+  // the other sources' refreshes in a few frames.
+  private static synchronized Path intraRefreshSource() throws Exception {
+    var source = seekableSources.resolve("intra-refresh-every-5-s.ts");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x180:rate=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+            "-t",
+            String.valueOf(SPARSE_KEYFRAME_SOURCE_SECONDS),
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-x264-params",
+            "keyint=120:intra-refresh=1:scenecut=0",
+            "-c:a",
+            "aac",
+            "-f",
+            "mpegts"),
+        source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  // 60 s of H.264 at 24 fps with keyframes 10 s apart, beside AAC, in MPEG-TS, cut at the 188-byte
+  // packet that holds the start of the first video packet that presents at or after 2 s, inside
+  // the first GOP.
+  private static synchronized Path captureStartingInsideAGop() throws Exception {
+    var source = seekableSources.resolve("capture-starting-inside-a-gop.ts");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var whole = seekableSources.resolve("capture-whole.ts");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+            "-t",
+            "60",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-x264-params",
+            "keyint=240:min-keyint=240:scenecut=0",
+            "-c:a",
+            "aac",
+            "-f",
+            "mpegts"),
+        whole);
+    var packets =
+        ffprobe(List.of("-select_streams", "v:0", "-show_entries", "packet=pts_time,pos"), whole)
+            .lines()
+            .map(line -> line.split(","))
+            .toList();
+    var cutTime =
+        packets.stream()
+            .map(fields -> new BigDecimal(fields[0]))
+            .min(Comparator.naturalOrder())
+            .orElseThrow()
+            .add(BigDecimal.valueOf(2));
+    var packetStart =
+        packets.stream()
+            .filter(fields -> new BigDecimal(fields[0]).compareTo(cutTime) >= 0)
+            .mapToLong(fields -> Long.parseLong(fields[1]))
+            .findFirst()
+            .orElseThrow();
+    var bytes = Files.readAllBytes(whole);
+    var cut = (int) (packetStart / 188 * 188);
+    Files.write(source, Arrays.copyOfRange(bytes, cut, bytes.length));
+    generatedSeekableSources.add(source);
+    return source;
   }
 
   // 40 s of video at 24 fps with keyframes 20 s apart, beside AAC, or in MPEG-PS the MPEG-2 video
@@ -9571,9 +9868,9 @@ class WorkerMediaSmokeTest {
 
   private record FailedExecution(JobAttemptFailed failure, MediaUploads uploads) {}
 
-  // A job from a later segment that encodes video and names neither a seek position nor a
-  // keyframe search time carries what the server sends for a source whose keyframes it does not
-  // store: the search time half a second before the first segment's start (ADR 0037, seek).
+  // A job from a later segment that encodes video and names no keyframe search time carries what
+  // the server sends: the search time half a second before the first segment's start, beside the
+  // seek position of a keyframe that the server stores (ADR 0037, seek).
   private static VariantJob asTheServerSendsIt(VariantJob job) {
     var execution = job.getExecution();
     var mode = job.getDecision().getMode();
@@ -9582,7 +9879,6 @@ class WorkerMediaSmokeTest {
             || mode == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE;
     if (!encodesVideo
         || execution.getStartSequenceNumber() == 0
-        || execution.hasSeekPosition()
         || execution.hasReadFromLastKeyframePresentingAtOrBefore()) {
       return job;
     }

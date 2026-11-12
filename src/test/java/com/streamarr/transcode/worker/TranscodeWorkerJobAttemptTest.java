@@ -676,17 +676,18 @@ class TranscodeWorkerJobAttemptTest {
           + " encodes both chosen streams with the early-end instructions")
   void shouldHoldTheLastFrameAndPadTheAudioUpToTheAdvertisedEndWhenAJobCarriesBothInstructions()
       throws Exception {
-    var launcher = ScriptedProcessLauncher.running();
+    var launcher = ScriptedProcessLauncher.runningFromAKeyframeAtEachSeek();
     var job = heldAndPaddedJob();
-    job.getExecutionBuilder().setStartSequenceNumber(10).getSeekPositionBuilder().setSeconds(54);
+    job.getExecutionBuilder().setStartSequenceNumber(10);
+    fromAStoredKeyframe(job, 54);
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
-      var command = launcher.command(fromProto(job.getJobAttemptId()));
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      var command = launcher.mediaCommand(fromProto(job.getJobAttemptId()));
       assertThat(command).containsSequence("-ss", "54", "-noaccurate_seek");
       assertThat(command.get(command.lastIndexOf("-filter_complex") + 1))
           .contains(
@@ -785,17 +786,18 @@ class TranscodeWorkerJobAttemptTest {
         .getExecutionBuilder()
         .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
         .setSeconds(17);
-    var both = encodeFromSegment3();
-    both.getExecutionBuilder().getSeekPositionBuilder().setSeconds(16);
-    both.getExecutionBuilder().getReadFromLastKeyframePresentingAtOrBeforeBuilder().setSeconds(17);
+    var storedAlone = encodeFromSegment3();
+    storedAlone.getExecutionBuilder().getSeekPositionBuilder().setSeconds(16);
     var negative = encodeFromSegment3();
     negative
         .getExecutionBuilder()
         .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
         .setSeconds(-1);
     return Stream.of(
-        Arguments.of("an encode from a later segment carries neither", encodeFromSegment3()),
-        Arguments.of("an encode from a later segment carries both", both),
+        Arguments.of(
+            "an encode from a later segment carries no keyframe search time", encodeFromSegment3()),
+        Arguments.of(
+            "an encode from a later segment carries a stored seek position alone", storedAlone),
         Arguments.of("a stream copy carries a keyframe search time", copy),
         Arguments.of("an encode from segment 0 carries a keyframe search time", fromSegmentZero),
         Arguments.of("the keyframe search time is negative", negative));
@@ -805,6 +807,29 @@ class TranscodeWorkerJobAttemptTest {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getExecutionBuilder().setStartSequenceNumber(3);
     return job;
+  }
+
+  // What the server sends a job from a later segment of a source whose keyframes it stores: the
+  // stored keyframe's seek position and, for an encode, the search time half a second before the
+  // first segment's start on the plain grid (ADR 0037, seek).
+  private static void fromAStoredKeyframe(VariantJob.Builder job, long seekSeconds) {
+    var execution = job.getExecutionBuilder();
+    execution.getSeekPositionBuilder().setSeconds(seekSeconds);
+    var mode = job.getDecisionBuilder().getMode();
+    if (mode != TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE
+        && mode != TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE) {
+      return;
+    }
+
+    var firstSegmentStart =
+        Duration.ofSeconds(
+            (long) execution.getStartSequenceNumber()
+                * execution.getTargetSegmentDurationSeconds());
+    var searchTime = firstSegmentStart.minusMillis(500);
+    execution
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(searchTime.getSeconds())
+        .setNanos(searchTime.getNano());
   }
 
   // A full transcode that holds the last frame and pads its encoded AAC up to an advertised end
@@ -1622,9 +1647,10 @@ class TranscodeWorkerJobAttemptTest {
           + " it")
   void shouldMapTheAudioStreamThatTheJobNamesWhenAReplacementAttemptCopiesOrEncodesIt(
       TranscodeMode mode, AudioMode audioMode) throws Exception {
-    var launcher = ScriptedProcessLauncher.running();
+    var launcher = ScriptedProcessLauncher.runningFromAKeyframeAtEachSeek();
     var job = variantJobBuilder(mode);
-    job.getExecutionBuilder().setStartSequenceNumber(3).getSeekPositionBuilder().setSeconds(12);
+    job.getExecutionBuilder().setStartSequenceNumber(3);
+    fromAStoredKeyframe(job, 12);
     job.getDecisionBuilder()
         .getAudioBuilder()
         .setMode(audioMode)
@@ -1638,8 +1664,8 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
-      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.mediaCommand(fromProto(job.getJobAttemptId())))
           .containsSequence("-map", "0:0", "-map", "0:2?")
           .doesNotContain("0:a:0");
     }
@@ -1894,15 +1920,12 @@ class TranscodeWorkerJobAttemptTest {
           + " job")
   void shouldPassTheJobsOwnPresetToEveryAttemptWhenAReplacementAttemptRunsTheSameJob()
       throws Exception {
-    var launcher = ScriptedProcessLauncher.running();
+    var launcher = ScriptedProcessLauncher.runningFromAKeyframeAtEachSeek();
     var first = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     first.getVariantBuilder().setEncoderPreset(EncoderPreset.ENCODER_PRESET_SLOW);
     var replacement = first.clone().setJobAttemptId(toProto(UUID.randomUUID()));
-    replacement
-        .getExecutionBuilder()
-        .setStartSequenceNumber(5)
-        .getSeekPositionBuilder()
-        .setSeconds(24);
+    replacement.getExecutionBuilder().setStartSequenceNumber(5);
+    fromAStoredKeyframe(replacement, 24);
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -1913,7 +1936,7 @@ class TranscodeWorkerJobAttemptTest {
 
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STARTED);
       assertThat(List.of(first, replacement))
-          .extracting(job -> launcher.command(fromProto(job.getJobAttemptId())))
+          .extracting(job -> launcher.mediaCommand(fromProto(job.getJobAttemptId())))
           .allSatisfy(command -> assertThat(command).containsSequence("-preset", "slow"));
     }
   }
@@ -1924,22 +1947,21 @@ class TranscodeWorkerJobAttemptTest {
           + " job encodes video")
   void shouldForceKeyframesFromTheJobsStartToItsLastAdvertisedMediaSegmentWhenTheJobEncodesVideo()
       throws Exception {
-    var launcher = ScriptedProcessLauncher.running();
+    var launcher = ScriptedProcessLauncher.runningFromAKeyframeAtEachSeek();
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(4)
         .setStartSequenceNumber(2)
-        .setMediaSegmentCount(5)
-        .getSeekPositionBuilder()
-        .setSeconds(4);
+        .setMediaSegmentCount(5);
+    fromAStoredKeyframe(job, 4);
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
-      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.mediaCommand(fromProto(job.getJobAttemptId())))
           .containsSequence("-force_key_frames:0", "8,12,16");
     }
   }
@@ -2199,7 +2221,7 @@ class TranscodeWorkerJobAttemptTest {
           + " grid's starts in whole seconds")
   void shouldLaunchTheSameCommandAsForTheSlotListWhenTheJobCarriesAPlainGridsStartsInSeconds(
       TranscodeMode mode, String option, String value) throws Exception {
-    var launcher = ScriptedProcessLauncher.running();
+    var launcher = ScriptedProcessLauncher.runningFromAKeyframeAtEachSeek();
     var onSlots = laterSegmentJobOnAThreeSecondGrid(mode);
     onSlots.getExecutionBuilder().addAllSegmentStartSlots(List.of(0, 1, 2, 3));
     var onSeconds = laterSegmentJobOnAThreeSecondGrid(mode);
@@ -2216,16 +2238,15 @@ class TranscodeWorkerJobAttemptTest {
       startVariant(connection, onSlots.build());
       startVariant(connection, onSeconds.build());
 
-      promptly()
-          .until(() -> launcher.hasLaunched(slotsAttempt) && launcher.hasLaunched(secondsAttempt));
-      var slotCommand = launcher.command(slotsAttempt);
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STARTED);
+      var slotCommand = launcher.mediaCommand(slotsAttempt);
       assertThat(slotCommand).containsSequence(option, value);
-      assertThat(launcher.command(secondsAttempt)).isEqualTo(slotCommand);
+      assertThat(launcher.mediaCommand(secondsAttempt)).isEqualTo(slotCommand);
     }
   }
 
-  // An encode from a later segment carries the server's keyframe position; a stream copy without
-  // one seeks to its first segment's start.
+  // An encode from a later segment carries the server's keyframe position and search time; a
+  // stream copy without a keyframe position seeks to its first segment's start.
   private static VariantJob.Builder laterSegmentJobOnAThreeSecondGrid(TranscodeMode mode) {
     var job = variantJobBuilder(mode);
     job.getExecutionBuilder()
@@ -2233,7 +2254,7 @@ class TranscodeWorkerJobAttemptTest {
         .setMediaSegmentCount(4)
         .setStartSequenceNumber(2);
     if (mode == TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE) {
-      job.getExecutionBuilder().getSeekPositionBuilder().setSeconds(3);
+      fromAStoredKeyframe(job, 3);
     }
 
     return job;

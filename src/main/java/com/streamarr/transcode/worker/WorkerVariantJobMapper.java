@@ -48,9 +48,8 @@ final class WorkerVariantJobMapper {
    *     exact ticks or else in slots, is not empty and does not hold one start for each media
    *     segment, from 0 and strictly increasing, or when its exact starts come without a positive
    *     time base or a time base without exact starts, or when its advertised end does not lie
-   *     after the last listed segment's start, or when it encodes video from a later segment with
-   *     neither or both of a seek position and a keyframe search time, or carries a keyframe search
-   *     time on any other attempt
+   *     after the last listed segment's start, or when it encodes video from a later segment
+   *     without a keyframe search time, or carries a keyframe search time on any other attempt
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
@@ -302,16 +301,17 @@ final class WorkerVariantJobMapper {
     return Optional.of(Duration.ofSeconds(position.getSeconds(), position.getNanos()));
   }
 
-  // ADR 0037 (seek): an attempt that encodes video from a later segment reads from the server's
-  // keyframe seek position or from the keyframe that the worker finds before the search time.
+  // ADR 0037 (seek): an attempt that encodes video from a later segment reads from the last
+  // keyframe that presents at or before the search time and whose read shows a picture by then. A
+  // stored keyframe seek position beside the search time is where the worker checks that read
+  // first.
   private static Optional<Duration> keyframeSearchTime(VariantJob job) {
     var execution = job.getExecution();
     var encodesFromALaterSegment = encodesVideo(job) && execution.getStartSequenceNumber() > 0;
     var searches = execution.hasReadFromLastKeyframePresentingAtOrBefore();
-    if (encodesFromALaterSegment && searches == execution.hasSeekPosition()) {
+    if (encodesFromALaterSegment && !searches) {
       throw new InvalidJobSpecificationException(
-          "An attempt that encodes video from a later segment carries a seek position or a"
-              + " keyframe search time, exactly one of them");
+          "An attempt that encodes video from a later segment carries a keyframe search time");
     }
 
     if (!searches) {

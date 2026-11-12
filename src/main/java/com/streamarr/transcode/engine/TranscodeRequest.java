@@ -50,12 +50,6 @@ public record TranscodeRequest(
           "An audio encode in a named layout requires the chosen audio stream's facts");
     }
 
-    if (seekPosition.isPresent() && readFromLastKeyframePresentingAtOrBefore.isPresent()) {
-      throw new IllegalArgumentException(
-          "An attempt reads from a seek position or from the keyframe that it searches for, not"
-              + " both");
-    }
-
     if (advertisedEnd.isEmpty() && holdsOrPads(transcodeDecision)) {
       throw new IllegalArgumentException(
           "Holding the last frame or padding with silence requires the advertised end");

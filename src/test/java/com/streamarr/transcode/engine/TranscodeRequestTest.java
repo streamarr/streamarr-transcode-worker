@@ -125,15 +125,19 @@ class TranscodeRequestTest {
 
   @Test
   @DisplayName(
-      "Should reject the request when it carries both a seek position and a keyframe search time")
-  void shouldRejectTheRequestWhenItCarriesBothASeekPositionAndAKeyframeSearchTime() {
-    var builder =
+      "Should keep the stored seek position beside the keyframe search time when an encode from a"
+          + " later segment carries both")
+  void shouldKeepTheStoredSeekPositionBesideTheKeyframeSearchTimeWhenAnEncodeCarriesBoth() {
+    var request =
         request(TranscodeMode.FULL_TRANSCODE)
             .encoderPreset(EncoderPreset.FASTER)
             .startSequenceNumber(3)
             .seekPosition(Optional.of(Duration.ofSeconds(16)))
-            .readFromLastKeyframePresentingAtOrBefore(Optional.of(Duration.ofMillis(17_500)));
+            .readFromLastKeyframePresentingAtOrBefore(Optional.of(Duration.ofMillis(17_500)))
+            .build();
 
-    assertThatIllegalArgumentException().isThrownBy(builder::build).withMessageContaining("both");
+    assertThat(request.seekPosition()).contains(Duration.ofSeconds(16));
+    assertThat(request.readFromLastKeyframePresentingAtOrBefore())
+        .contains(Duration.ofMillis(17_500));
   }
 }

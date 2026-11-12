@@ -105,13 +105,15 @@ public class FfmpegTranscodeEngine {
   }
 
   /**
-   * Where an encode from a later segment that carries a keyframe search time reads from: a seek
-   * position at which its own seek lands at or before the last keyframe of the chosen video that
-   * presents at or before that time, or zero, which reads from the source's start (ADR 0037, seek).
-   * Empty when the attempt carries no search time.
+   * Where an encode from a later segment that carries a keyframe search time reads from: the
+   * server's stored seek position when the attempt's read from it shows a picture at or before that
+   * time, else a seek position whose read shows such a picture from a keyframe of the chosen video
+   * that presents at or before that time, or zero, which reads from the source's start (ADR 0037,
+   * seek). Empty when the attempt carries no search time.
    *
-   * @param bytesRead takes the bytes of each packet that the search reads, as it reads them
-   * @throws TranscodeException when a scan's FFmpeg cannot start or exits with an error
+   * @param bytesRead takes the bytes of each packet that the checks and scans read, as they read
+   *     them
+   * @throws TranscodeException when a check's or scan's FFmpeg cannot start or exits with an error
    */
   public Optional<Duration> readPosition(TranscodeRequest request, LongConsumer bytesRead)
       throws InterruptedException {
@@ -130,6 +132,7 @@ public class FfmpegTranscodeEngine {
                         .segmentIntervals()
                         .startOf(request.startSequenceNumber(), nanosecondsPerSecond)))
             .firstInterval(Duration.ofSeconds(Math.max(1, request.targetSegmentDuration())))
+            .storedSeekPosition(request.seekPosition())
             .holdsTheLastPicture(holdsLastFrame(request))
             .build();
     var scan =

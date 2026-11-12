@@ -2467,6 +2467,88 @@ class FfmpegCommandBuilderTest {
             "pipe:1");
   }
 
+  @Test
+  @DisplayName(
+      "Should decode the chosen video stream's first picture with one thread, beside its copied"
+          + " packets and the chosen audio's, from where the attempt's seek to the position lands"
+          + " for the length and on the attempt's timeline, to a framecrc on standard output when"
+          + " building a first picture check")
+  void shouldDecodeTheFirstPictureFromWhereASeekLandsForTheLengthForAFirstPictureCheck() {
+    var cmd =
+        builder.buildFirstPictureCommand(
+            Path.of("/media/source.ts"),
+            chosenStreams(),
+            Duration.ofMillis(8_000),
+            Duration.ofMillis(3_500));
+
+    assertThat(cmd)
+        .containsExactly(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "quiet",
+            "-copyts",
+            "-start_at_zero",
+            "-threads",
+            "1",
+            "-ss",
+            "8",
+            "-noaccurate_seek",
+            "-t",
+            "3.5",
+            "-i",
+            "/media/source.ts",
+            "-map",
+            "0:2",
+            "-map",
+            "0:2",
+            "-map",
+            "0:1?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic",
+            "-c",
+            "copy",
+            "-copyinkf",
+            "-copypriorss",
+            "1",
+            "-c:v:0",
+            "wrapped_avframe",
+            "-fps_mode:v:0",
+            "passthrough",
+            "-enc_time_base:v:0",
+            "demux",
+            "-frames:v:0",
+            "1",
+            "-flush_packets",
+            "1",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "pipe:1");
+  }
+
+  @Test
+  @DisplayName(
+      "Should seek nowhere when building a first picture check from the start of the timeline")
+  void shouldSeekNowhereWhenBuildingAFirstPictureCheckFromTheStartOfTheTimeline() {
+    var cmd =
+        builder.buildFirstPictureCommand(
+            Path.of("/media/source.ts"), chosenStreams(), Duration.ZERO, Duration.ofSeconds(6));
+
+    assertThat(cmd)
+        .doesNotContain("-ss", "-noaccurate_seek")
+        .containsSequence("-threads", "1", "-t", "6", "-i", "/media/source.ts");
+  }
+
   // A held encode of the video at index 2 and the audio at index 1. The timeline's zero is the
   // earliest start of the streams that a command reads, so a scan reads the attempt's own streams.
   private static TranscodeDecision chosenStreams() {
