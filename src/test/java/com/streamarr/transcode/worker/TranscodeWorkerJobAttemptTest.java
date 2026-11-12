@@ -793,6 +793,13 @@ class TranscodeWorkerJobAttemptTest {
         .getExecutionBuilder()
         .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
         .setSeconds(-1);
+    var negativeVideoEnd = encodeFromSegment3();
+    negativeVideoEnd
+        .getExecutionBuilder()
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(17)
+        .setNanos(500_000_000);
+    negativeVideoEnd.getExecutionBuilder().getVideoEndBuilder().setSeconds(-1);
     return Stream.of(
         Arguments.of(
             "an encode from a later segment carries no keyframe search time", encodeFromSegment3()),
@@ -800,7 +807,8 @@ class TranscodeWorkerJobAttemptTest {
             "an encode from a later segment carries a stored seek position alone", storedAlone),
         Arguments.of("a stream copy carries a keyframe search time", copy),
         Arguments.of("an encode from segment 0 carries a keyframe search time", fromSegmentZero),
-        Arguments.of("the keyframe search time is negative", negative));
+        Arguments.of("the keyframe search time is negative", negative),
+        Arguments.of("the video's end is negative", negativeVideoEnd));
   }
 
   private static VariantJob.Builder encodeFromSegment3() {
@@ -2640,6 +2648,62 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(launcher.commands(fromProto(job.getJobAttemptId())))
           .singleElement()
           .satisfies(command -> assertThat(command).contains("wrapped_avframe"));
+    }
+  }
+
+  // The video ends at 22 s, before 24.5 s, a second past the search time, and the server sends
+  // that end. The server's stored position, 21.8 s, reads inside the GOP from 20 s, so the check's
+  // decoder shows no picture, and its copies run on through the audio to 600 s. That FFmpeg quits
+  // only on q, as a real one ends only at the source's end.
+  @Test
+  @DisplayName(
+      "Should stop a stored seek position's first picture check at the video's end, and start the"
+          + " encode, when the video ends without a picture before a second past the search time")
+  void shouldStartTheEncodeWhenAFirstPictureCheckStopsAtTheVideosEndBeforeItsReadEnd()
+      throws Exception {
+    var copies =
+        """
+        #tb 0: 1/1000
+        #tb 1: 1/1000
+        0, 21792, 21875, 42, 1000, 0x0a1b2c3d, F=0x0
+        1, 21800, 21800, 250, 300, 0x0a1b2c3d
+        0, 21875, 21958, 42, 1000, 0x0a1b2c3d, F=0x0
+        1, 22050, 22050, 250, 300, 0x0a1b2c3d
+        1, 60000, 60000, 250, 300, 0x0a1b2c3d
+        1, 600000, 600000, 250, 300, 0x0a1b2c3d
+        """;
+    var storedCheck =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(copies)
+            .exitTiming(ScriptedProcess.ExitTiming.AT_QUIT)
+            .build();
+    var source =
+        new ScriptedKeyframeSource(ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(20), 22);
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (command, _) -> {
+              if (ScriptedKeyframeSource.isFirstPictureCheck(command) && command.contains("21.8")) {
+                return storedCheck;
+              }
+
+              return isKeyframeScan(command)
+                  ? source.scan(command)
+                  : ScriptedProcessLauncher.runningProcessBuilder().build();
+            });
+    var job = heldJobSearchingForItsKeyframe();
+    job.getExecutionBuilder().getSeekPositionBuilder().setSeconds(21).setNanos(800_000_000);
+    job.getExecutionBuilder().getVideoEndBuilder().setSeconds(22);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(storedCheck.stdinText())
+          .as("the q that ends the stored position's check")
+          .isEqualTo("q");
     }
   }
 

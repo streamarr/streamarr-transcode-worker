@@ -27,6 +27,7 @@ public record TranscodeRequest(
     @NonNull Optional<ExactSegmentStarts> exactSegmentStarts,
     @NonNull Optional<Duration> seekPosition,
     @NonNull Optional<Duration> readFromLastKeyframePresentingAtOrBefore,
+    @NonNull Optional<Duration> videoEnd,
     @NonNull Optional<SourceAudio> sourceAudio,
     @NonNull Optional<Duration> advertisedEnd) {
 
@@ -62,6 +63,7 @@ public record TranscodeRequest(
         .exactSegmentStarts(Optional.empty())
         .seekPosition(Optional.empty())
         .readFromLastKeyframePresentingAtOrBefore(Optional.empty())
+        .videoEnd(Optional.empty())
         .outputFrameRate(Optional.empty())
         .sourceAudio(Optional.empty())
         .advertisedEnd(Optional.empty());

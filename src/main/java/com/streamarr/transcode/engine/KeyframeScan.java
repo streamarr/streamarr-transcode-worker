@@ -34,10 +34,13 @@ final class KeyframeScan {
   private static final Pattern TIME_BASE = Pattern.compile("^#tb (\\d+): (\\d+)/(\\d+)$");
   private static final Pattern RECORD =
       Pattern.compile(
-          "^(\\d+), *(-?\\d+), *(-?\\d+), *-?\\d+, *(\\d+), 0x[0-9a-f]{8}(?:, F=0x([0-9A-F]{1,8}))?");
+          "^(\\d+), *(-?\\d+), *(-?\\d+), *(-?\\d+), *(\\d+), 0x[0-9a-f]{8}(?:, F=0x([0-9A-F]{1,8}))?");
   // What framecrc prints for a time the packet does not carry: FFmpeg's AV_NOPTS_VALUE.
   private static final long NO_TIME = Long.MIN_VALUE;
   private static final int KEYFRAME = 0x1;
+  // AV_PKT_FLAG_DISCARD: the demuxer marks a packet that the decoder decodes but does not present,
+  // as an MP4 edit list marks its preroll.
+  private static final int DISCARD = 0x4;
   // A scan, a landing check and a first picture check's copies write the chosen video stream's
   // packets as their stream 0. A first picture check writes the decoder's pictures as the stream 0
   // of its other output.
@@ -47,6 +50,9 @@ final class KeyframeScan {
   // receives the packets that the pictures before that time reference, which B-frames place up to
   // a few frames later.
   private static final Duration REFERENCES_PAST_THE_LATEST_PICTURE = Duration.ofSeconds(1);
+  // A microsecond covers the rounding of the server's video end and of a check's times to whole
+  // microseconds or nanoseconds.
+  private static final Duration TIME_ROUNDING = Duration.ofNanos(1_000);
   private static final int QUIT = 'q';
   private static final long NANOS_PER_SECOND = Duration.ofSeconds(1).toNanos();
 
@@ -116,12 +122,15 @@ final class KeyframeScan {
    * of where the read lands. One FFmpeg decodes the chosen video from where that seek lands, as the
    * attempt's decoder does, and copies the packets that it reads to a second output, whose bytes
    * count as read. Once a copied video packet decodes at or after a second past the latest
-   * picture's time, FFmpeg stops reading and decodes the packets that it has read.
+   * picture's time, FFmpeg stops reading and decodes the packets that it has read. When the request
+   * carries the chosen video's end, the packet that ends there also stops the read, unless the read
+   * holds keyframes and none of them presents by the latest picture's time: the pictures after them
+   * in decode order can then still present by that time. Any other read whose video ends first and
+   * that shows no picture copies on to the end of the file.
    */
   SeekRead firstDecodedPicture(Duration seekPosition, Duration latestPicture)
       throws InterruptedException {
-    var readEnd = latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE);
-    if (readEnd.compareTo(seekPosition) <= 0) {
+    if (readEnd(latestPicture).compareTo(seekPosition) <= 0) {
       return new SeekRead.NoPictureInTime();
     }
 
@@ -129,7 +138,7 @@ final class KeyframeScan {
         launch(
             commandBuilder.buildFirstPictureCommand(
                 request.sourcePath(), request.transcodeDecision(), seekPosition));
-    var copies = new FutureTask<Void>(() -> readCopiesUpTo(readEnd, process), null);
+    var copies = new FutureTask<Void>(() -> readCopies(latestPicture, process), null);
     Thread.ofVirtual().name("first-picture-copies-" + request.attemptId()).start(copies);
     try {
       return read(process, this::readFirstPicture)
@@ -233,18 +242,17 @@ final class KeyframeScan {
   // and decode the packets that it has read; the forcible end of FFmpeg closes the error output.
   // A reader that fails ends FFmpeg, which would otherwise wait for the reader to take its error
   // output.
-  private void readCopiesUpTo(Duration readEnd, Process process) {
+  private void readCopies(Duration latestPicture, Process process) {
     var stopped = false;
     var framecrc = new Framecrc(Optional.empty());
+    var copiedVideo = new CopiedVideo(latestPicture);
     try (var copies = linesOf(process.getErrorStream())) {
       for (var line = copies.readLine(); line != null; line = copies.readLine()) {
-        var passesTheReadEnd =
-            framecrc
-                .packetOf(line)
-                .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
-                .filter(packet -> packet.decodeTime().compareTo(readEnd) >= 0)
-                .isPresent();
-        if (passesTheReadEnd && !stopped) {
+        framecrc
+            .packetOf(line)
+            .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
+            .ifPresent(copiedVideo::add);
+        if (!stopped && copiedVideo.reachesTheReadEnd()) {
           stopped = true;
           quit(process);
         }
@@ -255,6 +263,10 @@ final class KeyframeScan {
       process.destroyForcibly();
       throw e;
     }
+  }
+
+  private static Duration readEnd(Duration latestPicture) {
+    return latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE);
   }
 
   private static void awaitCopies(FutureTask<Void> copies) throws InterruptedException {
@@ -336,7 +348,7 @@ final class KeyframeScan {
 
       var stream = packetRecord.group(1);
       if (decodedStream.filter(stream::equals).isEmpty()) {
-        bytesRead.accept(Long.parseLong(packetRecord.group(4)));
+        bytesRead.accept(Long.parseLong(packetRecord.group(5)));
       }
 
       return Optional.ofNullable(timeBases.get(stream))
@@ -344,11 +356,12 @@ final class KeyframeScan {
     }
 
     // A packet without a presentation time counts at its decode time, as a raw H.264 stream's
-    // does.
+    // does, and a packet without a positive duration ends where it presents.
     private static Optional<Packet> timedPacket(
         String stream, Matcher packetRecord, TimeBase timeBase) {
       var decodeTime = Long.parseLong(packetRecord.group(2));
       var presentationTime = Long.parseLong(packetRecord.group(3));
+      var duration = Math.max(0, Long.parseLong(packetRecord.group(4)));
       if (presentationTime == NO_TIME) {
         presentationTime = decodeTime;
       }
@@ -364,8 +377,11 @@ final class KeyframeScan {
       return Optional.of(
           Packet.builder().stream(stream)
               .presentationTime(durationOf(timeBase, presentationTime))
+              .presentationEnd(durationOf(timeBase, Math.addExact(presentationTime, duration)))
+              .tick(durationOf(timeBase, 1))
               .decodeTime(durationOf(timeBase, decodeTime))
               .isKeyframe(isKeyframe(packetRecord))
+              .isPresented(isPresented(packetRecord))
               .build());
     }
   }
@@ -373,11 +389,18 @@ final class KeyframeScan {
   // A keyframe that its container marks to decode but not to present, as an edit list marks its
   // preroll, still starts decoding.
   private static boolean isKeyframe(Matcher packetRecord) {
-    var flags =
-        Optional.ofNullable(packetRecord.group(5))
-            .map(value -> Integer.parseUnsignedInt(value, 16))
-            .orElse(KEYFRAME);
-    return (flags & KEYFRAME) != 0;
+    return (flagsOf(packetRecord) & KEYFRAME) != 0;
+  }
+
+  private static boolean isPresented(Matcher packetRecord) {
+    return (flagsOf(packetRecord) & DISCARD) == 0;
+  }
+
+  // framecrc omits the flags of a packet whose only flag is AV_PKT_FLAG_KEY.
+  private static int flagsOf(Matcher packetRecord) {
+    return Optional.ofNullable(packetRecord.group(6))
+        .map(value -> Integer.parseUnsignedInt(value, 16))
+        .orElse(KEYFRAME);
   }
 
   private static Duration durationOf(TimeBase timeBase, long ticks) {
@@ -389,10 +412,21 @@ final class KeyframeScan {
             .longValueExact());
   }
 
-  /** A packet of one of a framecrc's streams, on the attempt's zero-based timeline. */
+  /**
+   * A packet of one of a framecrc's streams, on the attempt's zero-based timeline. {@code
+   * presentationEnd} is its presentation time plus its duration, {@code tick} is how long one tick
+   * of its time base lasts, and {@code isPresented} is false for a packet that its container marks
+   * to decode but not to present.
+   */
   @Builder
   private record Packet(
-      String stream, Duration presentationTime, Duration decodeTime, boolean isKeyframe) {
+      String stream,
+      Duration presentationTime,
+      Duration presentationEnd,
+      Duration tick,
+      Duration decodeTime,
+      boolean isKeyframe,
+      boolean isPresented) {
 
     Keyframe times() {
       return new Keyframe(presentationTime, decodeTime);
@@ -404,6 +438,66 @@ final class KeyframeScan {
     boolean decodes(Packet packet) {
       var time = packet.decodeTime();
       return (from.isZero() || time.compareTo(from) >= 0) && time.compareTo(until) < 0;
+    }
+  }
+
+  /** The video packets that a first picture check copies, which decide where its read ends. */
+  private final class CopiedVideo {
+
+    private final Duration latestPicture;
+    private boolean holdsAKeyframe;
+    private boolean holdsAKeyframeInTime;
+    private boolean reachesTheReadEnd;
+
+    private CopiedVideo(Duration latestPicture) {
+      this.latestPicture = latestPicture;
+    }
+
+    void add(Packet packet) {
+      if (packet.isKeyframe()) {
+        holdsAKeyframe = true;
+        holdsAKeyframeInTime |=
+            packet.isPresented() && packet.presentationTime().compareTo(latestPicture) <= 0;
+      }
+
+      reachesTheReadEnd |= endsTheRead(packet);
+    }
+
+    boolean reachesTheReadEnd() {
+      return reachesTheReadEnd;
+    }
+
+    private boolean endsTheRead(Packet packet) {
+      if (packet.decodeTime().compareTo(readEnd(latestPicture)) >= 0) {
+        return true;
+      }
+
+      return request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent()
+          && !canShowAPictureInTimeOnlyFromLaterPackets();
+    }
+
+    // The packet that ends the video presents last, so no keyframe follows it in decode order: a
+    // read that holds no keyframe shows no picture, and one with a keyframe that presents by the
+    // latest picture's time shows a picture by then from the packets that it holds. When every
+    // keyframe presents later, or is preroll that its container marks not to present, the pictures
+    // that follow one in decode order can still present by then. A copied packet's decode time
+    // cannot rule them out: where the container stores none, as Matroska does, FFmpeg derives it
+    // from the presentation time.
+    private boolean canShowAPictureInTimeOnlyFromLaterPackets() {
+      return holdsAKeyframe && !holdsAKeyframeInTime;
+    }
+
+    // The server's video end subtracts the container's start time as ffprobe prints it, in whole
+    // microseconds. FFmpeg's -start_at_zero subtracts that start rounded to the nearest of the
+    // packet's ticks, so on the check's timeline the packet that ends the video can end up to half
+    // a tick before the server's video end.
+    private static boolean endsTheVideo(Packet packet, Duration videoEnd) {
+      return packet
+              .presentationEnd()
+              .plus(packet.tick().dividedBy(2))
+              .plus(TIME_ROUNDING)
+              .compareTo(videoEnd)
+          >= 0;
     }
   }
 }
