@@ -84,6 +84,7 @@ final class WorkerVariantJobMapper {
         .exactSegmentStarts(exactSegmentStarts(execution))
         .seekPosition(seekPosition(execution))
         .readFromLastKeyframePresentingAtOrBefore(keyframeSearchTime(job))
+        .videoEnd(videoEnd(execution))
         .sourceAudio(sourceAudio)
         .advertisedEnd(advertisedEnd(job))
         .build();
@@ -331,6 +332,23 @@ final class WorkerVariantJobMapper {
     }
 
     return Optional.of(searchTime);
+  }
+
+  // ADR 0037 (seek): where the chosen video stream ends, by a keyframe packet scan. A first picture
+  // check stops reading there. Without it, the video's end is unknown.
+  private static Optional<Duration> videoEnd(TranscodeExecution execution) {
+    if (!execution.hasVideoEnd()) {
+      return Optional.empty();
+    }
+
+    var end = execution.getVideoEnd();
+    var videoEnd = Duration.ofSeconds(end.getSeconds(), end.getNanos());
+    if (videoEnd.isNegative()) {
+      throw new InvalidJobSpecificationException(
+          "The video's end must not be negative, got: " + videoEnd);
+    }
+
+    return Optional.of(videoEnd);
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

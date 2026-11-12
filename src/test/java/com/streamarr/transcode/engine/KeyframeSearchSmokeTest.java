@@ -3,11 +3,15 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
@@ -152,6 +156,281 @@ class KeyframeSearchSmokeTest {
         .as("no picture: the check stopped before the keyframe at 60 s")
         .isEqualTo(new KeyframeScan.SeekRead.NoPictureInTime());
     assertThat(bytesRead).as("the bytes of the packets that the check copied").hasPositiveValue();
+  }
+
+  // The video ends near 6 s and the audio runs on to 120 s. A read from 4.5 s lands after the
+  // video's last keyframe, at 4 s, so its decoder shows no picture, and no video packet decodes at
+  // its read end, 6.5 s. The packet that presents last is followed by B-frames that present before
+  // it, so FFmpeg's MPEG-TS demuxer passes it on at once rather than at the end of the file.
+  @Test
+  @DisplayName(
+      "Should send q once the copied video packet that ends the video is read when the check's"
+          + " video ends before its read end")
+  void shouldSendQOnceTheCopiedVideoPacketThatEndsTheVideoIsReadWhenTheVideoEndsFirst()
+      throws Exception {
+    var source = videoThatEndsLongBeforeItsAudio();
+    var launcher = new InputRecordingLauncher();
+    var scan =
+        KeyframeScan.builder()
+            .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+            .launcher(launcher)
+            .request(
+                searching(source, OptionalInt.of(1), 6).toBuilder()
+                    .videoEnd(Optional.of(probe(source).videoEnd()))
+                    .build())
+            .bytesRead(_ -> {})
+            .build();
+
+    var read = scan.firstDecodedPicture(Duration.ofMillis(4500), Duration.ofMillis(5500));
+
+    assertThat(read).isEqualTo(new KeyframeScan.SeekRead.NoPictureInTime());
+    assertThat(launcher.input()).as("the q that stops the check at the video's end").isEqualTo("q");
+  }
+
+  // The pinned FFmpeg writes this source's video from about 4.1 s on after its audio at 110 s. A
+  // read from the keyframe at 4 s copies that keyframe, then the audio, then the rest of the video.
+  // A check that stopped on copied audio 10 s past its read end rejected that read, whose decoder
+  // shows the keyframe's picture once it has the packets after it.
+  @Test
+  @DisplayName(
+      "Should keep every keyframe's stored seek position when the video is written far behind its"
+          + " audio and the server sends the video's end")
+  void shouldKeepEveryKeyframesStoredPositionWhenTheVideoIsWrittenFarBehindItsAudio()
+      throws Exception {
+    var source = videoWrittenFarBehindItsAudio();
+    var probed = probe(source);
+    var request = searching(source, OptionalInt.of(1), 24);
+    var storedPositions =
+        probed.keyframeDecodeTimes().stream().filter(Duration::isPositive).toList();
+
+    assertThat(probed.latestAudioWrittenBeforeTheVideosLastPacket())
+        .as("the audio that FFmpeg wrote before the video's last packet")
+        .isGreaterThanOrEqualTo(Duration.ofSeconds(100));
+    assertThat(storedPositions).as("the keyframes after the first").hasSize(6);
+
+    var readPositions = new ArrayList<Duration>();
+    for (var stored : storedPositions) {
+      readPositions.add(
+          engine()
+              .readPosition(
+                  request.toBuilder()
+                      .seekPosition(Optional.of(stored))
+                      .videoEnd(Optional.of(probed.videoEnd()))
+                      .build(),
+                  _ -> {})
+              .orElseThrow());
+    }
+
+    assertThat(readPositions).isEqualTo(storedPositions);
+  }
+
+  // 6 s of H.264 at 128x72 and 24 fps with keyframes 2 s apart and 120 s of AAC, encoded apart and
+  // then copied into one MPEG-TS file, which interleaves them by time.
+  private Path videoThatEndsLongBeforeItsAudio() throws Exception {
+    var video = root.resolve("video.ts");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=24:duration=6",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-g",
+            "48",
+            "-f",
+            "mpegts",
+            video.toString()));
+    var audio = root.resolve("audio.aac");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=duration=120:color=pink:sample_rate=48000:amplitude=0.1",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            audio.toString()));
+    var source = root.resolve("video-ends-first.ts");
+    ffmpeg(
+        List.of(
+            "-i",
+            video.toString(),
+            "-i",
+            audio.toString(),
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c",
+            "copy",
+            "-f",
+            "mpegts",
+            source.toString()));
+    return source;
+  }
+
+  // 6 s of H.264 at 128x72 and 24 fps with IDR keyframes at 0, 1, 2, 3, 4, 5 and 5.5 s, and 120 s
+  // of AAC, encoded in one FFmpeg into MPEG-TS.
+  private Path videoWrittenFarBehindItsAudio() throws Exception {
+    var source = root.resolve("video-far-behind.ts");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=24:duration=6",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=duration=120:color=pink:sample_rate=48000:amplitude=0.1",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-forced-idr",
+            "1",
+            "-force_key_frames",
+            "0,1,2,3,4,5,5.5",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-f",
+            "mpegts",
+            source.toString()));
+    return source;
+  }
+
+  // The source's packets in the order of the file, as ffprobe lists them.
+  private ProbedSource probe(Path source) throws Exception {
+    var listing = root.resolve("ffprobe-" + System.nanoTime() + ".txt");
+    var process =
+        new ProcessBuilder(
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=start_time:stream=index,codec_type,time_base"
+                    + ":packet=stream_index,pts,dts,duration,flags",
+                "-of",
+                "compact",
+                source.toString())
+            .redirectOutput(listing.toFile())
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start();
+    assertThat(process.waitFor(1, TimeUnit.MINUTES)).as("ffprobe exits").isTrue();
+    assertThat(process.exitValue()).as("ffprobe's exit code").isZero();
+    return ProbedSource.of(Files.readAllLines(listing));
+  }
+
+  /**
+   * A source's packets, each stream's time base and the container's start time, which the
+   * timeline's zero subtracts, as the probe's keyframe positions do.
+   */
+  private record ProbedSource(
+      BigDecimal start,
+      Map<Integer, String> streamTypes,
+      Map<Integer, String> timeBases,
+      List<Map<String, String>> packets) {
+
+    // ffprobe's compact lines, such as "packet|stream_index=0|pts=133500|...". A stream inside a
+    // program repeats under a "program" line, which the stream's own line already gives.
+    static ProbedSource of(List<String> lines) {
+      var start = BigDecimal.ZERO;
+      var streamTypes = new HashMap<Integer, String>();
+      var timeBases = new HashMap<Integer, String>();
+      var packets = new ArrayList<Map<String, String>>();
+      for (var line : lines.stream().filter(line -> line.contains("|")).toList()) {
+        var fields = fieldsOf(line);
+        switch (line.substring(0, line.indexOf('|'))) {
+          case "format" -> start = new BigDecimal(fields.get("start_time"));
+          case "stream" -> {
+            var index = Integer.parseInt(fields.get("index"));
+            streamTypes.put(index, fields.get("codec_type"));
+            timeBases.put(index, fields.get("time_base"));
+          }
+          case "packet" -> packets.add(fields);
+          default -> {}
+        }
+      }
+
+      return new ProbedSource(start, streamTypes, timeBases, packets);
+    }
+
+    private static Map<String, String> fieldsOf(String line) {
+      var fields = new HashMap<String, String>();
+      for (var field : line.split("\\|")) {
+        var pair = field.split("=", 2);
+        if (pair.length == 2) {
+          fields.put(pair[0], pair[1]);
+        }
+      }
+
+      return fields;
+    }
+
+    /**
+     * Where the video ends, as a keyframe packet scan reads it: the latest presentation time plus
+     * duration of its packets, a packet without a presentation time counting at its decode time.
+     */
+    Duration videoEnd() {
+      return videoPackets().stream()
+          .map(packet -> presentationOrDecodeTimeOf(packet).add(timeOf(packet, "duration")))
+          .max(Comparator.naturalOrder())
+          .map(this::onTheTimeline)
+          .orElseThrow();
+    }
+
+    List<Duration> keyframeDecodeTimes() {
+      return videoPackets().stream()
+          .filter(packet -> packet.get("flags").startsWith("K"))
+          .map(packet -> onTheTimeline(timeOf(packet, "dts")))
+          .toList();
+    }
+
+    // The latest audio time among the packets that the file holds before its last video packet.
+    Duration latestAudioWrittenBeforeTheVideosLastPacket() {
+      var lastVideoPacket = packets.lastIndexOf(videoPackets().getLast());
+      return packets.subList(0, lastVideoPacket).stream()
+          .filter(packet -> "audio".equals(typeOf(packet)))
+          .map(packet -> onTheTimeline(presentationOrDecodeTimeOf(packet)))
+          .max(Comparator.naturalOrder())
+          .orElseThrow();
+    }
+
+    private List<Map<String, String>> videoPackets() {
+      return packets.stream().filter(packet -> "video".equals(typeOf(packet))).toList();
+    }
+
+    private String typeOf(Map<String, String> packet) {
+      return streamTypes.get(Integer.parseInt(packet.get("stream_index")));
+    }
+
+    private BigDecimal presentationOrDecodeTimeOf(Map<String, String> packet) {
+      return "N/A".equals(packet.get("pts")) ? timeOf(packet, "dts") : timeOf(packet, "pts");
+    }
+
+    // The field's ticks of the packet's time base, in seconds to 1e-15 s.
+    private BigDecimal timeOf(Map<String, String> packet, String field) {
+      var timeBase = timeBases.get(Integer.parseInt(packet.get("stream_index"))).split("/");
+      return new BigDecimal(packet.get(field))
+          .multiply(new BigDecimal(timeBase[0]))
+          .divide(new BigDecimal(timeBase[1]), 15, RoundingMode.HALF_UP);
+    }
+
+    private Duration onTheTimeline(BigDecimal seconds) {
+      return Duration.ofNanos(
+          seconds
+              .subtract(start)
+              .movePointRight(9)
+              .setScale(0, RoundingMode.HALF_UP)
+              .longValueExact());
+    }
   }
 
   // 130 s of H.264 at 640x360 and 24 fps with keyframes 60 s apart, in MPEG-TS.
