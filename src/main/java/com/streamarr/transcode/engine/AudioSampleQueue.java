@@ -4,8 +4,12 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.stream.Stream;
@@ -38,10 +42,11 @@ final class AudioSampleQueue {
   // Before any audio sample, none has run backwards.
   private long lastPresentationTime = Long.MIN_VALUE;
   private long droppedLateSampleCount;
-  // How long one full audio frame lasts: the shortest sample that arrived before the latest. An
-  // encoder shortens only the audio's last frame, which arrives last, and the sample before a gap
-  // in the audio lasts longer than a frame.
-  private OptionalLong shortestEarlierSampleDuration = OptionalLong.empty();
+  // How many of the samples that arrived before the latest last each duration. The most common
+  // duration is one full audio frame: an encoder shortens only the audio's last frame, which
+  // arrives last, the sample before a gap in the audio lasts longer than a frame, and a source's
+  // times rounded to the millisecond shorten or lengthen only a few copied frames.
+  private final Map<Long, Long> earlierSampleDurationCounts = new HashMap<>();
   private OptionalLong latestSampleDuration = OptionalLong.empty();
   private Optional<AudioTail> prerollTail = Optional.empty();
   private Optional<AudioTail> discardedTail = Optional.empty();
@@ -147,9 +152,7 @@ final class AudioSampleQueue {
   private boolean tryHold(Fragment fragment, Sample sample) {
     requireNoRegression(sample);
     latestSampleDuration.ifPresent(
-        latest ->
-            shortestEarlierSampleDuration =
-                OptionalLong.of(Math.min(latest, shortestEarlierSampleDuration.orElse(latest))));
+        latest -> earlierSampleDurationCounts.merge(latest, 1L, Long::sum));
     latestSampleDuration = OptionalLong.of(sample.duration());
     var timescale = audioTimescaleOf(fragment);
     if (startsAtOrAfterThePaddedEnd(sample.presentationTime(), timescale)) {
@@ -206,7 +209,8 @@ final class AudioSampleQueue {
 
   /**
    * Where the audio sample ends, and where one more full audio frame would end after it: a frame at
-   * least as long as the sample and as the shortest sample that arrived before the latest.
+   * least as long as the sample and as the duration most samples that arrived before the latest
+   * share, the shorter of two as common.
    */
   AudioTail tailOf(CarriedSample carried) {
     return tailOf(carried.sample(), audioTimescaleOf(carried.fragment()));
@@ -215,7 +219,15 @@ final class AudioSampleQueue {
   private AudioTail tailOf(Sample sample, long timescale) {
     var duration = sample.duration();
     return AudioTail.of(
-        sample, timescale, Math.max(duration, shortestEarlierSampleDuration.orElse(duration)));
+        sample, timescale, Math.max(duration, mostCommonEarlierSampleDuration().orElse(duration)));
+  }
+
+  private Optional<Long> mostCommonEarlierSampleDuration() {
+    return earlierSampleDurationCounts.entrySet().stream()
+        .max(
+            Entry.<Long, Long>comparingByValue()
+                .thenComparing(Entry.comparingByKey(Comparator.reverseOrder())))
+        .map(Entry::getKey);
   }
 
   private record Queued(long number, CarriedSample sample) {}

@@ -707,6 +707,28 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // The same video. The copied audio's second sample lasts 1,016 ticks, as in AAC copied from a
+  // source whose times are rounded to the millisecond. The other samples are frames of 1,024
+  // ticks, and a last frame shortened to 908 ticks. It ends at 0.979 s, 21.25 ms before the video:
+  // more than that rounded sample lasts, though within one full frame.
+  @Test
+  @DisplayName(
+      "Should deliver an encoded segment when its copied audio ends within one full audio frame of"
+          + " its video after an earlier sample that rounded times shortened")
+  void
+      shouldDeliverAnEncodedSegmentWhenItsCopiedAudioEndsWithinOneFullAudioFrameOfItsVideoAfterAnEarlierSampleThatRoundedTimesShortened() {
+    var producer =
+        producerOfEncodedSixtyFramesPerSecondBeside(
+            joined(
+                audioSamples(1, 1_024),
+                audioSamples(1, 1_016),
+                audioSamples(43, 1_024),
+                audioSamples(1, 908)));
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
   // The same video. The copied audio's first sample lasts 8,192 ticks, 171 ms, as the sample before
   // a gap in the audio does. Then come 37 frames of 1,024 ticks and a last frame shortened to 384
   // ticks. It ends at 0.968 s, 32 ms before the video: more than one full frame, though less than
@@ -720,6 +742,25 @@ class ProducerTest {
     var producer =
         producerOfEncodedSixtyFramesPerSecondBeside(
             joined(audioSamples(1, 8_192), audioSamples(37, 1_024), audioSamples(1, 384)));
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
+  }
+
+  // The same video. The copied audio's first sample lasts 40,000 ticks, 833 ms, as the sample
+  // before
+  // a gap in the audio does. One frame of 1,024 ticks and a last frame shortened to 384 ticks
+  // follow. It ends at 0.863 s, 137 ms before the video: more than that one frame, though less
+  // than the first sample, and no earlier duration is more common than the other.
+  @Test
+  @DisplayName(
+      "Should refuse an encoded segment when its copied audio ends more than one full audio frame"
+          + " before its video although as many earlier samples span a gap as last a frame")
+  void
+      shouldRefuseAnEncodedSegmentWhenItsCopiedAudioEndsMoreThanOneFullAudioFrameBeforeItsVideoAlthoughAsManyEarlierSamplesSpanAGapAsLastAFrame() {
+    var producer =
+        producerOfEncodedSixtyFramesPerSecondBeside(
+            joined(audioSamples(1, 40_000), audioSamples(1, 1_024), audioSamples(1, 384)));
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
     assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
