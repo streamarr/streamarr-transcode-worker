@@ -242,13 +242,14 @@ final class KeyframeScan {
   private void readCopies(Duration latestPicture, Process process) {
     var stopped = false;
     var framecrc = new Framecrc(Optional.empty());
+    var copiedVideo = new CopiedVideo(latestPicture);
     try (var copies = linesOf(process.getErrorStream())) {
       for (var line = copies.readLine(); line != null; line = copies.readLine()) {
         var endsTheRead =
             framecrc
                 .packetOf(line)
                 .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
-                .filter(packet -> endsTheRead(packet, latestPicture))
+                .filter(copiedVideo::endsTheRead)
                 .isPresent();
         if (endsTheRead && !stopped) {
           stopped = true;
@@ -263,40 +264,8 @@ final class KeyframeScan {
     }
   }
 
-  private boolean endsTheRead(Packet packet, Duration latestPicture) {
-    if (packet.decodeTime().compareTo(readEnd(latestPicture)) >= 0) {
-      return true;
-    }
-
-    return request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent()
-        && leavesNoLaterPictureInTime(packet, latestPicture);
-  }
-
-  // The leading pictures that follow a last keyframe in decode order can present by the latest
-  // picture's time although the keyframe ends the video. Every packet after the one that ends the
-  // video decodes after it and presents no earlier than it decodes, so none presents by then when
-  // that packet decodes at or after that time. When it presents by then, so does any keyframe that
-  // the read holds, and no keyframe follows the picture that presents last.
-  private static boolean leavesNoLaterPictureInTime(Packet packet, Duration latestPicture) {
-    return packet.decodeTime().compareTo(latestPicture) >= 0
-        || packet.presentationTime().compareTo(latestPicture) <= 0;
-  }
-
   private static Duration readEnd(Duration latestPicture) {
     return latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE);
-  }
-
-  // The server's video end subtracts the container's start time as ffprobe prints it, in whole
-  // microseconds. FFmpeg's -start_at_zero subtracts that start rounded to the nearest of the
-  // packet's ticks, so on the check's timeline the packet that ends the video can end up to half a
-  // tick before the server's video end.
-  private static boolean endsTheVideo(Packet packet, Duration videoEnd) {
-    return packet
-            .presentationEnd()
-            .plus(packet.tick().dividedBy(2))
-            .plus(TIME_ROUNDING)
-            .compareTo(videoEnd)
-        >= 0;
   }
 
   private static void awaitCopies(FutureTask<Void> copies) throws InterruptedException {
@@ -458,6 +427,48 @@ final class KeyframeScan {
     boolean decodes(Packet packet) {
       var time = packet.decodeTime();
       return (from.isZero() || time.compareTo(from) >= 0) && time.compareTo(until) < 0;
+    }
+  }
+
+  /** The video packets that a first picture check copies, which decide where its read ends. */
+  private final class CopiedVideo {
+
+    private final Duration latestPicture;
+
+    private CopiedVideo(Duration latestPicture) {
+      this.latestPicture = latestPicture;
+    }
+
+    boolean endsTheRead(Packet packet) {
+      if (packet.decodeTime().compareTo(readEnd(latestPicture)) >= 0) {
+        return true;
+      }
+
+      return request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent()
+          && leavesNoLaterPictureInTime(packet);
+    }
+
+    // The leading pictures that follow a last keyframe in decode order can present by the latest
+    // picture's time although the keyframe ends the video. Every packet after the one that ends the
+    // video decodes after it and presents no earlier than it decodes, so none presents by then when
+    // that packet decodes at or after that time. When it presents by then, so does any keyframe
+    // that the read holds, and no keyframe follows the picture that presents last.
+    private boolean leavesNoLaterPictureInTime(Packet packet) {
+      return packet.decodeTime().compareTo(latestPicture) >= 0
+          || packet.presentationTime().compareTo(latestPicture) <= 0;
+    }
+
+    // The server's video end subtracts the container's start time as ffprobe prints it, in whole
+    // microseconds. FFmpeg's -start_at_zero subtracts that start rounded to the nearest of the
+    // packet's ticks, so on the check's timeline the packet that ends the video can end up to half
+    // a tick before the server's video end.
+    private static boolean endsTheVideo(Packet packet, Duration videoEnd) {
+      return packet
+              .presentationEnd()
+              .plus(packet.tick().dividedBy(2))
+              .plus(TIME_ROUNDING)
+              .compareTo(videoEnd)
+          >= 0;
     }
   }
 }
