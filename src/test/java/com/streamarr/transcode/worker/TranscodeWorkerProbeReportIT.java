@@ -45,7 +45,8 @@ class TranscodeWorkerProbeReportIT {
   @DisplayName(
       "Should deliver a probe report larger than 128 KiB whole, in several messages, when the"
           + " control plane accepts at most 131,072 bytes in one message")
-  void shouldDeliverAProbeReportLargerThan128KibWholeInSeveralMessages() throws Exception {
+  void shouldDeliverAProbeReportLargerThan128KibWholeWhenTheControlPlaneAcceptsAt128KibAMessage()
+      throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     var language = "a".repeat(300_000);
     Files.writeString(

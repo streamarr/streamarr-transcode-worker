@@ -51,8 +51,10 @@ class ProbeReportLimitsTest {
   }
 
   @Test
-  @DisplayName("Should read the three limits on a probe report from the accepted worker session")
-  void shouldReadTheThreeLimitsOnAProbeReportFromTheAcceptedWorkerSession() {
+  @DisplayName(
+      "Should read the three limits on a probe report as unsigned values when the server accepts"
+          + " the worker session")
+  void shouldReadTheThreeLimitsOnAProbeReportAsUnsignedValuesWhenTheServerAcceptsTheSession() {
     var accepted =
         WorkerSessionAccepted.newBuilder()
             .setKeyframeLimit(150_000)
@@ -200,7 +202,7 @@ class ProbeReportLimitsTest {
   @DisplayName(
       "Should check the length of the report that the keyframe limit and the interval limit leave"
           + " when the probe's own report is longer than the length limit")
-  void shouldCheckTheLengthOfTheReportThatTheKeyframeAndIntervalLimitsLeave() {
+  void shouldCheckTheLengthOfTheReportThatTheOtherLimitsLeaveWhenTheProbesOwnReportIsTooLong() {
     var report = reportOf(PROBE, 1_000, List.of(1_000));
     var withoutMeasurement = reportOf(PROBE, 1_000, List.of());
     var limits =

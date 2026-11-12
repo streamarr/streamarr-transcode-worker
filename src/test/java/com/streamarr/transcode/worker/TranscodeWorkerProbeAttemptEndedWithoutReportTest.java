@@ -213,9 +213,10 @@ class TranscodeWorkerProbeAttemptEndedWithoutReportTest {
 
   @Test
   @DisplayName(
-      "Should free the probe's unit before the event leaves, so that the worker starts a probe"
-          + " that the server sends for the unit as soon as the event arrives")
-  void shouldFreeTheProbesUnitBeforeTheEventLeaves() throws Exception {
+      "Should free the probe's unit before the event leaves when the server cancels the probe, so"
+          + " that the worker starts a probe that the server sends for the unit as soon as the"
+          + " event arrives")
+  void shouldFreeTheProbesUnitBeforeTheEventLeavesWhenTheServerCancelsTheProbe() throws Exception {
     var canceled = requestBuilder().build();
     var next = requestBuilder().build();
     var oneUnit =

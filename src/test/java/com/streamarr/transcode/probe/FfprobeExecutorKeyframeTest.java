@@ -1412,9 +1412,10 @@ class FfprobeExecutorKeyframeTest {
     }
 
     @Test
-    @DisplayName("Should report no maximum for a second video track that the probe does not choose")
-    void shouldReportNoMaximumForASecondVideoTrackThatTheProbeDoesNotChoose(@TempDir Path directory)
-        throws Exception {
+    @DisplayName(
+        "Should report no maximum for a second video track when the probe does not choose it")
+    void shouldReportNoMaximumForASecondVideoTrackWhenTheProbeDoesNotChooseIt(
+        @TempDir Path directory) throws Exception {
       var ffprobe = twoTrackFfprobe("{\"index\":1,\"codec_type\":\"video\",\"id\":\"0x2\"}");
 
       var media =

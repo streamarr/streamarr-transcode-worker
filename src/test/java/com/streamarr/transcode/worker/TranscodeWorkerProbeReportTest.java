@@ -174,9 +174,10 @@ class TranscodeWorkerProbeReportTest {
       ints = {MESSAGE_BYTES - 1, MESSAGE_BYTES, MESSAGE_BYTES + 1, 3 * MESSAGE_BYTES, 200_000})
   @DisplayName(
       "Should send the encoded report's consecutive bytes after the first message, at most 65,536"
-          + " in each message and none empty")
-  void shouldSendTheEncodedReportsConsecutiveBytesAfterTheFirstMessage(int reportBytes)
-      throws Exception {
+          + " in each message and none empty, when the report's length lies near a multiple of"
+          + " 65,536 bytes")
+  void shouldSendTheReportsBytesInMessagesOfAtMost65536WhenItsLengthLiesNearAMultipleOfThat(
+      int reportBytes) throws Exception {
     var request = requestBuilder().build();
     var expected = writeSourceWhoseReportTakes(request, reportBytes);
 

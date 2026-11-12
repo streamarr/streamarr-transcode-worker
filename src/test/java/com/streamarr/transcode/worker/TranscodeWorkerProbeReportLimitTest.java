@@ -50,9 +50,10 @@ class TranscodeWorkerProbeReportLimitTest {
   @ParameterizedTest(name = "a limit of {0} lets the other reports hold {1}")
   @CsvSource({"1, 1", "2, 1", "3, 1", "24, 22"})
   @DisplayName(
-      "Should let the reports of probes without playback priority hold at most the limit less the"
-          + " playback probe capacity of report calls at once, and at least one")
-  void shouldLetTheOtherReportsHoldAtMostTheLimitLessThePlaybackProbeCapacityOfReportCalls(
+      "Should let the reports of other probes than playback probes hold at most the limit less the"
+          + " playback probe capacity of report calls at once, and at least one, when more of them"
+          + " are ready")
+  void shouldLetTheOtherReportsHoldAtMostTheLimitLessThePlaybackProbeCapacityWhenMoreAreReady(
       int limit, int most) throws Exception {
     var runtime = acceptingReportCalls(limit);
     var requests =
@@ -77,8 +78,10 @@ class TranscodeWorkerProbeReportLimitTest {
   @ValueSource(ints = {1, 2, 3, 24})
   @DisplayName(
       "Should keep at most the report calls open that the server accepts at once, let the reports"
-          + " of playback probes take every one of them and make the other reports wait")
-  void shouldKeepAtMostTheReportCallsOpenThatTheServerAcceptsAtOnce(int limit) throws Exception {
+          + " of playback probes take every one of them and make the others wait, when more"
+          + " playback probes' reports are ready than the limit")
+  void shouldKeepAtMostTheReportCallsOpenThatTheServerAcceptsWhenMorePlaybackReportsAreReady(
+      int limit) throws Exception {
     var runtime = acceptingReportCalls(limit);
     var playback =
         Stream.generate(TranscodeWorkerProbeReportLimitTest::playback).limit(limit + 1L).toList();
@@ -104,8 +107,8 @@ class TranscodeWorkerProbeReportLimitTest {
   @CsvSource({"1, 1, 0", "2, 1, 1", "3, 1, 2", "24, 22, 2"})
   @DisplayName(
       "Should keep the report calls beyond the other reports' most for the reports of playback"
-          + " probes")
-  void shouldKeepTheReportCallsBeyondTheOtherReportsMostForTheReportsOfPlaybackProbes(
+          + " probes when reports of both kinds are ready")
+  void shouldKeepTheCallsBeyondTheOtherReportsMostForPlaybackProbesWhenBothKindsAreReady(
       int limit, int otherMost, int kept) throws Exception {
     var runtime = acceptingReportCalls(limit);
     var others =
@@ -227,9 +230,9 @@ class TranscodeWorkerProbeReportLimitTest {
   @ParameterizedTest(name = "{0}")
   @EnumSource(Scan.class)
   @DisplayName(
-      "Should send the report of a playback probe before the waiting report of a scan with"
-          + " playback priority that ended earlier")
-  void shouldSendTheReportOfALaterPlaybackProbeBeforeTheWaitingReportOfAScanWithPlaybackPriority(
+      "Should send the report of a playback probe first when the report of a scan with playback"
+          + " priority that ended earlier waits")
+  void shouldSendALaterPlaybackProbesReportFirstWhenTheReportOfAScanWithPlaybackPriorityWaits(
       Scan scan) throws Exception {
     var runtime = acceptingReportCalls(1);
     var open = background();
@@ -309,8 +312,10 @@ class TranscodeWorkerProbeReportLimitTest {
   }
 
   @Test
-  @DisplayName("Should send the reports of playback probes before the other reports")
-  void shouldSendTheReportsOfPlaybackProbesBeforeTheOtherReports() throws Exception {
+  @DisplayName(
+      "Should send the reports of playback probes before the other reports when both wait for a"
+          + " report call")
+  void shouldSendTheReportsOfPlaybackProbesBeforeTheOtherReportsWhenBothWait() throws Exception {
     var runtime = acceptingReportCalls(1);
     var open = background();
     var other = background();
