@@ -854,14 +854,7 @@ class ProducerTest {
           + " without a keyframe and the copied audio lasts as long")
   void
       shouldDeliverTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioLastsAsLong() {
-    var output =
-        OneSecondSegments.of(
-            IsoBoxes.videoAndAudioMoov(),
-            TimedFragment.keyframeAt(0)
-                .videoDuration(1_000)
-                .videoSampleCount(26)
-                .audioFrom(0, audioSamples(52, 1_000))
-                .build());
+    var output = outputWhoseVideoRunsToTheEndPastTheKeyframeMissedAtOneSecond();
     var process = ScriptedProcess.builder().output(output.bytes()).build();
     var producer =
         producerOfOneSecondSegments(process)
@@ -872,6 +865,66 @@ class ProducerTest {
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The same output, of two advertised segments. No segment takes audio that starts after its
+  // interval, so the four audio samples from 1 s on stay out of segment 0 whether the attempt
+  // copies or encodes them, and the report names the audio, stream 1, as the stream that still had
+  // media after the last delivered segment.
+  @ParameterizedTest(name = "copies the audio: {0}")
+  @ValueSource(booleans = {true, false})
+  @DisplayName(
+      "Should deliver the output's last segment without the audio after its interval and report"
+          + " the audio stream as still having media there when its encoded video runs past its"
+          + " interval without a keyframe")
+  void
+      shouldDeliverTheOutputsLastSegmentWithoutTheAudioAfterItsIntervalAndReportTheAudioStreamAsStillHavingMediaThereWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframe(
+          boolean copiesAudio) {
+    var output = outputWhoseVideoRunsToTheEndPastTheKeyframeMissedAtOneSecond();
+    var process =
+        ScriptedProcess.builder()
+            .output(output.bytes())
+            .stderr(
+                """
+                Stream mapping:
+                  Stream #0:0 -> #1:0 (copy)
+                  Stream #0:1 -> #1:1 (copy)
+                #tb 0: 1/24
+                #tb 1: 1/48000
+                0, 25, 25, 1, 1000, 0x0a1b2c3d
+                1, 51000, 51000, 1000, 300, 0x0a1b2c3d
+                """)
+            .build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .mediaSegmentCount(2)
+            .copiesAudio(copiesAudio)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    var bothStreamsEnd = Duration.ofNanos(1_083_333_333L);
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(
+            new Completed(
+                0,
+                new SourceEnd(
+                    List.of(new StreamEnd(0, bothStreamsEnd), new StreamEnd(1, bothStreamsEnd)),
+                    Optional.of(new EndedEarly(0, List.of(1))))));
+    assertThat(audioDecodeTimesOf("segment0.m4s")).last().isEqualTo(47_000L);
+  }
+
+  // One fragment from a keyframe at 0 s: 26 pictures of 1/24 s and 52 audio samples of 1/48 s,
+  // which both end at 1.083 s.
+  private static OneSecondSegments outputWhoseVideoRunsToTheEndPastTheKeyframeMissedAtOneSecond() {
+    return OneSecondSegments.of(
+        IsoBoxes.videoAndAudioMoov(),
+        TimedFragment.keyframeAt(0)
+            .videoDuration(1_000)
+            .videoSampleCount(26)
+            .audioFrom(0, audioSamples(52, 1_000))
+            .build());
   }
 
   @ParameterizedTest(name = "{0}")
