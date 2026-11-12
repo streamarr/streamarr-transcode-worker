@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 /**
@@ -19,17 +20,33 @@ final class ProcessReads {
 
   /**
    * The bytes that the process has read; empty when the system keeps no such count, as outside
-   * Linux, when the worker may not read it, or once the process has exited.
+   * Linux, when the worker may not read it, when the process has no handle that names it, or once
+   * the process has exited.
    */
   static OptionalLong bytesRead(Process process) {
-    var bytesRead = bytesReadOf(Path.of("/proc", Long.toString(process.pid()), "io"));
+    var handle = handleOf(process);
+    if (handle.isEmpty()) {
+      return OptionalLong.empty();
+    }
+
+    var bytesRead = bytesReadOf(Path.of("/proc", Long.toString(handle.get().pid()), "io"));
     // A child whose handle is alive after the read still held its pid during it, so the count is
     // the child's. The handle compares the process's start time, which Process.isAlive does not.
-    if (!process.toHandle().isAlive()) {
+    if (!handle.get().isAlive()) {
       return OptionalLong.empty();
     }
 
     return bytesRead;
+  }
+
+  // Process.toHandle throws for a class that does not support handles, such as a wrapper of the
+  // JDK's process that does not pass the handle on.
+  private static Optional<ProcessHandle> handleOf(Process process) {
+    try {
+      return Optional.of(process.toHandle());
+    } catch (UnsupportedOperationException _) {
+      return Optional.empty();
+    }
   }
 
   private static OptionalLong bytesReadOf(Path io) {

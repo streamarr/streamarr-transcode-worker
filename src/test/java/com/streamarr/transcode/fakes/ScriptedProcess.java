@@ -76,6 +76,7 @@ public final class ScriptedProcess extends Process {
   private final boolean readsMediaFromStdin;
   private final OptionalInt stdinCapacity;
   private final byte[] stderr;
+  private final boolean hasNoHandle;
   private final ByteArrayOutputStream stdin = new ByteArrayOutputStream();
   private final CompletableFuture<Integer> exit = new CompletableFuture<>();
   private final CompletableFuture<Void> pauseReached = new CompletableFuture<>();
@@ -117,7 +118,8 @@ public final class ScriptedProcess extends Process {
       boolean lingersAfterKill,
       boolean readsMediaFromStdin,
       Integer stdinCapacity,
-      String stderr) {
+      String stderr,
+      boolean hasNoHandle) {
     this.output = output.clone();
     this.exitCode = exitCode;
     this.exitTiming = Objects.requireNonNullElse(exitTiming, ExitTiming.AT_END_OF_OUTPUT);
@@ -131,6 +133,7 @@ public final class ScriptedProcess extends Process {
     this.readsMediaFromStdin = readsMediaFromStdin;
     this.stdinCapacity = optionalOffset(stdinCapacity);
     this.stderr = Objects.requireNonNullElse(stderr, "").getBytes(StandardCharsets.UTF_8);
+    this.hasNoHandle = hasNoHandle;
     this.endOffset = this.output.length;
     if (this.exitTiming == ExitTiming.AT_LAUNCH) {
       exit.complete(exitCode);
@@ -411,9 +414,16 @@ public final class ScriptedProcess extends Process {
     }
   }
 
-  /** A handle whose termination and destruction act on this process as its own methods do. */
+  /**
+   * A handle whose termination and destruction act on this process as its own methods do; none for
+   * a process scripted without one, which throws as {@link Process} does by default.
+   */
   @Override
   public ProcessHandle toHandle() {
+    if (hasNoHandle) {
+      return super.toHandle();
+    }
+
     return new ScriptedHandle();
   }
 
