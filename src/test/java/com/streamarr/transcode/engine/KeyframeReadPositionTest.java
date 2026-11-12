@@ -19,11 +19,14 @@ import java.util.UUID;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -59,6 +62,20 @@ class KeyframeReadPositionTest {
       1, 24250, 24250, 250, 300, 0x0a1b2c3d
       0, 24500, 24583, 250, 1000, 0x0a1b2c3d, F=0x0
       1, 24500, 24500, 250, 300, 0x0a1b2c3d
+      """;
+
+  // A first picture check's copies of a read inside the GOP from 20 s of a video that ends at 22 s:
+  // the last video packet presents from 21.958 s for 42 ms, and the audio runs on to 600 s.
+  private static final String COPIES_UP_TO_A_VIDEO_END_AT_22_SECONDS =
+      """
+      #tb 0: 1/1000
+      #tb 1: 1/1000
+      0, 21792, 21875, 42, 1000, 0x0a1b2c3d, F=0x0
+      1, 21800, 21800, 250, 300, 0x0a1b2c3d
+      0, 21875, 21958, 42, 1000, 0x0a1b2c3d, F=0x0
+      1, 22050, 22050, 250, 300, 0x0a1b2c3d
+      1, 60000, 60000, 250, 300, 0x0a1b2c3d
+      1, 600000, 600000, 250, 300, 0x0a1b2c3d
       """;
 
   private final AtomicLong bytesRead = new AtomicLong();
@@ -527,6 +544,143 @@ class KeyframeReadPositionTest {
     assertThat(source.scannedIntervals()).isEmpty();
   }
 
+  // A held encode's video ends at 22 s, before 24.5 s, a second past the search time. The stored
+  // position's read lands inside the GOP from 20 s, so its decoder shows no picture, and its copies
+  // run on through the audio to 600 s. FFmpeg quits only on q, as a real one ends only at the
+  // source's end.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should stop the first picture check once a copied video packet ends at the video's end, and"
+          + " search, when the video ends before a second past the search time")
+  void shouldStopTheFirstPictureCheckAtTheVideosEndWhenTheVideoEndsBeforeTheReadEnd()
+      throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(COPIES_UP_TO_A_VIDEO_END_AT_22_SECONDS)
+            .exitTiming(ScriptedProcess.ExitTiming.AT_QUIT)
+            .build();
+    var source = everyTwoSecondsUpTo(20, 22);
+
+    var readPosition =
+        engine(checkingTheStoredPositionWith(check, source))
+            .readPosition(
+                endingVideoAt(
+                    Duration.ofSeconds(22),
+                    storing(STORED_POSITION, holding(searching(seconds("23.5"), 24)))),
+                bytesRead::addAndGet);
+
+    assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
+    assertThat(readPosition).contains(decodeTimeOf(18));
+  }
+
+  // The last copied video packet ends at 1,980,000 ticks of 1/90000, exactly 22 s. The server's
+  // video end lies half a microsecond later, as it can when the server subtracts the container's
+  // start time as ffprobe prints it, in whole microseconds, and FFmpeg subtracts it in ticks.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should stop the first picture check when a copied video packet ends less than a microsecond"
+          + " before the video's end")
+  void shouldStopTheFirstPictureCheckWhenAPacketEndsLessThanAMicrosecondBeforeTheVideosEnd()
+      throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(
+                """
+                #tb 0: 1/90000
+                #tb 1: 1/90000
+                0, 1964250, 1972500, 3750, 1000, 0x0a1b2c3d, F=0x0
+                1, 1962000, 1962000, 1920, 300, 0x0a1b2c3d
+                0, 1968000, 1976250, 3750, 1000, 0x0a1b2c3d, F=0x0
+                1, 54000000, 54000000, 1920, 300, 0x0a1b2c3d
+                """)
+            .exitTiming(ScriptedProcess.ExitTiming.AT_QUIT)
+            .build();
+
+    engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(20, 22)))
+        .readPosition(
+            endingVideoAt(
+                Duration.ofSeconds(22).plusNanos(500),
+                storing(STORED_POSITION, holding(searching(seconds("23.5"), 24)))),
+            bytesRead::addAndGet);
+
+    assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
+  }
+
+  // Neither copied video packet decodes at 24.5 s, a second past the search time, and the video's
+  // end lies past both, so FFmpeg copies the audio on to the end of the file and exits.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("videoEndsThatNoCopiedPacketReaches")
+  @Timeout(10)
+  @DisplayName(
+      "Should let the first picture check read to the end of the file without a q when no copied"
+          + " video packet reaches the read end or the video's end")
+  void shouldLetTheCheckReadToTheEndWhenNoCopiedVideoPacketReachesTheReadEndOrTheVideosEnd(
+      String videoEndCase, Optional<Duration> videoEnd) throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(COPIES_UP_TO_A_VIDEO_END_AT_22_SECONDS)
+            .outputAwaitsErrorOutput(true)
+            .build();
+    var request =
+        storing(STORED_POSITION, holding(searching(seconds("23.5"), 24))).toBuilder()
+            .videoEnd(videoEnd)
+            .build();
+
+    var readPosition =
+        engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(20, 22)))
+            .readPosition(request, bytesRead::addAndGet);
+
+    assertThat(check.stdinText()).as("no q").isEmpty();
+    assertThat(readPosition).contains(decodeTimeOf(18));
+  }
+
+  static Stream<Arguments> videoEndsThatNoCopiedPacketReaches() {
+    return Stream.of(
+        Arguments.of("the video's end is unknown", Optional.empty()),
+        Arguments.of(
+            "every copied video packet ends at least 1 ms before the video's end",
+            Optional.of(Duration.ofMillis(22_001))));
+  }
+
+  // The video ends at 24.55 s, just past 24.5 s, a second past the search time. The copies list
+  // the read's last two video packets: the last decodes at 24.467 s, before 24.5 s, so only the
+  // video's end stops the check.
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should stop the first picture check at the video's end when the video ends just past the"
+          + " read end and no copied video packet decodes at the read end")
+  void shouldStopTheCheckAtTheVideosEndWhenTheVideoEndsJustPastTheReadEnd() throws Exception {
+    var check =
+        ScriptedProcess.builder()
+            .output(new byte[0])
+            .stderr(
+                """
+                #tb 0: 1/1000
+                #tb 1: 1/1000
+                0, 24383, 24466, 42, 1000, 0x0a1b2c3d, F=0x0
+                1, 24400, 24400, 250, 300, 0x0a1b2c3d
+                0, 24467, 24508, 42, 1000, 0x0a1b2c3d, F=0x0
+                1, 600000, 600000, 250, 300, 0x0a1b2c3d
+                """)
+            .exitTiming(ScriptedProcess.ExitTiming.AT_QUIT)
+            .build();
+
+    engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(24, 25)))
+        .readPosition(
+            endingVideoAt(
+                Duration.ofMillis(24_550),
+                storing(STORED_POSITION, holding(searching(seconds("23.5"), 24)))),
+            bytesRead::addAndGet);
+
+    assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
+  }
+
   // No keyframe's read shows a picture before the video ends at 30 s.
   @Test
   @DisplayName(
@@ -699,6 +853,11 @@ class KeyframeReadPositionTest {
 
   private static TranscodeRequest holding(TranscodeRequest request) {
     return request.toBuilder().transcodeDecision(decision(true)).build();
+  }
+
+  // The request with the chosen video's end that the server read from a keyframe packet scan.
+  private static TranscodeRequest endingVideoAt(Duration videoEnd, TranscodeRequest request) {
+    return request.toBuilder().videoEnd(Optional.of(videoEnd)).build();
   }
 
   private static TranscodeDecision decision(boolean holdsLastFrame) {
