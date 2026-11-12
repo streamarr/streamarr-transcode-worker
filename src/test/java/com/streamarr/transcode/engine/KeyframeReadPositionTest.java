@@ -296,11 +296,13 @@ class KeyframeReadPositionTest {
     assertThat(readPosition).contains(Duration.ZERO);
   }
 
-  // The server stores the keyframe at 22 s and sends its decode time.
+  // The server stores the keyframe at 22 s and sends its decode time. Each FFmpeg that runs before
+  // the attempt's own delays its first segment, so the stored position's read is decoded once and
+  // not first copied to see where it lands.
   @Test
   @DisplayName(
-      "Should keep the stored seek position after one read check, without a scan, when its read"
-          + " shows the keyframe's picture at or before the search time")
+      "Should keep the stored seek position after one first picture check, without a landing check"
+          + " or a scan, when its read shows the keyframe's picture at or before the search time")
   void shouldKeepTheStoredSeekPositionWhenItsReadShowsThePictureAtOrBeforeTheSearchTime()
       throws Exception {
     var source = everyTwoSecondsUpTo(30, 30);
@@ -311,7 +313,10 @@ class KeyframeReadPositionTest {
                 storing(decodeTimeOf(22), searching(seconds("23.5"), 24)), bytesRead::addAndGet);
 
     assertThat(readPosition).contains(decodeTimeOf(22));
-    assertThat(source.readChecks()).containsExactly(decodeTimeOf(22));
+    assertThat(source.firstPictureReadEnds())
+        .singleElement()
+        .satisfies(end -> assertThat(end).isBetween(seconds("24.5"), seconds("24.500002")));
+    assertThat(source.readChecks()).isEmpty();
     assertThat(source.scannedIntervals()).isEmpty();
   }
 
@@ -352,8 +357,7 @@ class KeyframeReadPositionTest {
     assertThat(readPosition).contains(decodeTimeOf(22).minus(B_FRAME_READ_BACK));
     // The seek's argument rounds the read-back's time up to whole microseconds.
     assertThat(source.readChecks())
-        .containsExactly(
-            decodeTimeOf(22), Duration.ofSeconds(22), decodeTimeOf(22), seconds("21.786566"));
+        .containsExactly(Duration.ofSeconds(22), decodeTimeOf(22), seconds("21.786566"));
   }
 
   // From the recovery point at 22 s the decoder shows its first picture 1.75 s later, at 23.75 s,
@@ -375,11 +379,7 @@ class KeyframeReadPositionTest {
     assertThat(readPosition).contains(decodeTimeOf(20));
     assertThat(source.readChecks())
         .containsExactly(
-            decodeTimeOf(22),
-            Duration.ofSeconds(22),
-            decodeTimeOf(22),
-            Duration.ofSeconds(20),
-            decodeTimeOf(20));
+            Duration.ofSeconds(22), decodeTimeOf(22), Duration.ofSeconds(20), decodeTimeOf(20));
   }
 
   // From the recovery point at 22 s the decoder shows its first picture at 27 s, 5 s later, after

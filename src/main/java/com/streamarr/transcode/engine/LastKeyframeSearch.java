@@ -81,21 +81,17 @@ final class LastKeyframeSearch {
     return new Search(target, scan).readPosition();
   }
 
-  // The server's stored position places a seek on the stored keyframe's time that the container's
-  // demuxer seeks by, so a read that starts after that time has missed the keyframe.
+  // A read whose decoder shows a picture by the search time decodes every picture of the first
+  // segment, wherever it lands. The stored position's read almost always does, so it runs without
+  // the landing check, which only ends a late read sooner, and starts the attempt one FFmpeg
+  // sooner.
   private static boolean showsAPictureInTime(Duration stored, Target target, KeyframeScan scan)
       throws InterruptedException {
     if (!stored.isPositive()) {
       return true;
     }
 
-    var read =
-        scan.firstPicture(
-            ReadCheck.builder()
-                .seekPosition(stored)
-                .latestLanding(stored)
-                .latestPicture(target.searchTime())
-                .build());
+    var read = scan.firstDecodedPicture(stored, target.searchTime());
     return read instanceof SeekRead.FirstPicture(var time)
         && time.compareTo(target.searchTime()) <= 0;
   }

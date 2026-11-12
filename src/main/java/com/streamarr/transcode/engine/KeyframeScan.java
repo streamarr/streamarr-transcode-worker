@@ -89,15 +89,13 @@ final class KeyframeScan {
   /**
    * What the attempt's own read from the check's seek position shows first. One FFmpeg copies the
    * read's first video packet, which ends a read that starts after the latest landing at once.
-   * Another decodes the chosen video from where that seek lands, as the attempt's decoder does, and
-   * stops reading a second past the latest picture's time.
+   * Another then decodes the read as {@link #firstDecodedPicture} does.
    */
   SeekRead firstPicture(ReadCheck check) throws InterruptedException {
-    var source = request.sourcePath();
-    var decision = request.transcodeDecision();
     var landing =
         run(
-            commandBuilder.buildSeekLandingCommand(source, decision, check.seekPosition()),
+            commandBuilder.buildSeekLandingCommand(
+                request.sourcePath(), request.transcodeDecision(), check.seekPosition()),
             this::readFirstVideoDecodeTime);
     if (landing.isEmpty()) {
       return new SeekRead.NoVideo();
@@ -107,14 +105,24 @@ final class KeyframeScan {
       return new SeekRead.NoPictureInTime();
     }
 
-    var length =
-        check.latestPicture().plus(REFERENCES_PAST_THE_LATEST_PICTURE).minus(check.seekPosition());
+    return firstDecodedPicture(check.seekPosition(), check.latestPicture());
+  }
+
+  /**
+   * The decoder's first picture from the attempt's own read from the seek position, without a check
+   * of where the read lands. One FFmpeg decodes the chosen video from where that seek lands, as the
+   * attempt's decoder does, and stops reading a second past the latest picture's time.
+   */
+  SeekRead firstDecodedPicture(Duration seekPosition, Duration latestPicture)
+      throws InterruptedException {
+    var length = latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE).minus(seekPosition);
     if (!length.isPositive()) {
       return new SeekRead.NoPictureInTime();
     }
 
     var command =
-        commandBuilder.buildFirstPictureCommand(source, decision, check.seekPosition(), length);
+        commandBuilder.buildFirstPictureCommand(
+            request.sourcePath(), request.transcodeDecision(), seekPosition, length);
     return run(command, this::readFirstPicture)
         .<SeekRead>map(SeekRead.FirstPicture::new)
         .orElseGet(SeekRead.NoPictureInTime::new);
