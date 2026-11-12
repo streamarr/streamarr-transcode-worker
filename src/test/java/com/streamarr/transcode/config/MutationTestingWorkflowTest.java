@@ -78,10 +78,17 @@ class MutationTestingWorkflowTest {
     assertThat(map(strategy.get("matrix")).get("shard"))
         .isEqualTo(IntStream.range(0, (Integer) shards).boxed().toList());
     assertThat(stepNamed(steps(job(SHARD_JOB)), PIT_STEP).get("run").toString())
+        .contains("-P" + PROFILE, "\"-DtargetClasses=$classes\"", "mutationCoverage");
+  }
+
+  @Test
+  @DisplayName("Should stop a shard before PIT runs when its classes cannot be listed")
+  void shouldStopAShardBeforePitRunsWhenItsClassesCannotBeListed() throws IOException {
+    var run = stepNamed(steps(job(SHARD_JOB)), PIT_STEP).get("run").toString();
+
+    assertThat(run.lines().findFirst())
         .contains(
-            "-P" + PROFILE,
-            "\"-DtargetClasses=$(src/test/mutation-report/shard-classes.sh \"$SHARD\" \"$SHARDS\")\"",
-            "mutationCoverage");
+            "classes=\"$(src/test/mutation-report/shard-classes.sh \"$SHARD\" \"$SHARDS\")\"");
   }
 
   @Test

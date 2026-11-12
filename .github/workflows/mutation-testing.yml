@@ -42,10 +42,12 @@ jobs:
       - name: Mutate the production classes under the unit tests
         env:
           SHARD: ${{ matrix.shard }}
-        run: >-
-          ./mvnw -B -Pmutation-testing -Djacoco.skip=true
-          "-DtargetClasses=$(src/test/mutation-report/shard-classes.sh "$SHARD" "$SHARDS")"
-          test-compile org.pitest:pitest-maven:mutationCoverage
+        # The listing is its own statement so that its failure stops the step: without
+        # targetClasses PIT would mutate every class.
+        run: |
+          classes="$(src/test/mutation-report/shard-classes.sh "$SHARD" "$SHARDS")"
+          ./mvnw -B -Pmutation-testing -Djacoco.skip=true "-DtargetClasses=$classes" \
+            test-compile org.pitest:pitest-maven:mutationCoverage
       - name: Keep the HTML report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

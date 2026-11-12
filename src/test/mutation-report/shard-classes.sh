@@ -22,4 +22,10 @@ find . -name '*.java' | sed 's|^\./||' | LC_ALL=C sort \
         gsub("/", ".")
         printf "%s%s,%s$*", (listed++ ? "," : ""), $0, $0
       }
-      END { print "" }'
+      END {
+        if (!listed) {
+          printf "shard-classes.sh: shard %d of %d holds no production class\n", shard, shards > "/dev/stderr"
+          exit 1
+        }
+        print ""
+      }'

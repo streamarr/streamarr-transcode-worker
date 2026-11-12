@@ -58,6 +58,26 @@ test('Should name a class and its nested classes but not a class that shares its
   assert.equal(result.stdout.trim(), 'com.streamarr.transcode.engine.Producer,com.streamarr.transcode.engine.Producer$*');
 });
 
+test('Should fail without naming a class when a shard would hold none', (t) => {
+  const tree = fixture(t);
+
+  const result = tree.run(5, 6);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /shard 5 of 6 holds no production class/);
+});
+
+test('Should fail without naming a class when run outside the repository root', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'worker-mutation-shard-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const result = spawnSync(script, ['0', '1'], { cwd: directory, encoding: 'utf8' });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, '');
+});
+
 for (const [name, args] of [
   ['no shard count', ['0']],
   ['a shard past the last', ['3', '3']],
