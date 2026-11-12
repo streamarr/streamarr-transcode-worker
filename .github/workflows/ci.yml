@@ -89,7 +89,12 @@ jobs:
       - name: Verify analysis failure handling
         run: node --test .github/actions/sonar/test/*.test.mjs
       - name: Verify the nightly mutation report
-        run: node --test src/test/mutation-report/*.test.mjs
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include='src/test/mutation-report/*.mjs'
+          --test-coverage-exclude='src/test/mutation-report/*.test.mjs'
+          --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90
+          src/test/mutation-report/*.test.mjs
       - name: Verify the fMP4 fixture recorder
         run: >-
           node --test --experimental-test-coverage
