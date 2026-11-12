@@ -203,21 +203,24 @@ class KeyframeSearchSmokeTest {
   }
 
   // The video's last keyframe presents last, from 4 s up to the video's end at 4.25 s, and decodes
-  // at 2.75 s. Its leading pictures follow it in decode order and present from 3.25 s. A read from
-  // 4 s lands on the keyframe, so the decoder shows a picture by 3.5 s only from those pictures.
-  @Test
+  // at 2.75 s. Its leading pictures follow it in decode order and present from 3.25 s. Each read
+  // lands on the keyframe, so the decoder shows a picture by 3.5 s only from those pictures. A seek
+  // into the Matroska file lands on it only from about 4.13 s on. Matroska stores no decode time,
+  // and FFmpeg's copy of that read decodes the keyframe at 3.5 s.
+  @ParameterizedTest(name = "{0} from {2} s")
+  @CsvSource({"mp4, mp4, 4", "matroska, mkv, 4.2"})
   @DisplayName(
       "Should send no q at the keyframe that ends the video when its leading pictures can present"
           + " by the latest picture's time")
-  void shouldSendNoQAtTheKeyframeThatEndsTheVideoWhenItsLeadingPicturesCanBeInTime()
-      throws Exception {
-    var source = videoWhoseLastKeyframeIsFollowedByPicturesThatPresentBeforeIt();
+  void shouldSendNoQAtTheKeyframeThatEndsTheVideoWhenItsLeadingPicturesCanBeInTime(
+      String format, String extension, BigDecimal seekSeconds) throws Exception {
+    var source = videoWhoseLastKeyframeIsFollowedByPicturesThatPresentBeforeIt(format, extension);
     var probed = probe(source);
     assertThat(probed.videoEnd()).as("the video's end").isEqualTo(Duration.ofMillis(4250));
     var launcher = new InputRecordingLauncher();
     var scan = firstPictureCheck(source, probed.videoEnd(), launcher);
 
-    var read = scan.firstDecodedPicture(Duration.ofSeconds(4), Duration.ofMillis(3500));
+    var read = scan.firstDecodedPicture(secondsOf(seekSeconds), Duration.ofMillis(3500));
 
     assertThat(read).isEqualTo(new KeyframeScan.SeekRead.FirstPicture(Duration.ofMillis(3250)));
     assertThat(launcher.input()).as("no q before the leading pictures").isEmpty();
@@ -344,11 +347,12 @@ class KeyframeSearchSmokeTest {
     return source;
   }
 
-  // 4.25 s of HEVC at 128x72 and 4 fps with keyframes at 0 and 4 s, and 30 s of AAC, in MP4. x265
-  // codes the three pictures before the last keyframe after it, as RADL pictures that need no
-  // picture before it.
-  private Path videoWhoseLastKeyframeIsFollowedByPicturesThatPresentBeforeIt() throws Exception {
-    var source = root.resolve("leading-pictures.mp4");
+  // 4.25 s of HEVC at 128x72 and 4 fps with keyframes at 0 and 4 s, and 30 s of AAC, in the
+  // format. x265 codes the three pictures before the last keyframe after it, as RADL pictures that
+  // need no picture before it.
+  private Path videoWhoseLastKeyframeIsFollowedByPicturesThatPresentBeforeIt(
+      String format, String extension) throws Exception {
+    var source = root.resolve("leading-pictures." + extension);
     ffmpeg(
         List.of(
             "-f",
@@ -369,7 +373,7 @@ class KeyframeSearchSmokeTest {
             "-b:a",
             "128k",
             "-f",
-            "mp4",
+            format,
             source.toString()));
     return source;
   }

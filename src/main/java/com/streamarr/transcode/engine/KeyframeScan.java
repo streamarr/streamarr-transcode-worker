@@ -120,10 +120,10 @@ final class KeyframeScan {
    * attempt's decoder does, and copies the packets that it reads to a second output, whose bytes
    * count as read. Once a copied video packet decodes at or after a second past the latest
    * picture's time, FFmpeg stops reading and decodes the packets that it has read. When the request
-   * carries the chosen video's end, the packet that ends there also stops the read, unless it
-   * decodes before the latest picture's time and presents after it: the packets after it can then
-   * still present by that time. Any other read whose video ends first and that shows no picture
-   * copies on to the end of the file.
+   * carries the chosen video's end, the packet that ends there also stops the read, unless the read
+   * holds keyframes and every one of them presents after the latest picture's time: the leading
+   * pictures after them can then still present by that time. Any other read whose video ends first
+   * and that shows no picture copies on to the end of the file.
    */
   SeekRead firstDecodedPicture(Duration seekPosition, Duration latestPicture)
       throws InterruptedException {
@@ -245,13 +245,11 @@ final class KeyframeScan {
     var copiedVideo = new CopiedVideo(latestPicture);
     try (var copies = linesOf(process.getErrorStream())) {
       for (var line = copies.readLine(); line != null; line = copies.readLine()) {
-        var endsTheRead =
-            framecrc
-                .packetOf(line)
-                .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
-                .filter(copiedVideo::endsTheRead)
-                .isPresent();
-        if (endsTheRead && !stopped) {
+        framecrc
+            .packetOf(line)
+            .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
+            .ifPresent(copiedVideo::add);
+        if (!stopped && copiedVideo.reachesTheReadEnd()) {
           stopped = true;
           quit(process);
         }
@@ -434,28 +432,44 @@ final class KeyframeScan {
   private final class CopiedVideo {
 
     private final Duration latestPicture;
+    private boolean holdsAKeyframe;
+    private boolean holdsAKeyframeInTime;
+    private boolean reachesTheReadEnd;
 
     private CopiedVideo(Duration latestPicture) {
       this.latestPicture = latestPicture;
     }
 
-    boolean endsTheRead(Packet packet) {
+    void add(Packet packet) {
+      if (packet.isKeyframe()) {
+        holdsAKeyframe = true;
+        holdsAKeyframeInTime |= packet.presentationTime().compareTo(latestPicture) <= 0;
+      }
+
+      reachesTheReadEnd |= endsTheRead(packet);
+    }
+
+    boolean reachesTheReadEnd() {
+      return reachesTheReadEnd;
+    }
+
+    private boolean endsTheRead(Packet packet) {
       if (packet.decodeTime().compareTo(readEnd(latestPicture)) >= 0) {
         return true;
       }
 
       return request.videoEnd().filter(videoEnd -> endsTheVideo(packet, videoEnd)).isPresent()
-          && leavesNoLaterPictureInTime(packet);
+          && !canShowAPictureInTimeOnlyFromLaterPackets();
     }
 
-    // The leading pictures that follow a last keyframe in decode order can present by the latest
-    // picture's time although the keyframe ends the video. Every packet after the one that ends the
-    // video decodes after it and presents no earlier than it decodes, so none presents by then when
-    // that packet decodes at or after that time. When it presents by then, so does any keyframe
-    // that the read holds, and no keyframe follows the picture that presents last.
-    private boolean leavesNoLaterPictureInTime(Packet packet) {
-      return packet.decodeTime().compareTo(latestPicture) >= 0
-          || packet.presentationTime().compareTo(latestPicture) <= 0;
+    // The packet that ends the video presents last, so no keyframe follows it in decode order: a
+    // read that holds no keyframe shows no picture, and one with a keyframe that presents by the
+    // latest picture's time shows a picture by then from the packets that it holds. When every
+    // keyframe presents later, the leading pictures that follow one in decode order can still
+    // present by then. A copied packet's decode time cannot rule them out: where the container
+    // stores none, as Matroska does, FFmpeg derives it from the presentation time.
+    private boolean canShowAPictureInTimeOnlyFromLaterPackets() {
+      return holdsAKeyframe && !holdsAKeyframeInTime;
     }
 
     // The server's video end subtracts the container's start time as ffprobe prints it, in whole

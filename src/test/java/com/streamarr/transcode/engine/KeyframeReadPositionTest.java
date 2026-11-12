@@ -704,36 +704,28 @@ class KeyframeReadPositionTest {
     assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
   }
 
-  // The read lands on the video's last keyframe, which presents last, from 23.75 s up to the
-  // video's end at 24 s. Its three leading pictures follow it in decode order, need no picture
-  // before it, as HEVC's RADL pictures do, and present from 23 s, before the search time of 23.5 s.
-  // FFmpeg shows the decoder's picture at 23 s only at the end of the file, once the worker has
-  // read every copy.
-  @Test
+  // The read lands on the video's last keyframe, which presents last, up to the video's end. Its
+  // three leading pictures follow it in decode order, need no picture before it, as HEVC's RADL
+  // pictures do, and present before the search time of 23.5 s. FFmpeg shows the decoder's first
+  // picture only at the end of the file, once the worker has read every copy.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("readsThatLandOnAKeyframeThatEndsTheVideoAfterItsLeadingPictures")
   @Timeout(10)
   @DisplayName(
       "Should let the first picture check read on past the keyframe that ends the video when its"
           + " leading pictures can present by the search time")
-  void shouldLetTheCheckReadOnPastTheKeyframeThatEndsTheVideoWhenItsLeadingPicturesCanBeInTime()
+  void shouldLetTheCheckReadOnPastTheKeyframeThatEndsTheVideoWhenItsLeadingPicturesCanBeInTime(
+      String containerCase, String copies, Duration videoEnd, Duration firstPicture)
       throws Exception {
+    var picture = firstPicture.toMillis();
     var check =
         ScriptedProcess.builder()
             .output(
-                "#tb 0: 1/1000\n0, 23000, 23000, 1, 500, 0x0a1b2c3d\n"
+                "#tb 0: 1/1000\n0, %d, %d, 1, 500, 0x0a1b2c3d\n"
+                    .formatted(picture, picture)
                     .getBytes(StandardCharsets.US_ASCII))
             .pauseAfter(0)
-            .stderr(
-                """
-                #tb 0: 1/1000
-                #tb 1: 1/1000
-                0, 22500, 23750, 250, 1000, 0x0a1b2c3d
-                1, 22500, 22500, 250, 300, 0x0a1b2c3d
-                0, 22750, 23250, 250, 1000, 0x0a1b2c3d, F=0x0
-                0, 23000, 23000, 250, 1000, 0x0a1b2c3d, F=0x0
-                0, 23250, 23500, 250, 1000, 0x0a1b2c3d, F=0x0
-                1, 60000, 60000, 250, 300, 0x0a1b2c3d
-                1, 600000, 600000, 250, 300, 0x0a1b2c3d
-                """)
+            .stderr(copies)
             .build();
     var bytesOfEveryCopy = 4 * 1000 + 3 * 300;
     LongConsumer readingToTheEndOfTheFile =
@@ -746,26 +738,64 @@ class KeyframeReadPositionTest {
     var readPosition =
         engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(22, 24)))
             .readPosition(
-                endingVideoAt(
-                    Duration.ofSeconds(24),
-                    storing(STORED_POSITION, searching(seconds("23.5"), 24))),
+                endingVideoAt(videoEnd, storing(STORED_POSITION, searching(seconds("23.5"), 24))),
                 readingToTheEndOfTheFile);
 
     assertThat(check.stdinText()).as("no q before the leading pictures").isEmpty();
     assertThat(readPosition).contains(STORED_POSITION);
   }
 
-  // Every video packet after the one that ends the video decodes after it and presents no earlier
-  // than it decodes. When that packet decodes at the search time, no later packet presents by it;
-  // when it presents at the search time, so does the keyframe before it.
+  // The Matroska case is the pinned FFmpeg's copy of the smoke test's read from 4.2 s of an x265
+  // encode at 4 fps, 20 s later: it decodes the keyframe two pictures before it presents, and the
+  // leading pictures 1 ms after it.
+  static Stream<Arguments> readsThatLandOnAKeyframeThatEndsTheVideoAfterItsLeadingPictures() {
+    return Stream.of(
+        Arguments.of(
+            "MP4 stores each packet's decode time: the keyframe decodes at 22.5 s and presents at"
+                + " 23.75 s, and its leading pictures present from 23 s",
+            """
+            #tb 0: 1/1000
+            #tb 1: 1/1000
+            0, 22500, 23750, 250, 1000, 0x0a1b2c3d
+            1, 22500, 22500, 250, 300, 0x0a1b2c3d
+            0, 22750, 23250, 250, 1000, 0x0a1b2c3d, F=0x0
+            0, 23000, 23000, 250, 1000, 0x0a1b2c3d, F=0x0
+            0, 23250, 23500, 250, 1000, 0x0a1b2c3d, F=0x0
+            1, 60000, 60000, 250, 300, 0x0a1b2c3d
+            1, 600000, 600000, 250, 300, 0x0a1b2c3d
+            """,
+            Duration.ofSeconds(24),
+            Duration.ofSeconds(23)),
+        Arguments.of(
+            "Matroska stores no decode time: FFmpeg's copy decodes the keyframe at the search time,"
+                + " 23.5 s, half a second before it presents, and its leading pictures present from"
+                + " 23.25 s",
+            """
+            #tb 0: 1/1000
+            #tb 1: 1/1000
+            0, 23500, 24000, 250, 1000, 0x0a1b2c3d
+            1, 23500, 23500, 250, 300, 0x0a1b2c3d
+            0, 23501, 23501, 250, 1000, 0x0a1b2c3d, F=0x0
+            0, 23501, 23501, 250, 1000, 0x0a1b2c3d, F=0x0
+            0, 23501, 23750, 250, 1000, 0x0a1b2c3d, F=0x0
+            1, 60000, 60000, 250, 300, 0x0a1b2c3d
+            1, 600000, 600000, 250, 300, 0x0a1b2c3d
+            """,
+            Duration.ofMillis(24_250),
+            Duration.ofMillis(23_250)));
+  }
+
+  // The packet that ends the video presents last, so no keyframe follows it in decode order. A
+  // read that holds no keyframe shows no picture at all, and one with a keyframe that presents by
+  // the search time shows a picture by then from the packets that it has read.
   @ParameterizedTest(name = "{0}")
-  @MethodSource("packetsThatEndTheVideoAtTheSearchTimesBounds")
+  @MethodSource("readsThatShowNoPictureAfterThePacketThatEndsTheVideoByTheSearchTime")
   @Timeout(10)
   @DisplayName(
-      "Should stop the first picture check at the packet that ends the video when it decodes or"
-          + " presents at the search time")
-  void shouldStopTheCheckAtThePacketThatEndsTheVideoWhenItDecodesOrPresentsAtTheSearchTime(
-      String boundCase, String copies, Duration videoEnd) throws Exception {
+      "Should stop the first picture check at the packet that ends the video when the read holds no"
+          + " keyframe or one that presents by the search time")
+  void shouldStopTheCheckAtThePacketThatEndsTheVideoWhenTheReadHoldsNoKeyframeOrOneInTime(
+      String readCase, String copies, Duration videoEnd) throws Exception {
     var check =
         ScriptedProcess.builder()
             .output(new byte[0])
@@ -782,27 +812,53 @@ class KeyframeReadPositionTest {
     assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
   }
 
-  static Stream<Arguments> packetsThatEndTheVideoAtTheSearchTimesBounds() {
+  // In each case, the packet that ends the video decodes before the search time of 23.5 s.
+  static Stream<Arguments> readsThatShowNoPictureAfterThePacketThatEndsTheVideoByTheSearchTime() {
     return Stream.of(
         Arguments.of(
-            "it decodes at 23.5 s and presents up to the video's end at 24 s",
+            "the read holds no keyframe, and the packet presents from 23.75 s up to the video's"
+                + " end at 24 s",
             """
             #tb 0: 1/1000
             #tb 1: 1/1000
-            0, 23000, 23250, 250, 1000, 0x0a1b2c3d
+            0, 23000, 23250, 250, 1000, 0x0a1b2c3d, F=0x0
             1, 23000, 23000, 250, 300, 0x0a1b2c3d
-            0, 23500, 23750, 250, 1000, 0x0a1b2c3d, F=0x0
+            0, 23250, 23750, 250, 1000, 0x0a1b2c3d, F=0x0
             1, 600000, 600000, 250, 300, 0x0a1b2c3d
             """,
             Duration.ofSeconds(24)),
         Arguments.of(
-            "it decodes at 23.25 s and presents at 23.5 s, up to the video's end at 23.75 s",
+            "the read's keyframe presents at 23.5 s, and the packet presents from 23.75 s up to the"
+                + " video's end at 24 s",
+            """
+            #tb 0: 1/1000
+            #tb 1: 1/1000
+            0, 23000, 23500, 250, 1000, 0x0a1b2c3d
+            1, 23000, 23000, 250, 300, 0x0a1b2c3d
+            0, 23250, 23750, 250, 1000, 0x0a1b2c3d, F=0x0
+            1, 600000, 600000, 250, 300, 0x0a1b2c3d
+            """,
+            Duration.ofSeconds(24)),
+        Arguments.of(
+            "the read's first keyframe presents at 23 s, and the packet is a later keyframe that"
+                + " presents from 23.75 s up to the video's end at 24 s",
             """
             #tb 0: 1/1000
             #tb 1: 1/1000
             0, 22750, 23000, 250, 1000, 0x0a1b2c3d
             1, 22750, 22750, 250, 300, 0x0a1b2c3d
-            0, 23250, 23500, 250, 1000, 0x0a1b2c3d, F=0x0
+            0, 23000, 23750, 250, 1000, 0x0a1b2c3d
+            1, 600000, 600000, 250, 300, 0x0a1b2c3d
+            """,
+            Duration.ofSeconds(24)),
+        Arguments.of(
+            "the packet is the read's only keyframe and presents at 23.5 s, up to the video's end"
+                + " at 23.75 s",
+            """
+            #tb 0: 1/1000
+            #tb 1: 1/1000
+            0, 23250, 23500, 250, 1000, 0x0a1b2c3d
+            1, 23250, 23250, 250, 300, 0x0a1b2c3d
             1, 600000, 600000, 250, 300, 0x0a1b2c3d
             """,
             Duration.ofMillis(23_750)));
