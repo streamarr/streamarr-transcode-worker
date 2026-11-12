@@ -51,6 +51,8 @@ function hlsComparison(run, flags, { audio = true, reference = null, restrict = 
 const FIRST_30_SECONDS = 'only the first 30 s of the source';
 const MISSED_FORCED_KEYFRAME = '18 s left out of the forced keyframe times';
 const X265_UNDER_THE_FLOORED_GOP = 'libx265 under the floored GOP of 143 frames of an encoder that is not keyframe-verified';
+const ONE_PERIOD_READ_BACK =
+  'reads from one period before segment 5 and starts its encoded audio a whole period before it, as an encode without a keyframe position read before the worker searched for that keyframe';
 
 const FIXTURES = [
   {
@@ -66,8 +68,9 @@ const FIXTURES = [
   },
   {
     name: '01-encode-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 30, start: 5,
-    proves: 'An encoded replacement attempt from segment 5 (a job seeking to 30 s) without the server\'s keyframe ' +
-      'position reads from one period early, -ss 24 -noaccurate_seek, and trims after fps at frame 720: its ' +
+    recipeDeviation: ONE_PERIOD_READ_BACK,
+    proves: 'An encoded replacement attempt from segment 5 (a job seeking to 30 s) that reads from one period ' +
+      'early, -ss 24 -noaccurate_seek, trims after fps at frame 720: its ' +
       'video starts at 30.030 s, it pads nothing from zero, and has no video preroll. Its audio starts whole AAC ' +
       'frames before 30 s, so that a frame starts on 30 s. The forced keyframe ' +
       'times 30, 36, ..., 66 are absolute, so ' +
@@ -180,6 +183,7 @@ const FIXTURES = [
   },
   {
     name: '09-svtav1-vfr-seek30', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 30, start: 5,
+    recipeDeviation: ONE_PERIOD_READ_BACK,
     proves: 'The same SVT-AV1 recipe as a replacement attempt from segment 5, reading from one period early ' +
       '(-ss 24 -noaccurate_seek) and trimmed at 30 s: it starts at 30.030 s, pads nothing from zero, and has no ' +
       'preroll. Every delivered segment starts on the ticks of 09, including segment 5 at 30.030 s, the frame 09 ' +
@@ -231,6 +235,7 @@ const FIXTURES = [
   },
   {
     name: '13-x265-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 30, start: 5,
+    recipeDeviation: ONE_PERIOD_READ_BACK,
     proves: 'The libx265 replacement attempt from segment 5, reading from one period early (-ss 24 ' +
       '-noaccurate_seek) and trimmed at 30 s: no preroll, ' +
       'the list forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), every delivered segment starts on ' +

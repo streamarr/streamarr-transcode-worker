@@ -729,8 +729,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
       assertThat(padded).containsSubsequence("-ch_layout", layout);
     }
 
-    // A replacement from segment 10 starts at 60 s and seeks one 6 s period earlier, so the
-    // encoder's input starts its lead plus the whole frames that fit with it in 6 s before 60 s.
+    // A replacement from segment 10 starts at 60 s and reads from a keyframe at 53 s, so the
+    // encoder's input starts its lead plus the whole frames that fit with it in the 6 s from a
+    // second after that keyframe to 60 s.
     @ParameterizedTest(name = "{0} {1}")
     @CsvSource(
         delimiter = ';',
@@ -806,6 +807,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
           request(decision)
               .sourceAudio(source("dts", "5.1(side)"))
               .startSequenceNumber(10)
+              .seekPosition(Optional.of(Duration.ofSeconds(53)))
               .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
               .build();
       var job = TranscodeJob.builder().request(request).videoEncoder("libx264").build();

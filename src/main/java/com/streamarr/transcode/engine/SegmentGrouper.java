@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -27,6 +28,7 @@ final class SegmentGrouper {
   private long openVideoFragmentBytes;
   private OptionalLong openSequenceNumber = OptionalLong.empty();
   private OptionalLong lastKeyframeTime = OptionalLong.empty();
+  private Optional<MediaTime> latestFirstSegmentOpening = Optional.empty();
   private boolean ended;
 
   /**
@@ -111,6 +113,14 @@ final class SegmentGrouper {
     return close();
   }
 
+  /**
+   * Refuses, from now on, a keyframe that opens the first segment this attempt delivers after the
+   * time.
+   */
+  void refuseAFirstSegmentOpenedAfter(@NonNull MediaTime latest) {
+    latestFirstSegmentOpening = Optional.of(latest);
+  }
+
   /** The fragments the grouper holds for the open segment, or for the first one. */
   List<Fragment> heldFragments() {
     return List.copyOf(openFragments);
@@ -142,7 +152,31 @@ final class SegmentGrouper {
       return OptionalLong.empty();
     }
 
+    if (sequenceNumber == startSequenceNumber) {
+      requireOpenedInTime(keyframe.orElseThrow());
+    }
+
     return OptionalLong.of(sequenceNumber);
+  }
+
+  private void requireOpenedInTime(VideoStart keyframe) {
+    var opening = new MediaTime(keyframe.presentationTime(), new TimeBase(1, keyframe.timescale()));
+    var latest = latestFirstSegmentOpening.filter(time -> opening.compareTo(time) > 0);
+    if (latest.isPresent()) {
+      throw new FragmentedMp4Exception(
+          Reason.FIRST_SEGMENT_OPENED_LATE,
+          "segment "
+              + startSequenceNumber
+              + " opens at "
+              + seconds(opening)
+              + ", after its first frame at "
+              + seconds(latest.get()));
+    }
+  }
+
+  private static String seconds(MediaTime time) {
+    var nanoseconds = time.truncatedToNanoseconds().toNanos();
+    return BigDecimal.valueOf(nanoseconds, 9).stripTrailingZeros().toPlainString() + " s";
   }
 
   /**

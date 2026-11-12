@@ -159,6 +159,9 @@ public final class Producer {
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @param pauses the tally of pauses and holds that every producer of the engine keeps
    * @param clock the clock that times each media segment's production
+   * @param readsFromAKeyframeSeek whether the attempt reads the source from a positive seek
+   *     position, so that an encode from a later segment fails when it opens that segment after the
+   *     first frame at or after its start
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
@@ -179,7 +182,8 @@ public final class Producer {
       @NonNull SegmentMemoryBudget memoryBudget,
       @NonNull ProducerPauses pauses,
       @NonNull SegmentSink sink,
-      @NonNull MonotonicClock clock) {
+      @NonNull MonotonicClock clock,
+      boolean readsFromAKeyframeSeek) {
     var settings =
         Settings.builder()
             .jobAttemptId(jobAttemptId)
@@ -193,6 +197,7 @@ public final class Producer {
                     .videoDecision(videoDecision)
                     .requiresSoundTrack(requiresSoundTrack)
                     .paddedAudioEnd(paddedAudioEnd)
+                    .readsFromAKeyframeSeek(readsFromAKeyframeSeek)
                     .build())
             .sink(sink)
             .memoryBudget(memoryBudget)

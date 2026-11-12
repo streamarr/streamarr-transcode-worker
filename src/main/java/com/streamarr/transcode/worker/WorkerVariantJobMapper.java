@@ -48,7 +48,8 @@ final class WorkerVariantJobMapper {
    *     exact ticks or else in slots, is not empty and does not hold one start for each media
    *     segment, from 0 and strictly increasing, or when its exact starts come without a positive
    *     time base or a time base without exact starts, or when its advertised end does not lie
-   *     after the last listed segment's start
+   *     after the last listed segment's start, or when it encodes video from a later segment
+   *     without a keyframe search time, or carries a keyframe search time on any other attempt
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
@@ -82,6 +83,7 @@ final class WorkerVariantJobMapper {
         .segmentStartSlots(segmentStartSlots(execution))
         .exactSegmentStarts(exactSegmentStarts(execution))
         .seekPosition(seekPosition(execution))
+        .readFromLastKeyframePresentingAtOrBefore(keyframeSearchTime(job))
         .sourceAudio(sourceAudio)
         .advertisedEnd(advertisedEnd(job))
         .build();
@@ -299,6 +301,38 @@ final class WorkerVariantJobMapper {
     return Optional.of(Duration.ofSeconds(position.getSeconds(), position.getNanos()));
   }
 
+  // ADR 0037 (seek): an attempt that encodes video from a later segment reads from the last
+  // keyframe that presents at or before the search time and whose read shows a picture by then. A
+  // stored keyframe seek position beside the search time is where the worker checks that read
+  // first.
+  private static Optional<Duration> keyframeSearchTime(VariantJob job) {
+    var execution = job.getExecution();
+    var encodesFromALaterSegment = encodesVideo(job) && execution.getStartSequenceNumber() > 0;
+    var searches = execution.hasReadFromLastKeyframePresentingAtOrBefore();
+    if (encodesFromALaterSegment && !searches) {
+      throw new InvalidJobSpecificationException(
+          "An attempt that encodes video from a later segment carries a keyframe search time");
+    }
+
+    if (!searches) {
+      return Optional.empty();
+    }
+
+    if (!encodesFromALaterSegment) {
+      throw new InvalidJobSpecificationException(
+          "Only an attempt that encodes video from a later segment carries a keyframe search time");
+    }
+
+    var time = execution.getReadFromLastKeyframePresentingAtOrBefore();
+    var searchTime = Duration.ofSeconds(time.getSeconds(), time.getNanos());
+    if (searchTime.isNegative()) {
+      throw new InvalidJobSpecificationException(
+          "The keyframe search time must not be negative, got: " + searchTime);
+    }
+
+    return Optional.of(searchTime);
+  }
+
   @SuppressWarnings("checkstyle:fullyQualifiedName")
   private TranscodeDecision decision(
       build.buf.gen.streamarr.transcode.v1.TranscodeDecision decision) {
@@ -392,14 +426,11 @@ final class WorkerVariantJobMapper {
   }
 
   /**
-   * Whether the job holds its last frame from a seek position after segment 0, where the engine may
-   * search for the video's last keyframe before it starts (ADR 0037, early ends).
+   * Whether the job carries a keyframe search time, so that the engine searches the source for the
+   * keyframe that the attempt reads from before it starts (ADR 0037, seek).
    */
-  static boolean holdsTheLastFrameFromASeek(VariantJob job) {
-    var execution = job.getExecution();
-    return job.getDecision().getVideo().getHoldLastFrameToAdvertisedEnd()
-        && execution.getStartSequenceNumber() > 0
-        && execution.hasSeekPosition();
+  static boolean searchesForItsKeyframe(VariantJob job) {
+    return job.getExecution().hasReadFromLastKeyframePresentingAtOrBefore();
   }
 
   /** Whether the job encodes its audio in a layout that it names. */

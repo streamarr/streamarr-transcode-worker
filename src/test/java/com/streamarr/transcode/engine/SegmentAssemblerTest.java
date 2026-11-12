@@ -103,6 +103,61 @@ class SegmentAssemblerTest {
         .containsExactly(48_000L, 72_000L);
   }
 
+  // Segment 1 starts at 1 s, where the encode's first frame at 24 fps presents; its keyframe
+  // presents at 1.5 s.
+  @Test
+  @DisplayName(
+      "Should fail with a first segment that opened late when an encode from a keyframe seek opens"
+          + " its first segment after the first frame at or after its start")
+  void shouldFailWithAFirstSegmentThatOpenedLateWhenAnEncodeFromASeekOpensItLate()
+      throws IOException {
+    var output = lateFirstSegment();
+    var assembler = encodeFromSegment1().readsFromAKeyframeSeek(true).build();
+
+    assertThatThrownBy(() -> assembleEveryFragment(assembler, output))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception ->
+                assertThat(exception.getReason()).isEqualTo(Reason.FIRST_SEGMENT_OPENED_LATE));
+  }
+
+  // An attempt that reads from the source's start decodes every picture, so a first segment that
+  // opens late holds no picture less than an attempt from segment 0.
+  @Test
+  @DisplayName(
+      "Should deliver a first segment that opens after its start when the encode reads from the"
+          + " source's start")
+  void shouldDeliverAFirstSegmentThatOpensAfterItsStartWhenTheEncodeReadsFromTheSourcesStart()
+      throws IOException {
+    var output = lateFirstSegment();
+    var assembler = encodeFromSegment1().build();
+
+    var closed = assembleEvery(assembler, output);
+
+    var movie =
+        Mp4Samples.read(
+            IsoBoxes.concat(output.initializationSegment().bytes(), bytesOf(closed.getLast())));
+    assertThat(movie.samplesOf(movie.videoTrack()).getFirst().presentationTime())
+        .as("segment 1 opens at 1.5 s")
+        .isEqualTo(VIDEO_TICKS_PER_SECOND * 3 / 2);
+  }
+
+  private static Mp4Stream lateFirstSegment() throws IOException {
+    return Mp4Stream.read(
+        Mp4Stream.readerOf(
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                IsoBoxes.videoAndAudioMoov(),
+                keyframeWithAudio(0, 0, 24_000),
+                keyframeWithAudio(VIDEO_TICKS_PER_SECOND * 3 / 2, 24_000, 24_000))));
+  }
+
+  private static SegmentAssembler.SegmentAssemblerBuilder encodeFromSegment1() {
+    return assemblerOfOneSecondSegments()
+        .startSequenceNumber(1)
+        .encodedFrameRate(Optional.of(new OutputFrameRate(24, 1)));
+  }
+
   @Test
   @DisplayName(
       "Should give a merged segment the audio of every slot it spans when the segment list merges"

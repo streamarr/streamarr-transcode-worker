@@ -45,7 +45,6 @@ import com.streamarr.transcode.engine.EncoderBackend;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.HardwareEncoderFault;
 import com.streamarr.transcode.engine.MonotonicClock;
-import com.streamarr.transcode.engine.NoKeyframeBeforeReadBackException;
 import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
@@ -412,7 +411,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     if (WorkerVariantJobMapper.namesAudioLayout(job)
-        || WorkerVariantJobMapper.holdsTheLastFrameFromASeek(job)) {
+        || WorkerVariantJobMapper.searchesForItsKeyframe(job)) {
       startReading(command, session);
       return;
     }
@@ -429,7 +428,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // A job that names its audio's output layout needs the source layout and sample facts (ADR 0050),
-  // and a held encode from a seek may need to search for the video's last keyframe (ADR 0037).
+  // and a job that carries a keyframe search time searches the source for its keyframe (ADR 0037).
   // Both read on the attempt's own thread, so the control stream keeps delivering commands while
   // they read: a stop for the attempt or the session's end interrupts the read. The attempt counts
   // against the probe capacities from the read's start, since the read loads the host as the
@@ -465,12 +464,9 @@ public final class TranscodeWorker implements AutoCloseable {
 
     Optional<Duration> readPosition;
     try {
-      readPosition = heldPictureReadPosition(job, chosenAudio, searchProgress);
+      readPosition = readPosition(job, chosenAudio, searchProgress);
     } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
-      return;
-    } catch (NoKeyframeBeforeReadBackException e) {
-      failAfterRead(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED, e);
       return;
     } catch (RuntimeException e) {
       failAfterRead(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED, e);
@@ -484,10 +480,10 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // A job that the mapper refuses, or whose audio could not be read, is refused when the attempt
   // starts, as without a search.
-  private Optional<Duration> heldPictureReadPosition(
+  private Optional<Duration> readPosition(
       VariantJob job, ChosenAudio chosenAudio, KeyframeSearchProgress searchProgress)
       throws InterruptedException {
-    if (!WorkerVariantJobMapper.holdsTheLastFrameFromASeek(job)
+    if (!WorkerVariantJobMapper.searchesForItsKeyframe(job)
         || chosenAudio instanceof ChosenAudio.NotAnAudioStream
         || chosenAudio instanceof ChosenAudio.Unreadable) {
       return Optional.empty();
@@ -500,7 +496,7 @@ public final class TranscodeWorker implements AutoCloseable {
       return Optional.empty();
     }
 
-    return engine.heldPictureReadPosition(request, searchProgress::add);
+    return engine.readPosition(request, searchProgress::add);
   }
 
   // A stop or the session's end that claimed the attempt during the read already settled it.
@@ -528,7 +524,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
     probeCapacities.jobAttemptEnded(jobAttemptId);
     log.error(
-        "The search for the video's last keyframe of job attempt {} failed", jobAttemptId, cause);
+        "The search for the keyframe that job attempt {} reads from failed", jobAttemptId, cause);
     reportFailure(job, failure);
   }
 
@@ -629,7 +625,12 @@ public final class TranscodeWorker implements AutoCloseable {
       var mapped = jobMapper.map(job, sourceAudioOf(chosenAudio));
       var request =
           readPosition
-              .map(position -> mapped.toBuilder().seekPosition(Optional.of(position)).build())
+              .map(
+                  position ->
+                      mapped.toBuilder()
+                          .seekPosition(Optional.of(position))
+                          .readFromLastKeyframePresentingAtOrBefore(Optional.empty())
+                          .build())
               .orElse(mapped);
       encoder = engine.encoderBackendOf(request);
       producer =
@@ -942,7 +943,7 @@ public final class TranscodeWorker implements AutoCloseable {
                             tryReport(jobAttemptProgress(attempt.job().getJobAttemptId(), end))));
   }
 
-  // A held encode's search for the video's last keyframe ends before its producer starts.
+  // The search for the keyframe that an encode reads from ends before its producer starts.
   private static EstablishWorkerSessionRequest keyframeSearchProgress(
       Uuid jobAttemptId, long bytesRead) {
     return EstablishWorkerSessionRequest.newBuilder()
@@ -1037,9 +1038,12 @@ public final class TranscodeWorker implements AutoCloseable {
   // an audio stream as its audio. Nor one whose output outgrew the segment cap: in a stream session
   // with merged segments every replacement repeats it, so the server falls back to an encode on the
   // plain grid instead. Nor one whose Dolby Vision conversion failed: it moves to the copy with
-  // Dolby Vision stripped.
+  // Dolby Vision stripped. Nor one whose first segment opened late: another attempt that reads the
+  // source the same way misses the same pictures.
   private static JobAttemptFailure jobAttemptFailureOf(ProducerFailure reason) {
     return switch (reason) {
+      case FIRST_SEGMENT_OPENED_LATE ->
+          JobAttemptFailure.JOB_ATTEMPT_FAILURE_FIRST_SEGMENT_OPENED_LATE;
       case OUTPUT_MISMATCH -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH;
       case DOLBY_VISION_CONVERSION_FAILED ->
           JobAttemptFailure.JOB_ATTEMPT_FAILURE_DOLBY_VISION_CONVERSION_FAILED;
@@ -1601,8 +1605,8 @@ public final class TranscodeWorker implements AutoCloseable {
       ActiveAttempt attempt, StreamObserver<EstablishWorkerSessionRequest> session) {}
 
   /**
-   * An attempt whose thread reads the job's audio stream, or searches the source for the video's
-   * last keyframe, before the attempt starts FFmpeg.
+   * An attempt whose thread reads the job's audio stream, or searches the source for the keyframe
+   * that it reads from, before the attempt starts FFmpeg.
    */
   private record PendingRead(
       VariantJob job, Thread thread, KeyframeSearchProgress searchProgress) {}

@@ -163,8 +163,12 @@ read. A start-0 encode of `cfr.mp4` therefore receives `0,6,…,66` and its repl
 A replacement attempt from segment K > 0 is a job that seeks to K × 6 (`seekSeconds`, 30 s for 1b,
 7b, 9b and 13d). A stream copy passes that seek to FFmpeg (`-ss 30`) and lands on the keyframe at or before
 it; a stream copy that encodes its audio (16b) reads from one period earlier instead, so that its audio
-encoder has its lead before K × 6, and shifts its encoded audio as an encode does. An encode without the server's keyframe position reads from one period earlier, (K − 1) × 6
-(`-ss 24 -noaccurate_seek`), decodes up to K × 6 and encodes only from there: `fps` then
+encoder has its lead before K × 6, and shifts its encoded audio as an encode does. The encoded
+replacement attempts 1b, 9b and 13d read from one period earlier, (K − 1) × 6 (`-ss 24
+-noaccurate_seek`), as an encode without a keyframe position read before the worker searched for that
+keyframe. The worker now reads from the keyframe seek position that the job carries or its search
+finds, and starts its encoded audio no earlier than a second after it, so these three are recipe
+deviations. Each decodes up to K × 6 and encodes only from there: `fps` then
 `trim=start_pts=720` cut its pictures at frame 720 (30.030 s), the first frame at or after 30 s. Its
 encoded audio starts the whole 1,024-sample AAC frames that fit in the 6 s before 30 s, so that an
 AAC frame starts on 30 s: the two `asetpts` around `atrim=start=30` move the cut by that many samples.
@@ -188,7 +192,7 @@ option. For libx264 and libx265 none moves a keyframe or a cut. For SVT-AV1,
 (worker #42): under the worker's threading the pinned SVT-AV1
 can emit packets out of decode order, which leaves one-tick video samples and crowds keyframes into
 one or two intervals, so no recording here shows that bug. Nothing else differs from the recipe,
-apart from what a fixture's `recipeDeviation` names (fixtures 11, 12, 12b, 13b and 13c), and the arguments come in the
+apart from what a fixture's `recipeDeviation` names (fixtures 1b, 9b, 11, 12, 12b, 13b, 13c and 13d), and the arguments come in the
 order the worker's command builder passes them.
 
 ## Conventions in expected.json
@@ -208,8 +212,8 @@ order the worker's command builder passes them.
   instead.
 - `ffmpegArguments` is the recording run's FFmpeg command line exactly as it ran, one argument per
   entry, fixture-only additions included (see [Recipe](#recipe)).
-- `seekSeconds` is the job's seek position, the start sequence number times the period; an encode's
-  FFmpeg seek is one period earlier (see [Recipe](#recipe)).
+- `seekSeconds` is the start sequence number times the period; the FFmpeg seek of an encode (1b, 9b
+  and 13d) is one period earlier (see [Recipe](#recipe)).
 - `mediaSegmentCount` is the media segment count the server advertises for what the recording read.
   An encode forces its keyframes at k × `period` for every k from `startSequenceNumber` up to it.
 - `recipeDeviation` says how a fixture deliberately departs from the worker's recipe, and is null

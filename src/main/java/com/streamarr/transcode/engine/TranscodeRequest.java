@@ -26,6 +26,7 @@ public record TranscodeRequest(
     @NonNull List<Long> segmentStartSlots,
     @NonNull Optional<ExactSegmentStarts> exactSegmentStarts,
     @NonNull Optional<Duration> seekPosition,
+    @NonNull Optional<Duration> readFromLastKeyframePresentingAtOrBefore,
     @NonNull Optional<SourceAudio> sourceAudio,
     @NonNull Optional<Duration> advertisedEnd) {
 
@@ -60,6 +61,7 @@ public record TranscodeRequest(
         .segmentStartSlots(List.of())
         .exactSegmentStarts(Optional.empty())
         .seekPosition(Optional.empty())
+        .readFromLastKeyframePresentingAtOrBefore(Optional.empty())
         .outputFrameRate(Optional.empty())
         .sourceAudio(Optional.empty())
         .advertisedEnd(Optional.empty());
