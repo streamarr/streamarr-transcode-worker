@@ -142,6 +142,11 @@ public class FfmpegCommandBuilder {
   // A keyframe scan's options before its seek: its times lie on the attempt's zero-based timeline.
   private static final List<String> KEYFRAME_SCAN_OPTIONS =
       List.of("-nostdin", "-v", "quiet", "-copyts", "-start_at_zero");
+  // A first picture check reads q on its standard input. FFmpeg acts on it when its main thread
+  // wakes to report progress, by default every 0.5 s, in which it can read on far past the check's
+  // end on fast storage; waking every 10 ms keeps the stopped read close to that end.
+  private static final List<String> FIRST_PICTURE_CHECK_OPTIONS =
+      List.of("-stats_period", "0.01", "-v", "quiet", "-copyts", "-start_at_zero");
   private static final List<String> SOURCE_COPY_OUTPUT =
       List.of(
           "-f",
@@ -420,32 +425,29 @@ public class FfmpegCommandBuilder {
 
   /**
    * The command that finds the first picture of an encode's read from a seek position (ADR 0037,
-   * seek): from where the job attempt's own seek to the position starts reading, for the length, it
-   * decodes the chosen video stream as the attempt does and writes the decoder's first picture as
-   * stream 0 of a framecrc on standard output, beside a copy of the attempt's own streams, which
-   * keeps its times on the attempt's zero-based timeline. The muxer writes nothing before that
-   * picture, so a read that shows none writes nothing. One decoding thread delivers each picture
-   * once the pictures that it waits for have decoded, without frame threads' delay.
+   * seek): from where the job attempt's own seek to the position starts reading, it decodes the
+   * chosen video stream as the attempt does and writes the decoder's first picture to a framecrc on
+   * standard output. It copies the chosen video and audio streams' packets, which keep its times on
+   * the attempt's zero-based timeline, to a second framecrc on standard error, which FFmpeg writes
+   * as it reads: the first output writes nothing before the picture. The command reads until the
+   * worker sends q on standard input, after which FFmpeg decodes the packets that it has read. One
+   * decoding thread delivers each picture once the pictures that it waits for have decoded, without
+   * frame threads' delay.
    */
   List<String> buildFirstPictureCommand(
-      Path source, TranscodeDecision decision, Duration seekPosition, Duration length) {
+      Path source, TranscodeDecision decision, Duration seekPosition) {
     var cmd = new ArrayList<>(List.of(ffmpegPath));
-    cmd.addAll(KEYFRAME_SCAN_OPTIONS);
+    cmd.addAll(FIRST_PICTURE_CHECK_OPTIONS);
     cmd.addAll(List.of("-threads", "1"));
     if (seekPosition.isPositive()) {
       cmd.addAll(List.of("-ss", seekArgument(seekPosition), "-noaccurate_seek"));
     }
 
-    cmd.addAll(List.of("-t", seekArgument(length), "-i", source.toString()));
-    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
-    addChosenSourceStreams(cmd, decision, 0);
+    cmd.addAll(List.of("-i", source.toString()));
     cmd.addAll(
         List.of(
-            "-c",
-            "copy",
-            "-copyinkf",
-            COPY_PRIOR_SEEK_START,
-            "1",
+            "-map",
+            "0:" + decision.videoDecision().streamIndex(),
             "-c:v:0",
             "wrapped_avframe",
             "-fps_mode:v:0",
@@ -458,6 +460,10 @@ public class FfmpegCommandBuilder {
             "1"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
+    addChosenSourceStreams(cmd, decision, 0);
+    cmd.addAll(List.of("-c", "copy", "-copyinkf", COPY_PRIOR_SEEK_START, "1", FLUSH_PACKETS, "1"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(List.of("-f", FRAMECRC, "pipe:2"));
     return List.copyOf(cmd);
   }
 

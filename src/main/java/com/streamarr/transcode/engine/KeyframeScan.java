@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -25,7 +26,7 @@ import lombok.NonNull;
  * FFmpeg copies the packets of the attempt's video and audio streams, from a seek to the interval's
  * start for its length, to a framecrc on its standard output. It also checks which picture the
  * attempt's own read from a seek position shows first. Each scan and check passes the bytes of
- * every source packet that its framecrc lists to the consumer as it reads them.
+ * every source packet that its framecrcs list to the consumer as it reads them.
  */
 @Builder
 final class KeyframeScan {
@@ -37,14 +38,16 @@ final class KeyframeScan {
   // What framecrc prints for a time the packet does not carry: FFmpeg's AV_NOPTS_VALUE.
   private static final long NO_TIME = Long.MIN_VALUE;
   private static final int KEYFRAME = 0x1;
-  // A scan and a landing check write the chosen video stream's packets as their stream 0. A first
-  // picture check writes the decoder's pictures as its stream 0.
+  // A scan, a landing check and a first picture check's copies write the chosen video stream's
+  // packets as their stream 0. A first picture check writes the decoder's pictures as the stream 0
+  // of its other output.
   private static final String COPIED_VIDEO = "0";
   private static final String DECODED_PICTURES = "0";
   // How far past the latest picture's time the first picture check reads, so that the decoder
   // receives the packets that the pictures before that time reference, which B-frames place up to
   // a few frames later.
   private static final Duration REFERENCES_PAST_THE_LATEST_PICTURE = Duration.ofSeconds(1);
+  private static final int QUIT = 'q';
   private static final long NANOS_PER_SECOND = Duration.ofSeconds(1).toNanos();
 
   @NonNull private final FfmpegCommandBuilder commandBuilder;
@@ -111,21 +114,31 @@ final class KeyframeScan {
   /**
    * The decoder's first picture from the attempt's own read from the seek position, without a check
    * of where the read lands. One FFmpeg decodes the chosen video from where that seek lands, as the
-   * attempt's decoder does, and stops reading a second past the latest picture's time.
+   * attempt's decoder does, and copies the packets that it reads to a second output, whose bytes
+   * count as read. Once a copied video packet decodes at or after a second past the latest
+   * picture's time, FFmpeg stops reading and decodes the packets that it has read.
    */
   SeekRead firstDecodedPicture(Duration seekPosition, Duration latestPicture)
       throws InterruptedException {
-    var length = latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE).minus(seekPosition);
-    if (!length.isPositive()) {
+    var readEnd = latestPicture.plus(REFERENCES_PAST_THE_LATEST_PICTURE);
+    if (readEnd.compareTo(seekPosition) <= 0) {
       return new SeekRead.NoPictureInTime();
     }
 
-    var command =
-        commandBuilder.buildFirstPictureCommand(
-            request.sourcePath(), request.transcodeDecision(), seekPosition, length);
-    return run(command, this::readFirstPicture)
-        .<SeekRead>map(SeekRead.FirstPicture::new)
-        .orElseGet(SeekRead.NoPictureInTime::new);
+    var process =
+        launch(
+            commandBuilder.buildFirstPictureCommand(
+                request.sourcePath(), request.transcodeDecision(), seekPosition));
+    var copies = new FutureTask<Void>(() -> readCopiesUpTo(readEnd, process), null);
+    Thread.ofVirtual().name("first-picture-copies-" + request.attemptId()).start(copies);
+    try {
+      return read(process, this::readFirstPicture)
+          .<SeekRead>map(SeekRead.FirstPicture::new)
+          .orElseGet(SeekRead.NoPictureInTime::new);
+    } finally {
+      process.destroyForcibly();
+      awaitCopies(copies);
+    }
   }
 
   /**
@@ -215,6 +228,54 @@ final class KeyframeScan {
         .map(Packet::presentationTime);
   }
 
+  // FFmpeg writes a first picture check's copies to its error output as it reads them, while the
+  // decoder's first picture waits for the packets that it references. A q makes FFmpeg stop reading
+  // and decode the packets that it has read; the forcible end of FFmpeg closes the error output.
+  // A reader that fails ends FFmpeg, which would otherwise wait for the reader to take its error
+  // output.
+  private void readCopiesUpTo(Duration readEnd, Process process) {
+    var stopped = false;
+    var framecrc = new Framecrc(Optional.empty());
+    try (var copies = linesOf(process.getErrorStream())) {
+      for (var line = copies.readLine(); line != null; line = copies.readLine()) {
+        var passesTheReadEnd =
+            framecrc
+                .packetOf(line)
+                .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
+                .filter(packet -> packet.decodeTime().compareTo(readEnd) >= 0)
+                .isPresent();
+        if (passesTheReadEnd && !stopped) {
+          stopped = true;
+          quit(process);
+        }
+      }
+    } catch (IOException _) {
+      // The forcible end of FFmpeg closed its error output.
+    } catch (RuntimeException e) {
+      process.destroyForcibly();
+      throw e;
+    }
+  }
+
+  private static void awaitCopies(FutureTask<Void> copies) throws InterruptedException {
+    try {
+      copies.get();
+    } catch (ExecutionException e) {
+      throw new TranscodeException(
+          "A first picture check's copies could not be read", e.getCause());
+    }
+  }
+
+  private static void quit(Process process) {
+    try {
+      var input = process.getOutputStream();
+      input.write(QUIT);
+      input.flush();
+    } catch (IOException _) {
+      // FFmpeg has exited.
+    }
+  }
+
   // The output's first packet of the stream; the forcible end of FFmpeg then ends the rest.
   private static Optional<Packet> readFirst(Process process, Framecrc framecrc, String stream)
       throws IOException, InterruptedException {
@@ -232,8 +293,11 @@ final class KeyframeScan {
   }
 
   private static BufferedReader outputOf(Process process) {
-    return new BufferedReader(
-        new InputStreamReader(process.getInputStream(), StandardCharsets.US_ASCII));
+    return linesOf(process.getInputStream());
+  }
+
+  private static BufferedReader linesOf(InputStream output) {
+    return new BufferedReader(new InputStreamReader(output, StandardCharsets.US_ASCII));
   }
 
   private static void requireSuccess(Process process) throws InterruptedException {

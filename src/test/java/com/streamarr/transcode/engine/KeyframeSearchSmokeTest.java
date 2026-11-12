@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -122,6 +123,55 @@ class KeyframeSearchSmokeTest {
         engine().readPosition(searching(source, OptionalInt.empty(), 8), _ -> {}).orElseThrow();
 
     assertThat(readPosition).isZero();
+  }
+
+  // The source's keyframes lie 60 s apart, so a read from 5.005 s lands inside the GOP from 0 s,
+  // where the decoder shows nothing until the keyframe at 60 s. The check of a read up to 5.5 s
+  // stops reading once its copies reach 6.5 s. FFmpeg reads and decodes on to the keyframe in about
+  // 150 ms on the workstation, ten times as long as the stop takes.
+  @Test
+  @DisplayName(
+      "Should stop the check a second past the latest picture's time, and count the packets that it"
+          + " copied, when its read lands inside a GOP whose next keyframe lies a minute later")
+  void shouldStopTheCheckASecondPastTheLatestPictureWhenItsReadLandsInsideAMinuteLongGop()
+      throws Exception {
+    var source = keyframesAMinuteApart();
+    var bytesRead = new AtomicLong();
+    var scan =
+        KeyframeScan.builder()
+            .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+            .launcher(new ProcessBuilderLauncher())
+            .request(searching(source, OptionalInt.empty(), 6))
+            .bytesRead(bytesRead::addAndGet)
+            .build();
+
+    var read = scan.firstDecodedPicture(Duration.ofMillis(5005), Duration.ofMillis(5500));
+
+    assertThat(read)
+        .as("no picture: the check stopped before the keyframe at 60 s")
+        .isEqualTo(new KeyframeScan.SeekRead.NoPictureInTime());
+    assertThat(bytesRead).as("the bytes of the packets that the check copied").hasPositiveValue();
+  }
+
+  // 130 s of H.264 at 320x180 and 24 fps with keyframes 60 s apart, in MPEG-TS.
+  private Path keyframesAMinuteApart() throws Exception {
+    var source = root.resolve("keyframes-a-minute-apart.ts");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=24:duration=130",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "3",
+            "-x264-params",
+            "scenecut=0:keyint=1440:min-keyint=1440",
+            "-f",
+            "mpegts",
+            source.toString()));
+    return source;
   }
 
   // 6 s of H.264 at 24 fps with one keyframe, copied from 1 s into a 20 s MP4 source.
