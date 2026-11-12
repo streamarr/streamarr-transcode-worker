@@ -1,5 +1,7 @@
 package com.streamarr.transcode.engine;
 
+import java.time.Duration;
+
 /**
  * The agapfill audio filter of Streamarr's FFmpeg fork (ADR 0057). It writes digital silence for
  * every step longer than 2 ms between the end of one audio frame and the next frame's timestamp,
@@ -14,4 +16,14 @@ final class GapFillFilter {
   static final String START_OPTION = "start";
 
   private GapFillFilter() {}
+
+  /** The filter that fills the gaps between frames only. */
+  static String inGaps() {
+    return NAME;
+  }
+
+  /** The filter that also fills the time from the start, in whole seconds, to the first frame. */
+  static String from(Duration start) {
+    return NAME + "=" + START_OPTION + "=" + start.toSeconds();
+  }
 }

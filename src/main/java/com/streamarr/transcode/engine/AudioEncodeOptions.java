@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -34,12 +35,20 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     outputOptions = List.copyOf(outputOptions);
   }
 
-  static AudioEncodeOptions of(AudioDecision audio, SourceAudio source) {
+  /**
+   * The options of the encode, whose gap fill writes silence from {@code fillStart}, in whole
+   * seconds, to the first frame.
+   */
+  static AudioEncodeOptions of(AudioDecision audio, SourceAudio source, Duration fillStart) {
     var output = audio.channelLayout().orElseThrow();
     var encoder = Encoder.of(audio.codec());
     var channels = ChannelStage.of(source, output);
     var rate = targetSampleRate(encoder, audio, source);
-    var filters = filters(encoder, audio, source, rate, channels);
+    var stages = filters(encoder, audio, source, rate, channels);
+    var filters =
+        encoder == Encoder.LOSSLESS
+            ? filledAroundTheDither(stages, holdsSamples(rate, source, channels), fillStart)
+            : filledFirst(stages, fillStart);
 
     var outputOptions = new ArrayList<>(List.of("-c:a", encoder.ffmpegName(audio.codec())));
     outputOptions.addAll(List.of("-af", String.join(",", filters)));
@@ -83,6 +92,44 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     }
 
     return OptionalInt.of(Integer.parseInt(outputOptions.get(option + 1)));
+  }
+
+  // A lossy encode dithers nothing, so the gap fill runs before every stage, each of which then
+  // meets one continuous run of samples.
+  private static List<String> filledFirst(List<String> stages, Duration start) {
+    var filters = new ArrayList<>(List.of(GapFillFilter.from(start)));
+    filters.addAll(stages);
+    return filters;
+  }
+
+  // A FLAC or ALAC encode's format stage can dither, and dither would turn the fill's silence into
+  // noise. That stage holds no samples, so where no resampler or limiter runs before it, the fill
+  // follows it and its silence stays digital. A resampler or a downmix's limiter would join the
+  // audio on both sides of a gap, so a fill before it fills the gaps, and only the silence before
+  // the first frame, which a second fill writes after the format stage, stays digital.
+  private static List<String> filledAroundTheDither(
+      List<String> stages, boolean holdsSamples, Duration start) {
+    var filters = new ArrayList<String>();
+    if (holdsSamples) {
+      filters.add(GapFillFilter.inGaps());
+    }
+
+    filters.addAll(stages);
+    filters.add(GapFillFilter.from(start));
+    return filters;
+  }
+
+  // Whether a stage before the format stage holds samples: a resampler that changes the rate, or a
+  // downmix that sums channels, whose limiter looks ahead. A FLAC or ALAC encode's downmix runs at
+  // the rate that the encode writes.
+  private static boolean holdsSamples(
+      Optional<Integer> rate, SourceAudio source, ChannelStage channels) {
+    if (rate.isPresent()) {
+      return true;
+    }
+
+    return channels instanceof ChannelStage.Downmix downmix
+        && DownmixFilter.sumsChannels(downmix.matrix(source.loRoLevels()));
   }
 
   // ADR 0043: no dynamic range compression, and the dialogue normalization that a hardware

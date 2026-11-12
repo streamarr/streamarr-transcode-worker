@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -156,7 +157,7 @@ class DownmixLossyCeilingSmokeTest {
             .channelLayout(Optional.of(source.name()))
             .sampleRate(OptionalInt.of(SAMPLE_RATE))
             .build();
-    var options = AudioEncodeOptions.of(audio, sourceAudio);
+    var options = AudioEncodeOptions.of(audio, sourceAudio, Duration.ZERO);
     var encoded = root.resolve("encoded.mka");
     var command = new ArrayList<>(options.inputOptions());
     command.addAll(List.of("-i", input.toString()));

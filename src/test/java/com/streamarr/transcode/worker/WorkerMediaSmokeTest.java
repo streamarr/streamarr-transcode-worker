@@ -303,6 +303,28 @@ class WorkerMediaSmokeTest {
   private static final int COUNTED_MPEG_SOURCE_VIDEO_MILLIS = 11_500;
   // 10 ms at 48 kHz.
   private static final int MPEG_PS_STAMP_TOLERANCE_SAMPLES = 480;
+  // The gapped sources' audio, cut out before 1.02 s and in two gaps, beside 12 s of video in four
+  // segments of 3 s.
+  private static final int GAPPED_SOURCE_SEGMENT_COUNT = 4;
+  private static final int GAPPED_SOURCE_END_SAMPLES =
+      GAPPED_SOURCE_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
+  private static final SampleRange GAPPED_SOURCE_FIRST_GAP = SampleRange.ofMillis(4_110, 6_510);
+  private static final SampleRange GAPPED_SOURCE_SECOND_GAP = SampleRange.ofMillis(8_010, 9_030);
+  private static final List<SampleRange> GAPPED_COUNTED_AUDIO =
+      List.of(
+          SampleRange.ofMillis(1_020, 4_110),
+          SampleRange.ofMillis(6_510, 8_010),
+          SampleRange.ofMillis(9_030, 10_000));
+  // 100 ms at 48 kHz: further than the frames of AAC, AC-3, E-AC-3 and Opus, their overlap and
+  // their encoders' delay reach before a sound that starts.
+  private static final int LOSSY_FRAME_REACH_SAMPLES = 4_800;
+  // A 32-bit sample at -60 dBFS.
+  private static final long SIXTY_DECIBELS_BELOW_FULL_SCALE = (1L << 31) / 1_000;
+  // The long-gap source's 36 s in twelve segments of 3 s, and its counted samples on both sides of
+  // its gap from 3.09 s to 33.03 s.
+  private static final int LONG_GAP_SEGMENT_COUNT = 12;
+  private static final List<SampleRange> LONG_GAP_COUNTED_AUDIO =
+      List.of(SampleRange.ofMillis(0, 3_090), SampleRange.ofMillis(33_030, 36_000));
   // One tick of the 90 kHz clock of MPEG-TS and MPEG-PS timestamps, rounded up.
   private static final Duration MPEG_TICK = Duration.ofNanos(11_112);
   private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
@@ -6069,14 +6091,18 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
-  // The input that reads the counted samples: 10 s of signed 32-bit little-endian mono PCM at
-  // 48 kHz whose sample n holds n + 1 in its upper 24 bits.
-  private static synchronized List<String> countedAudioInput() throws Exception {
-    var samples = seekableSources.resolve("counted-audio.s32le");
+  // The input that reads 10 s of the counted samples.
+  private static List<String> countedAudioInput() throws Exception {
+    return countedAudioInput(COUNTED_AUDIO_SAMPLES);
+  }
+
+  // The input that reads this many counted samples: signed 32-bit little-endian mono PCM at 48 kHz
+  // whose sample n holds n + 1 in its upper 24 bits.
+  private static synchronized List<String> countedAudioInput(int sampleCount) throws Exception {
+    var samples = seekableSources.resolve("counted-audio-" + sampleCount + ".s32le");
     if (!generatedSeekableSources.contains(samples)) {
-      var counted =
-          ByteBuffer.allocate(COUNTED_AUDIO_SAMPLES * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-      IntStream.rangeClosed(1, COUNTED_AUDIO_SAMPLES).forEach(count -> counted.putInt(count << 8));
+      var counted = ByteBuffer.allocate(sampleCount * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+      IntStream.rangeClosed(1, sampleCount).forEach(count -> counted.putInt(count << 8));
       Files.write(samples, counted.array());
       generatedSeekableSources.add(samples);
     }
@@ -6128,6 +6154,11 @@ class WorkerMediaSmokeTest {
       assertThat(times).as("the sample times of the decoded frames").hasSameSizeAs(played);
       for (var index = 0; index < times.length; index++) {
         var time = times[index];
+        // A lossy encoder's priming plays before zero, where no source sample lies.
+        if (time < 0) {
+          continue;
+        }
+
         deliveredTwice += delivered.get(time) ? 1 : 0;
         delivered.set(time);
         byTime[time] = played[index];
@@ -6186,6 +6217,31 @@ class WorkerMediaSmokeTest {
       return sounding().count();
     }
 
+    // How many samples from one time up to another hold the counted source's sample at its own time
+    // inside the stretches, digital silence outside them, nothing, or anything else.
+    PlacedSamples placed(int from, int until, List<SampleRange> stretches) {
+      var absent = IntStream.range(from, until).filter(time -> !delivered.get(time)).count();
+      var source =
+          IntStream.range(from, until)
+              .filter(time -> SampleRange.anyHolds(stretches, time))
+              .filter(time -> delivered.get(time) && byTime[time] == (time + 1) << 8)
+              .count();
+      var silent =
+          IntStream.range(from, until)
+              .filter(time -> !SampleRange.anyHolds(stretches, time))
+              .filter(time -> delivered.get(time) && byTime[time] == 0)
+              .count();
+      return new PlacedSamples(source, silent, absent, until - from - absent - source - silent);
+    }
+
+    // How many delivered samples from one time up to another lie further from zero than the level.
+    long samplesBeyond(long level, int from, int until) {
+      return IntStream.range(from, until)
+          .filter(delivered::get)
+          .filter(time -> Math.abs((long) byTime[time]) > level)
+          .count();
+    }
+
     // The largest distance, in samples, between the time of a delivered sample that is not digital
     // silence and the time of the source sample that it holds.
     int largestDistanceFromSourceTime() {
@@ -6216,6 +6272,394 @@ class WorkerMediaSmokeTest {
     IntStream times() {
       return IntStream.range(start, end());
     }
+  }
+
+  /**
+   * How many samples of a span hold the source's sample at its own time, hold digital silence where
+   * the source has no sample, are absent, or hold anything else.
+   */
+  private record PlacedSamples(long source, long silent, long absent, long other) {
+
+    // Every time of the span holds its source sample inside the stretches and silence outside.
+    static PlacedSamples expected(int from, int until, List<SampleRange> stretches) {
+      var source = stretches.stream().mapToLong(stretch -> stretch.overlap(from, until)).sum();
+      return new PlacedSamples(source, until - from - source, 0, 0);
+    }
+  }
+
+  // The source's samples from one time up to another, in samples at 48 kHz.
+  private record SampleRange(int from, int until) {
+
+    static SampleRange ofMillis(int from, int until) {
+      return new SampleRange(
+          from * COUNTED_AUDIO_SAMPLE_RATE / 1_000, until * COUNTED_AUDIO_SAMPLE_RATE / 1_000);
+    }
+
+    static boolean anyHolds(List<SampleRange> stretches, int time) {
+      return stretches.stream().anyMatch(stretch -> time >= stretch.from && time < stretch.until);
+    }
+
+    long overlap(int start, int end) {
+      return Math.max(0, Math.min(until, end) - Math.max(from, start));
+    }
+  }
+
+  // FFmpeg cuts an audio encoder's frames by sample count and ignores their timestamps, so the
+  // first samples after a gap filled the frame before it and played early, and nothing filled a
+  // gap or the time before audio that starts late. Each stretch of the gapped source's audio is a
+  // whole number of neither the 2,400 samples of the server's FLAC frames nor the 4,608 and 4,096
+  // samples of FFmpeg's own FLAC and ALAC frames. A replacement from segment 2 starts at 6 s,
+  // inside the first gap.
+  @ParameterizedTest(name = "{0}, {1}, named layout {2}, from segment {3}")
+  @CsvSource({
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, flac, true, 0",
+    "TRANSCODE_MODE_FULL_TRANSCODE, flac, true, 0",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, flac, false, 0",
+    "TRANSCODE_MODE_FULL_TRANSCODE, alac, true, 0",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, alac, false, 2"
+  })
+  @DisplayName(
+      "Should deliver every source audio sample once, at its own time, and digital silence before"
+          + " it, in its gaps and after it, when an attempt encodes lossless audio that starts late"
+          + " and has gaps")
+  void shouldDeliverEverySampleAtItsOwnTimeAndSilenceInEachGapWhenAnAttemptEncodesGappedAudio(
+      TranscodeMode mode, String codec, boolean namedLayout, int startSequenceNumber)
+      throws Exception {
+    var source = gappedSource(GappedSource.COUNTED);
+    var job = gappedSourceJob(source, mode);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+    if (!namedLayout) {
+      job.getDecisionBuilder().getAudioBuilder().clearChannelLayout();
+    }
+
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var firstSample = startSequenceNumber * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    assertThat(delivered.placed(firstSample, GAPPED_SOURCE_END_SAMPLES, GAPPED_COUNTED_AUDIO))
+        .as("the samples from the first segment's start to the advertised end at 12 s")
+        .isEqualTo(
+            PlacedSamples.expected(firstSample, GAPPED_SOURCE_END_SAMPLES, GAPPED_COUNTED_AUDIO));
+    assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+  }
+
+  // The server's FLAC frames of 2,400 samples at 48 kHz start on every 3 s segment's start, so a
+  // replacement whose silence and samples lie where the start attempt's do writes its frames at the
+  // same times, and they decode to the same samples. Their bytes differ: a FLAC frame's header
+  // numbers it from its encode's first frame.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_AUDIO_TRANSCODE", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should write the start attempt's audio frames, at the same times and with the same samples,"
+          + " from segment 2 on when a replacement attempt starts inside a gap of the audio it"
+          + " encodes")
+  void shouldWriteTheStartAttemptsAudioFramesWhenAReplacementStartsInsideAGap(TranscodeMode mode)
+      throws Exception {
+    var source = gappedSource(GappedSource.COUNTED);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            gappedSourceJob(source, mode).build());
+    var replacementJob = gappedSourceJob(source, mode);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(2);
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    assertThat(replacement.names()).containsExactly("init.mp4", segmentName(2), segmentName(3));
+    var fromSegment2 = List.of("init.mp4", segmentName(2), segmentName(3));
+    var replaced = Mp4Samples.read(replacement.contentOf(fromSegment2));
+    var started = Mp4Samples.read(startAttempt.contentOf(fromSegment2));
+    assertThat(replaced.samplesOf(replaced.audioTrack()))
+        .as("the times and durations of the replacement's audio frames of segments 2 and 3")
+        .isNotEmpty()
+        .extracting(Mp4Samples.Sample::decodeTime, Mp4Samples.Sample::duration)
+        .containsExactlyElementsOf(
+            started.samplesOf(started.audioTrack()).stream()
+                .map(frame -> tuple(frame.decodeTime(), frame.duration()))
+                .toList());
+    assertThat(DeliveredAudio.of(playable(replacement.contentOf(fromSegment2))).played())
+        .as("the replacement's decoded samples of segments 2 and 3")
+        .containsExactly(
+            DeliveredAudio.of(playable(startAttempt.contentOf(fromSegment2))).played());
+  }
+
+  // A lossy encoder's frames overlap, so a frame next to a gap's end sounds before the gap ends.
+  // The tone starts at 6.5 s, behind digital silence, so the only sound before then is what the
+  // encoder took from after the first gap's end at 6.51 s: the frame that fills the gap's end, at
+  // most 100 ms before it, and any samples placed early. The 1 kHz tone crosses zero on 2 of every
+  // 48 samples at 48 kHz.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"aac", "ac3", "eac3", "opus"})
+  @DisplayName(
+      "Should play nothing of the audio after a gap before the gap ends, and fill every time from"
+          + " zero to the advertised end, when an attempt encodes audio with gaps to a lossy codec")
+  void shouldPlayNothingOfTheAudioAfterAGapBeforeItEndsWhenALossyEncodeFillsTheGap(String codec)
+      throws Exception {
+    var source = gappedSource(GappedSource.TONE_AFTER_THE_FIRST_GAP);
+    var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec).setBitrateBitsPerSecond(96_000);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    var firstGap = GAPPED_SOURCE_FIRST_GAP;
+    var beforeTheEndsFrame = firstGap.until() - LOSSY_FRAME_REACH_SAMPLES;
+    assertThat(delivered.samplesBeyond(SIXTY_DECIBELS_BELOW_FULL_SCALE, 0, beforeTheEndsFrame))
+        .as(
+            "samples louder than -60 dBFS before the frame that fills the first gap's end at 6.51 s")
+        .isZero();
+    assertThat(
+            delivered.samplesBeyond(
+                SIXTY_DECIBELS_BELOW_FULL_SCALE, firstGap.until(), GAPPED_SOURCE_SECOND_GAP.from()))
+        .as("samples louder than -60 dBFS of the tone from 6.51 s to the second gap at 8.01 s")
+        .isGreaterThan((GAPPED_SOURCE_SECOND_GAP.from() - firstGap.until()) * 46L / 48 * 99 / 100);
+    assertThat(delivered.silentSamples(0, GAPPED_SOURCE_END_SAMPLES).absent())
+        .as("times from zero to the advertised end at 12 s that no delivered sample holds")
+        .isZero();
+  }
+
+  // A FLAC encode that writes 16 bits dithers every sample, so silence that the fill writes before
+  // that dither would come out as noise. One that writes 44.1 kHz resamples, so the fill runs
+  // before the resampler too, which would otherwise join the audio on both sides of a gap. Its
+  // dither, and its ringing in the 3 ms around each edge, then reach that gap's silence.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(ChangedLosslessSamples.class)
+  @DisplayName(
+      "Should fill every time with digital silence before the audio and with silence in its gaps"
+          + " when a FLAC encode of audio with gaps dithers or resamples it")
+  void shouldFillEveryTimeWithSilenceWhenAFlacEncodeOfAudioWithGapsDithersOrResamplesIt(
+      ChangedLosslessSamples changed) throws Exception {
+    var source = gappedSource(GappedSource.COUNTED);
+    var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setOutputSampleRateHz(changed.sampleRate)
+        .setOutputBitDepth(changed.bitDepth);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    var start = changed.at(GAPPED_COUNTED_AUDIO.getFirst().from());
+    var end = changed.at(GAPPED_SOURCE_END_SAMPLES);
+    assertThat(delivered.silentSamples(0, end).absent())
+        .as("times from zero to the advertised end at 12 s that no delivered sample holds")
+        .isZero();
+    assertThat(delivered.silentSamples(0, start - changed.edgeSamples))
+        .as("the samples before the audio's late start at 1.02 s")
+        .isEqualTo(new SilentSamples(start - changed.edgeSamples, 0, 0));
+    for (var gap : List.of(GAPPED_SOURCE_FIRST_GAP, GAPPED_SOURCE_SECOND_GAP)) {
+      assertThat(
+              delivered.samplesBeyond(
+                  changed.ditherLevel,
+                  changed.at(gap.from()) + changed.edgeSamples,
+                  changed.at(gap.until()) - changed.edgeSamples))
+          .as("samples beyond the dither inside the gap from sample %d", gap.from())
+          .isZero();
+    }
+  }
+
+  // The bit depth and sample rate that a FLAC encode writes, the samples around each edge that its
+  // resampler rings into, and how far from zero its dither moves a sample of silence, as a 32-bit
+  // sample: one step of 16 bits, which writes the fill's silence after the dither, or two steps of
+  // 24 bits, the reach of triangular dither.
+  private enum ChangedLosslessSamples {
+    DITHERED_TO_16_BITS(16, 48_000, 0, 0),
+    RESAMPLED_TO_44_1_KHZ(24, 44_100, 144, 2 << 8);
+
+    private final int bitDepth;
+    private final int sampleRate;
+    private final int edgeSamples;
+    private final long ditherLevel;
+
+    ChangedLosslessSamples(int bitDepth, int sampleRate, int edgeSamples, long ditherLevel) {
+      this.bitDepth = bitDepth;
+      this.sampleRate = sampleRate;
+      this.edgeSamples = edgeSamples;
+      this.ditherLevel = ditherLevel;
+    }
+
+    // A time of the counted source, in samples at this encode's rate.
+    int at(int sourceTime) {
+      return (int) ((long) sourceTime * sampleRate / COUNTED_AUDIO_SAMPLE_RATE);
+    }
+  }
+
+  // FFmpeg's muxer holds a stream's packets for another's for at most 10 s, so silence for a
+  // longer gap that is written only once the audio after it is read reached the worker after the
+  // segments it belongs to. Every encode of audio beside its video reads the audio from an input
+  // of its own.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_AUDIO_TRANSCODE", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should deliver every source audio sample at its own time and digital silence in every"
+          + " segment of a 30 s gap when an attempt encodes the audio beside its video")
+  void shouldDeliverSilenceInEverySegmentOfAThirtySecondGapWhenAnAttemptEncodesTheAudio(
+      TranscodeMode mode) throws Exception {
+    var source = longGapCountedSource();
+    var job = countedAudioJob(source, mode);
+    paddedToSlots(job, LONG_GAP_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names()).as("the uploads").hasSize(LONG_GAP_SEGMENT_COUNT + 1);
+    var end = LONG_GAP_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    assertThat(delivered.placed(0, end, LONG_GAP_COUNTED_AUDIO))
+        .as("the samples from zero to the advertised end at 36 s")
+        .isEqualTo(PlacedSamples.expected(0, end, LONG_GAP_COUNTED_AUDIO));
+    assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+  }
+
+  // The fill butts each frame against the one before it unless the step between them exceeds 2 ms:
+  // a resampler that kept the times would drop the overlapping samples, and insert silence or drop
+  // samples where small steps add up. Matroska stores whole milliseconds, so each step also moves
+  // by up to 1 ms.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(StampError.class)
+  @DisplayName(
+      "Should deliver every source audio sample once at its own time when an attempt encodes audio"
+          + " whose timestamps overlap by 50 ms or drift by 0.02 %")
+  void shouldDeliverEverySampleOnceAtItsOwnTimeWhenTheAudiosTimestampsOverlapOrDrift(
+      StampError error) throws Exception {
+    var source = misstampedCountedSource(error);
+    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    paddedToSlots(job, GAPPED_SOURCE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    var whole = List.of(new SampleRange(0, COUNTED_AUDIO_SAMPLES));
+    assertThat(delivered.placed(0, GAPPED_SOURCE_END_SAMPLES, whole))
+        .as("the samples from zero to the advertised end at 12 s")
+        .isEqualTo(PlacedSamples.expected(0, GAPPED_SOURCE_END_SAMPLES, whole));
+    assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+  }
+
+  // How the misstamped sources' FLAC frames of 4,800 samples carry their timestamps, as an
+  // expression of each one in samples at 48 kHz: from 4.1 s on 50 ms early, or 0.02 % fast or slow.
+  private enum StampError {
+    OVERLAP_OF_50_MS("if(gte(TS,196800),TS-2400,TS)"),
+    FAST_BY_0_02_PERCENT("round(TS*1.0002)"),
+    SLOW_BY_0_02_PERCENT("round(TS*0.9998)");
+
+    private final String timestamp;
+
+    StampError(String timestamp) {
+      this.timestamp = timestamp;
+    }
+  }
+
+  // The copy of the gapped source that encodes its audio to FLAC in the mono layout and pads it to
+  // 12 s, in four segments of 3 s, holding the last frame too when it encodes the video.
+  private static VariantJob.Builder gappedSourceJob(Path source, TranscodeMode mode) {
+    var job = countedAudioJob(source, mode);
+    paddedToSlots(job, GAPPED_SOURCE_SEGMENT_COUNT);
+    return job;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 12 s, beside 10 s of mono FLAC at
+  // 48 kHz in frames of 1,440 samples, 30 ms, of which every frame before 1.02 s, from 4.11 s to
+  // 6.51 s and from 8.01 s to 9.03 s is cut out, each keeping the timestamps of the others.
+  private static synchronized Path gappedSource(GappedSource audio) throws Exception {
+    var source = seekableSources.resolve(audio.fileName);
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          Stream.of(
+                  List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=12"),
+                  audio.input(),
+                  List.of("-c:v", "libx264", "-g", "48", "-c:a", "flac", "-frame_size", "1440"),
+                  List.of("-sample_fmt", audio.sampleFormat),
+                  List.of(
+                      "-bsf:a",
+                      "noise=drop='lt(pts*tb,1)+between(pts*tb,4.1,6.5)+between(pts*tb,8,9.01)'"))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The gapped sources' audio: the counted samples in 24 bits, or 16-bit digital silence and then,
+  // from 6.5 s, a 1 kHz tone at -6 dBFS.
+  private enum GappedSource {
+    COUNTED("counted-audio-with-gaps.mkv", "s32"),
+    TONE_AFTER_THE_FIRST_GAP("tone-after-the-first-gap.mkv", "s16");
+
+    private final String fileName;
+    private final String sampleFormat;
+
+    GappedSource(String fileName, String sampleFormat) {
+      this.fileName = fileName;
+      this.sampleFormat = sampleFormat;
+    }
+
+    List<String> input() throws Exception {
+      if (this == COUNTED) {
+        return countedAudioInput();
+      }
+
+      return List.of(
+          "-f",
+          "lavfi",
+          "-i",
+          "aevalsrc='if(gte(t,6.5),0.5*sin(2*PI*1000*t),0)':s=48000:d=10:c=mono");
+    }
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 36 s, beside 36 s of the counted
+  // samples
+  // as 24-bit mono FLAC in frames of 1,440 samples, of which every frame from 3.09 s to 33.03 s is
+  // cut out.
+  private static synchronized Path longGapCountedSource() throws Exception {
+    var source = seekableSources.resolve("counted-audio-with-a-30-second-gap.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          Stream.of(
+                  List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=36"),
+                  countedAudioInput(
+                      LONG_GAP_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE),
+                  List.of("-c:v", "libx264", "-g", "48", "-c:a", "flac", "-sample_fmt", "s32"),
+                  List.of(
+                      "-frame_size", "1440", "-bsf:a", "noise=drop='between(pts*tb,3.07,33.01)'"))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 12 s, beside the counted samples as
+  // 24-bit mono FLAC in frames of 4,800 samples, 100 ms, whose timestamps carry the error.
+  private static synchronized Path misstampedCountedSource(StampError error) throws Exception {
+    var source =
+        seekableSources.resolve(
+            "counted-audio-" + error.name().toLowerCase(Locale.ROOT).replace('_', '-') + ".mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          Stream.of(
+                  List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=12"),
+                  countedAudioInput(),
+                  List.of("-c:v", "libx264", "-g", "48", "-c:a", "flac", "-sample_fmt", "s32"),
+                  List.of("-frame_size", "4800", "-bsf:a", "setts=ts='" + error.timestamp + "'"))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
   }
 
   @Test

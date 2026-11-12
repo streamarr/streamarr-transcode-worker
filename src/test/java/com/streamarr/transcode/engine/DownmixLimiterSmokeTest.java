@@ -185,7 +185,7 @@ class DownmixLimiterSmokeTest {
             .channelLayout(Optional.of(job.source.name()))
             .sampleRate(OptionalInt.of(placing.sampleRate()))
             .build();
-    var options = AudioEncodeOptions.of(audio, sourceAudio).outputOptions();
+    var options = AudioEncodeOptions.of(audio, sourceAudio, Duration.ZERO).outputOptions();
     var filter = options.get(options.indexOf("-af") + 1);
 
     var output = run(source, filtering(job, filter, placing.sampleRate()));

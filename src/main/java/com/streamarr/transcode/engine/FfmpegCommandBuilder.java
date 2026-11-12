@@ -518,7 +518,7 @@ public class FfmpegCommandBuilder {
   // An input that decodes the audio that the job encodes takes that decoder's options.
   private void addSourceInput(List<String> cmd, TranscodeRequest request) {
     addSeekArgs(cmd, request);
-    encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
+    encodeInNamedLayout(request.transcodeDecision().audioDecision(), request)
         .ifPresent(options -> cmd.addAll(options.inputOptions()));
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
@@ -604,7 +604,7 @@ public class FfmpegCommandBuilder {
   private static void addOneFilterGraphOfBothInputs(List<String> cmd, TranscodeDecision decision) {
     var video = takeOptionValue(cmd, "-vf").orElseThrow();
     var audio =
-        takeOptionValue(cmd, "-af").orElse("anull")
+        takeOptionValue(cmd, "-af").orElseThrow()
             + encoderInputOfTheAudio(cmd, decision.audioDecision());
     cmd.addAll(
         List.of(
@@ -1012,7 +1012,7 @@ public class FfmpegCommandBuilder {
       return;
     }
 
-    var namedLayout = encodeInNamedLayout(audio, request.sourceAudio());
+    var namedLayout = encodeInNamedLayout(audio, request);
     if (namedLayout.isPresent()) {
       var options = namedLayout.orElseThrow();
       cmd.addAll(
@@ -1023,7 +1023,7 @@ public class FfmpegCommandBuilder {
       return;
     }
 
-    audioFilter(audio, request).ifPresent(filter -> cmd.addAll(List.of("-af", filter)));
+    cmd.addAll(List.of("-af", audioFilter(audio, request)));
     cmd.addAll(List.of("-c:a", audio.codec()));
     cmd.addAll(List.of("-ac", String.valueOf(audio.channels())));
     cmd.addAll(List.of("-b:a", audio.bitrate() / 1000 + "k"));
@@ -1031,17 +1031,23 @@ public class FfmpegCommandBuilder {
 
   // A job that names its output layout encodes in it (ADR 0050); any other keeps -ac.
   private static Optional<AudioEncodeOptions> encodeInNamedLayout(
-      AudioDecision audio, Optional<SourceAudio> sourceAudio) {
+      AudioDecision audio, TranscodeRequest request) {
     if (audio.mode() != AudioMode.TRANSCODE || audio.channelLayout().isEmpty()) {
       return Optional.empty();
     }
 
-    return Optional.of(AudioEncodeOptions.of(audio, sourceAudio.orElseThrow()));
+    return Optional.of(
+        AudioEncodeOptions.of(audio, request.sourceAudio().orElseThrow(), gapFillStart(request)));
   }
 
-  // The padding and the frame-aligned shift read the sample rate that the encoder takes, so the
-  // conversion to the encoder's input runs before them.
-  private static Optional<String> audioFilter(AudioDecision audio, TranscodeRequest request) {
+  // FFmpeg cuts an audio encoder's frames by sample count and ignores their timestamps, so the
+  // first samples after a gap would fill the frame before it and play early, and a rate
+  // conversion would join the audio on both sides. The gap fill comes first, before every filter
+  // that holds or counts samples. The padding and the frame-aligned shift read the sample rate
+  // that the encoder takes, so the conversion to the encoder's input runs before them. Without
+  // either, FFmpeg converts the filled audio for the encoder itself.
+  private static String audioFilter(AudioDecision audio, TranscodeRequest request) {
+    var fill = GapFillFilter.from(gapFillStart(request));
     var frames = framesOf(audio.codec());
     var timing = timingFilter(audio, request, frames);
     var shifts =
@@ -1049,19 +1055,30 @@ public class FfmpegCommandBuilder {
             .flatMap(_ -> frameAlignedShift(frames, request))
             .isPresent();
     if (!audio.padsWithSilenceToAdvertisedEnd() && !shifts) {
-      return timing;
+      return timing.map(filter -> fill + "," + filter).orElse(fill);
     }
 
-    return timing.map(filter -> encoderInputConversion(audio) + filter);
+    return fill + "," + encoderInputConversion(audio) + timing.orElseThrow();
+  }
+
+  // Where an audio encode's gap fill starts its silence: the last whole second at least 1 s before
+  // the input's seek position, and never before zero. The attempt's trim then decides where the
+  // encoder's first frame starts, as it did before the fill: it cuts at most one encoder's lead,
+  // 1,280 samples, before the seek position, and that lead lasts less than 1 s at any rate that an
+  // encoder takes. A whole second is a whole number of samples at every rate. An attempt from zero
+  // fills from zero, so audio that starts late follows silence.
+  private static Duration gapFillStart(TranscodeRequest request) {
+    var start = inputSeekPosition(request).minusSeconds(1).getSeconds();
+    return Duration.ofSeconds(Math.max(0, start));
   }
 
   // apad appends digital silence after the last decoded sample and changes no sample before it.
-  // When the attempt reads no source sample, FFmpeg sets the filters up with the stream's own
-  // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
-  // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
-  // the padding. An attempt from a later segment trims its encoded audio itself, as its seek no
-  // longer does. The padding ends after the shift back, on the attempt's own times. In a named
-  // layout's encode these filters follow its own: its resampler and limiter meet
+  // When the attempt reads no source sample, the gap fill writes nothing, FFmpeg sets the filters
+  // up with the stream's own sample rate and layout, as for a decoded one, and apad's silence
+  // carries no timestamps, so asetpts starts it at the attempt's start. atrim drops the silence
+  // before the start and ends the padding. An attempt from a later segment trims its encoded audio
+  // itself, as its seek no longer does. The padding ends after the shift back, on the attempt's own
+  // times. In a named layout's encode these filters follow its own: its resampler and limiter meet
   // the end of the source instead of silence, its dither never reaches the silence, and no
   // conversion replaces its layout with FFmpeg's default for the channel count.
   private static Optional<String> timingFilter(
