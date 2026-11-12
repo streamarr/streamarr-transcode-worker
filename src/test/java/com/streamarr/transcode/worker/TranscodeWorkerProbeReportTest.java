@@ -338,14 +338,16 @@ class TranscodeWorkerProbeReportTest {
 
   @Test
   @DisplayName(
-      "Should send the whole report when it keeps advancing for longer than the upload"
-          + " acknowledgement timeout")
-  void shouldSendTheWholeReportWhenItKeepsAdvancingForLongerThanTheAcknowledgementTimeout()
+      "Should send the whole report when it keeps advancing for longer than either upload timeout")
+  void shouldSendTheWholeReportWhenItKeepsAdvancingForLongerThanEitherUploadTimeout()
       throws Exception {
     var request = requestBuilder().build();
-    var expected = writeSourceWhoseReportTakes(request, 5 * MESSAGE_BYTES);
+    var expected = writeSourceWhoseReportTakes(request, 15 * MESSAGE_BYTES);
     var configuration =
-        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(300)).build();
+        configurationBuilder()
+            .uploadReadinessTimeout(Duration.ofSeconds(1))
+            .uploadAcknowledgementTimeout(Duration.ofSeconds(1))
+            .build();
 
     try (var worker = workerBuilder(tempDir).configuration(configuration).runtime(runtime).build();
         var receiver = Executors.newSingleThreadScheduledExecutor()) {
@@ -354,9 +356,11 @@ class TranscodeWorkerProbeReportTest {
       connection.withholdReportReadiness();
       start(connection, request);
       runtime.probes().drain();
+      connection.awaitReportCalls(1);
 
-      // Each of the six messages waits 100 ms for readiness, so the report takes longer than the
-      // acknowledgement timeout in all, and a segment upload of this shape fails.
+      // Each of the sixteen messages waits about 100 ms for readiness, so the report takes about
+      // 1.5 s in all: a call whose readiness bound or acknowledgement bound covered the whole
+      // report, as a segment upload's acknowledgement bound does, fails.
       receiver.scheduleAtFixedRate(connection::grantReportMessage, 0, 100, TimeUnit.MILLISECONDS);
 
       assertThat(connection.reports()).containsExactly(expected);
