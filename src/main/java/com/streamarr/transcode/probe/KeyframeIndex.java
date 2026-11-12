@@ -1,7 +1,11 @@
 package com.streamarr.transcode.probe;
 
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.util.List;
+import java.util.OptionalLong;
 import lombok.NonNull;
 
 /** What a container index says about the keyframes of the chosen video stream. */
@@ -33,5 +37,39 @@ sealed interface KeyframeIndex {
     }
   }
 
-  record TimeBase(long numerator, long denominator) {}
+  record TimeBase(long numerator, long denominator) {
+
+    /**
+     * The time in the other time base when it is a whole tick of it. The products can exceed a long
+     * even when the result fits, as at a time base of 1/1,000,000,000.
+     */
+    OptionalLong rescaleExactly(long ticks, TimeBase to) {
+      var quotient = scaledTo(ticks, to).divideAndRemainder(divisorTo(to));
+      if (quotient[1].signum() != 0) {
+        return OptionalLong.empty();
+      }
+
+      return OptionalLong.of(quotient[0].longValueExact());
+    }
+
+    /**
+     * The first tick of the other time base at or after the time; an {@link ArithmeticException}
+     * when that tick is beyond the long range.
+     */
+    long rescaleUp(long ticks, TimeBase to) {
+      return new BigDecimal(scaledTo(ticks, to))
+          .divide(new BigDecimal(divisorTo(to)), 0, RoundingMode.CEILING)
+          .longValueExact();
+    }
+
+    private BigInteger scaledTo(long ticks, TimeBase to) {
+      return BigInteger.valueOf(ticks)
+          .multiply(BigInteger.valueOf(numerator))
+          .multiply(BigInteger.valueOf(to.denominator()));
+    }
+
+    private BigInteger divisorTo(TimeBase to) {
+      return BigInteger.valueOf(denominator).multiply(BigInteger.valueOf(to.numerator()));
+    }
+  }
 }

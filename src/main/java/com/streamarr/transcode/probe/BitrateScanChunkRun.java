@@ -13,6 +13,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
 import com.streamarr.transcode.probe.ChunkPackets.AudioWindow;
 import com.streamarr.transcode.probe.ChunkPackets.SixBlockDuration;
 import com.streamarr.transcode.probe.ChunkPackets.StreamCounts;
+import com.streamarr.transcode.probe.CopiedPacketCheck.PacketCopy;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -52,7 +53,6 @@ final class BitrateScanChunkRun {
       List.of(BigDecimal.valueOf(10), BigDecimal.valueOf(120));
 
   private static final int SEEK_SCALE = 6;
-  private static final int FIRST_PACKET_OUTPUT_BYTES = 1 << 20;
   private static final int FIRST_PACKET_TIME_OUTPUT_BYTES = 1 << 16;
 
   private final PacketListingRunner ffprobe;
@@ -92,8 +92,9 @@ final class BitrateScanChunkRun {
       return failed(probed, ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
     }
 
+    var copies = new CopiedPacketCheck(boundedFfprobe, objectMapper);
     for (var stream : streams.get()) {
-      var copy = packetCopy(probed, stream);
+      var copy = copies.of(probed, stream.index(), stream.description());
       if (copy == PacketCopy.CHANGES_PACKETS) {
         return copyChangesPackets(probed, stream.index());
       }
@@ -166,78 +167,6 @@ final class BitrateScanChunkRun {
     return Optional.of(measured);
   }
 
-  /** What a stream copy does to a stream's packets. */
-  private enum PacketCopy {
-    KEEPS_PACKETS,
-    CHANGES_PACKETS,
-    /** The stream's first packet is too large to be one of its codec's. */
-    UNREADABLE
-  }
-
-  /**
-   * What a copy does to the stream's packets, as far as the stream's description and first packet
-   * tell. The E-AC-3 rule needs each packet's duration, so the listing checks it.
-   */
-  private PacketCopy packetCopy(ProbedSource probed, MeasuredStream stream)
-      throws ExecutionException, InterruptedException {
-    return switch (stream.copyRule()) {
-      case H264_RECORD, HEVC_RECORD ->
-          keepsPacketsWhen(
-              CopiedPacketBytes.of(stream.description(), probed.formatName()).orElse(false));
-      case ALWAYS_CHANGED -> PacketCopy.CHANGES_PACKETS;
-      case AAC_WITHOUT_ADTS ->
-          Extradata.of(stream.description()).isPresent()
-              ? firstAacPacketCopy(probed, stream.index())
-              : PacketCopy.CHANGES_PACKETS;
-      case SIX_BLOCK_EAC3 -> keepsPacketsWhen(sampleRate(stream).isPresent());
-      case KEPT -> PacketCopy.KEEPS_PACKETS;
-    };
-  }
-
-  private static PacketCopy keepsPacketsWhen(boolean isKept) {
-    return isKept ? PacketCopy.KEEPS_PACKETS : PacketCopy.CHANGES_PACKETS;
-  }
-
-  /**
-   * The mp4 muxer adds {@code aac_adtstoasc} when the first AAC packet it receives starts with an
-   * ADTS sync word. A read that fails says nothing about the packet, so it fails the chunk.
-   */
-  private PacketCopy firstAacPacketCopy(ProbedSource probed, int streamIndex)
-      throws ExecutionException, InterruptedException {
-    var arguments = firstPacketRead(probed, streamIndex, List.of("packet=data", "-show_data"));
-    var output = boundedFfprobe.run(arguments, FIRST_PACKET_OUTPUT_BYTES);
-    if (output.isEmpty()) {
-      return PacketCopy.UNREADABLE;
-    }
-
-    if (output.get().exitCode() != 0) {
-      throw new PacketScanException(
-          "ffprobe's first AAC packet read exited with code " + output.get().exitCode());
-    }
-
-    var packets = objectMapper.readTree(output.get().stdout()).path("packets");
-    if (packets.isEmpty()) {
-      return PacketCopy.KEEPS_PACKETS;
-    }
-
-    var data = Extradata.dumped(packets.get(0).path("data").asString("")).orElse(new byte[0]);
-    var isAdts = data.length > 2 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xF0) == 0xF0;
-    return keepsPacketsWhen(!isAdts);
-  }
-
-  /** The arguments of a read of the stream's first packet that shows the entries. */
-  private static List<String> firstPacketRead(
-      ProbedSource probed, int streamIndex, List<String> entries) {
-    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-    arguments.addAll(FfprobeExecutor.READ_LIMITS);
-    arguments.addAll(
-        List.of("-select_streams", String.valueOf(streamIndex), "-read_intervals", "%+#1"));
-    arguments.add("-show_entries");
-    arguments.addAll(entries);
-    arguments.add(probed.source().toString());
-    return arguments;
-  }
-
   /**
    * A time that no packet of an audio stream presents after, in its time base, its latest end;
    * empty when it is unknown, or when it could not lie before the limit, so that no read is spent
@@ -304,7 +233,7 @@ final class BitrateScanChunkRun {
         throws ExecutionException, InterruptedException {
       var output =
           boundedFfprobe.run(
-              firstPacketRead(probed, streamIndex, List.of("packet=pts")),
+              CopiedPacketCheck.firstPacketRead(probed, streamIndex, List.of("packet=pts")),
               FIRST_PACKET_TIME_OUTPUT_BYTES);
       if (output.isEmpty() || output.get().exitCode() != 0) {
         return OptionalLong.empty();
@@ -419,7 +348,7 @@ final class BitrateScanChunkRun {
       var start = KeyframePositionsReport.containerStart(ffprobeOutput, other);
       var rescaled = new long[times.length];
       for (var i = 0; i < times.length; i++) {
-        var time = rescaleExactly(times[i], timeBase, other);
+        var time = timeBase.rescaleExactly(times[i], other);
         if (time.isEmpty()) {
           return Optional.empty();
         }
@@ -440,7 +369,7 @@ final class BitrateScanChunkRun {
       var start = KeyframePositionsReport.containerStart(ffprobeOutput, stream.timeBase());
       var starts = new long[times.length];
       for (var i = 0; i < times.length; i++) {
-        starts[i] = Math.addExact(rescaleUp(times[i], timeBase, stream.timeBase()), start);
+        starts[i] = Math.addExact(timeBase.rescaleUp(times[i], stream.timeBase()), start);
       }
 
       var sixBlocks =
@@ -454,34 +383,6 @@ final class BitrateScanChunkRun {
           .latestEnd(latestEnds.before(stream, starts[0]))
           .sixBlocks(sixBlocks)
           .build();
-    }
-
-    // The time in the other time base when it is a whole tick of it. The products can exceed a long
-    // even when the result fits, as at a time base of 1/1,000,000,000.
-    private static OptionalLong rescaleExactly(long ticks, TimeBase from, TimeBase to) {
-      var quotient = scaled(ticks, from, to).divideAndRemainder(denominator(from, to));
-      if (quotient[1].signum() != 0) {
-        return OptionalLong.empty();
-      }
-
-      return OptionalLong.of(quotient[0].longValueExact());
-    }
-
-    // The first tick of the other time base at or after the time.
-    private static long rescaleUp(long ticks, TimeBase from, TimeBase to) {
-      return new BigDecimal(scaled(ticks, from, to))
-          .divide(new BigDecimal(denominator(from, to)), 0, RoundingMode.CEILING)
-          .longValueExact();
-    }
-
-    private static BigInteger scaled(long ticks, TimeBase from, TimeBase to) {
-      return BigInteger.valueOf(ticks)
-          .multiply(BigInteger.valueOf(from.numerator()))
-          .multiply(BigInteger.valueOf(to.denominator()));
-    }
-
-    private static BigInteger denominator(TimeBase from, TimeBase to) {
-      return BigInteger.valueOf(from.denominator()).multiply(BigInteger.valueOf(to.numerator()));
     }
   }
 
