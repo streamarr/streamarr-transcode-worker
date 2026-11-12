@@ -101,14 +101,29 @@ class MutationTestingWorkflowTest {
     assertThat(map(shard.get("strategy"))).containsEntry("fail-fast", false);
     assertThat(stepNamed(steps(shard), PIT_STEP)).doesNotContainKey("continue-on-error");
     assertThat(keep).containsEntry("if", "always()");
-    assertThat(map(keep.get("with")))
-        .containsEntry("name", "mutation-report-${{ matrix.shard }}")
-        .containsEntry("path", "target/pit-reports");
+    assertThat(map(keep.get("with"))).containsEntry("name", "mutation-report-${{ matrix.shard }}");
     assertThat(job(REPORT_JOB))
         .containsEntry("needs", SHARD_JOB)
         .containsEntry("if", "${{ !cancelled() }}");
     assertThat(map(stepNamed(steps(job(REPORT_JOB)), "Receive every shard's report").get("with")))
-        .containsEntry("pattern", "mutation-report-*")
+        .containsEntry("pattern", "mutation-report-*");
+  }
+
+  // download-artifact unpacks the only artifact a pattern matches straight into its path, and puts
+  // each artifact in a directory of its name only when several match. With merge-multiple it
+  // unpacks every artifact into the path, so each artifact must hold its shard's directory itself.
+  @Test
+  @DisplayName("Should read a shard's report where it lands when only that shard kept one")
+  void shouldReadAShardsReportWhereItLandsWhenOnlyThatShardKeptOne() throws IOException {
+    var pit = stepNamed(steps(job(SHARD_JOB)), PIT_STEP).get("run").toString();
+    var kept = map(stepNamed(steps(job(SHARD_JOB)), "Keep the HTML report").get("with"));
+    var received =
+        map(stepNamed(steps(job(REPORT_JOB)), "Receive every shard's report").get("with"));
+
+    assertThat(kept).containsEntry("path", "target/pit-reports");
+    assertThat(pit).contains("\"-DreportsDirectory=target/pit-reports/mutation-report-$SHARD\"");
+    assertThat(received)
+        .containsEntry("merge-multiple", true)
         .containsEntry("path", "${{ runner.temp }}/reports");
     assertThat(summarizeStep())
         .contains("--report \"$RUNNER_TEMP/reports/mutation-report-$shard/mutations.xml\"");
