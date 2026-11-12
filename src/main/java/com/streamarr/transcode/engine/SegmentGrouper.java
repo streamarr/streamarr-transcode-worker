@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -167,10 +168,15 @@ final class SegmentGrouper {
           "segment "
               + startSequenceNumber
               + " opens at "
-              + opening
+              + seconds(opening)
               + ", after its first frame at "
-              + latest.get());
+              + seconds(latest.get()));
     }
+  }
+
+  private static String seconds(MediaTime time) {
+    var nanoseconds = time.truncatedToNanoseconds().toNanos();
+    return BigDecimal.valueOf(nanoseconds, 9).stripTrailingZeros().toPlainString() + " s";
   }
 
   /**

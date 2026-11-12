@@ -264,6 +264,20 @@ class SegmentGrouperTest {
 
   @Test
   @DisplayName(
+      "Should name the segment, its opening and its first frame in seconds when the first segment"
+          + " opened late")
+  void shouldNameTheSegmentItsOpeningAndItsFirstFrameInSecondsWhenTheFirstSegmentOpenedLate() {
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 3, SEGMENT_CAP);
+    grouper.refuseAFirstSegmentOpenedAfter(new MediaTime(18, new TimeBase(1, 1)));
+    var late = keyframeAt(20_500);
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> grouper.accept(late))
+        .withMessageEndingWith("segment 3 opens at 20.5 s, after its first frame at 18 s");
+  }
+
+  @Test
+  @DisplayName(
       "Should open the first segment and a later segment that opens late when the first segment's"
           + " keyframe presents on the latest opening")
   void shouldOpenTheFirstSegmentWhenItsKeyframePresentsOnTheLatestOpening() {
