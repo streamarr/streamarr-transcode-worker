@@ -226,6 +226,29 @@ class KeyframeSearchSmokeTest {
     assertThat(launcher.input()).as("no q before the leading pictures").isEmpty();
   }
 
+  // The source is a stream copy whose MP4 edit list starts the video at the 23rd picture of its
+  // only GOP. The copy keeps that GOP's keyframe and its other pictures before the 23rd as preroll,
+  // which the decoder decodes but does not present. The packet that ends the video presents from
+  // 1/24 s and decodes before the picture at 0 s.
+  @Test
+  @DisplayName(
+      "Should send no q at the packet that ends the video when the read's only keyframe is an edit"
+          + " list's preroll")
+  void shouldSendNoQAtThePacketThatEndsTheVideoWhenTheReadsOnlyKeyframeIsAnEditListsPreroll()
+      throws Exception {
+    var source = videoWhoseEditListStartsAfterItsOnlyKeyframe();
+    var probed = probe(source);
+    assertThat(probed.videoKeyframeFlags()).as("the preroll keyframe").containsExactly("KD_");
+    assertThat(probed.videoEnd()).as("the video's end").isEqualTo(Duration.ofNanos(83_333_333));
+    var launcher = new InputRecordingLauncher();
+    var scan = firstPictureCheck(source, probed.videoEnd(), launcher);
+
+    var read = scan.firstDecodedPicture(Duration.ZERO, Duration.ofMillis(20));
+
+    assertThat(read).isEqualTo(new KeyframeScan.SeekRead.FirstPicture(Duration.ZERO));
+    assertThat(launcher.input()).as("no q before the picture at 0 s").isEmpty();
+  }
+
   // The pinned FFmpeg writes this source's video from about 4.1 s on after its audio at 110 s. A
   // read from the keyframe at 4 s copies that keyframe, then the audio, then the rest of the video.
   // A check that stopped on copied audio 10 s past its read end rejected that read, whose decoder
@@ -378,6 +401,54 @@ class KeyframeSearchSmokeTest {
     return source;
   }
 
+  // 1 s of H.264 at 128x72 and 24 fps in one GOP with two B-frames between its other pictures,
+  // copied into MP4 from 0.9 s, beside 30 s of AAC.
+  private Path videoWhoseEditListStartsAfterItsOnlyKeyframe() throws Exception {
+    var video = root.resolve("one-gop.mp4");
+    ffmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=24:duration=1",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "2",
+            "-x264-params",
+            "b-pyramid=none:b-adapt=0:scenecut=0",
+            "-g",
+            "48",
+            "-f",
+            "mp4",
+            video.toString()));
+    var source = root.resolve("edit-list-preroll.mp4");
+    ffmpeg(
+        List.of(
+            "-ss",
+            "0.9",
+            "-i",
+            video.toString(),
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=duration=30:color=pink:sample_rate=48000:amplitude=0.1",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-f",
+            "mp4",
+            source.toString()));
+    return source;
+  }
+
   // 6 s of H.264 at 128x72 and 24 fps with IDR keyframes at 0, 1, 2, 3, 4, 5 and 5.5 s, and 120 s
   // of AAC, encoded in one FFmpeg into MPEG-TS.
   private Path videoWrittenFarBehindItsAudio() throws Exception {
@@ -488,6 +559,14 @@ class KeyframeSearchSmokeTest {
           .max(Comparator.naturalOrder())
           .map(this::onTheTimeline)
           .orElseThrow();
+    }
+
+    // ffprobe's packet flags, such as "KD_" for a keyframe that the demuxer marks to discard.
+    List<String> videoKeyframeFlags() {
+      return videoPackets().stream()
+          .map(packet -> packet.get("flags"))
+          .filter(flags -> flags.startsWith("K"))
+          .toList();
     }
 
     List<Duration> keyframeDecodeTimes() {

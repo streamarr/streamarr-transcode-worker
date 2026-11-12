@@ -747,7 +747,8 @@ class KeyframeReadPositionTest {
   // last, up to the video's end, and its three leading pictures need no picture before it, as
   // HEVC's RADL pictures do. The Matroska case is the pinned FFmpeg's copy of the smoke test's read
   // from 4.2 s of an x265 encode at 4 fps, 20 s later: it decodes the keyframe two pictures before
-  // it presents, and the leading pictures 1 ms after it.
+  // it presents, and the leading pictures 1 ms after it. In the edit list case, the B-frames that
+  // present first follow the packet that ends the video, as in the smoke test's stream copy.
   static Stream<Arguments> readsWhosePicturesInTimeFollowThePacketThatEndsTheVideo() {
     return Stream.of(
         Arguments.of(
@@ -782,7 +783,24 @@ class KeyframeReadPositionTest {
             1, 600000, 600000, 250, 300, 0x0a1b2c3d
             """,
             Duration.ofMillis(24_250),
-            Duration.ofMillis(23_250)));
+            Duration.ofMillis(23_250)),
+        Arguments.of(
+            "an MP4 edit list marks the read's only keyframe, at 23.417 s, to decode but not to"
+                + " present: the packet that ends the video presents from 23.542 s, and the two"
+                + " pictures after it from 23.458 s",
+            """
+            #tb 0: 1/1000
+            #tb 1: 1/1000
+            0, 23375, 23417, 42, 1000, 0x0a1b2c3d, F=0x5
+            1, 23375, 23375, 250, 300, 0x0a1b2c3d
+            0, 23417, 23542, 42, 1000, 0x0a1b2c3d, F=0x0
+            0, 23458, 23458, 42, 1000, 0x0a1b2c3d, F=0x0
+            0, 23500, 23500, 42, 1000, 0x0a1b2c3d, F=0x0
+            1, 60000, 60000, 250, 300, 0x0a1b2c3d
+            1, 600000, 600000, 250, 300, 0x0a1b2c3d
+            """,
+            Duration.ofMillis(23_584),
+            Duration.ofMillis(23_458)));
   }
 
   // The packet that ends the video presents last, so no keyframe follows it in decode order. A

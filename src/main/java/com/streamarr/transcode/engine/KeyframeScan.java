@@ -124,9 +124,9 @@ final class KeyframeScan {
    * count as read. Once a copied video packet decodes at or after a second past the latest
    * picture's time, FFmpeg stops reading and decodes the packets that it has read. When the request
    * carries the chosen video's end, the packet that ends there also stops the read, unless the read
-   * holds keyframes and every one of them presents after the latest picture's time: the leading
-   * pictures after them can then still present by that time. Any other read whose video ends first
-   * and that shows no picture copies on to the end of the file.
+   * holds keyframes and none of them presents by the latest picture's time: the pictures after them
+   * in decode order can then still present by that time. Any other read whose video ends first and
+   * that shows no picture copies on to the end of the file.
    */
   SeekRead firstDecodedPicture(Duration seekPosition, Duration latestPicture)
       throws InterruptedException {
@@ -456,7 +456,8 @@ final class KeyframeScan {
     void add(Packet packet) {
       if (packet.isKeyframe()) {
         holdsAKeyframe = true;
-        holdsAKeyframeInTime |= packet.presentationTime().compareTo(latestPicture) <= 0;
+        holdsAKeyframeInTime |=
+            packet.isPresented() && packet.presentationTime().compareTo(latestPicture) <= 0;
       }
 
       reachesTheReadEnd |= endsTheRead(packet);
@@ -478,9 +479,10 @@ final class KeyframeScan {
     // The packet that ends the video presents last, so no keyframe follows it in decode order: a
     // read that holds no keyframe shows no picture, and one with a keyframe that presents by the
     // latest picture's time shows a picture by then from the packets that it holds. When every
-    // keyframe presents later, the leading pictures that follow one in decode order can still
-    // present by then. A copied packet's decode time cannot rule them out: where the container
-    // stores none, as Matroska does, FFmpeg derives it from the presentation time.
+    // keyframe presents later, or is preroll that its container marks not to present, the pictures
+    // that follow one in decode order can still present by then. A copied packet's decode time
+    // cannot rule them out: where the container stores none, as Matroska does, FFmpeg derives it
+    // from the presentation time.
     private boolean canShowAPictureInTimeOnlyFromLaterPackets() {
       return holdsAKeyframe && !holdsAKeyframeInTime;
     }
