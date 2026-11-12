@@ -400,12 +400,11 @@ public class FfmpegCommandBuilder {
   }
 
   /**
-   * The command that checks where a seek lands in the search for the keyframe that an encode reads
-   * from (ADR 0037, seek): it copies the chosen video stream's first packet, beside the chosen
-   * audio's, from where the job attempt's own seek to the position would start reading, to a
-   * framecrc on standard output. It reads the attempt's own streams, so its times lie on the
-   * attempt's zero-based timeline, whose zero is the earliest start among the streams that a
-   * command reads.
+   * The command that checks where an encode's read from a seek position starts (ADR 0037, seek): it
+   * copies the chosen video stream's first packet, beside the chosen audio's, from where the job
+   * attempt's own seek to the position starts reading, to a framecrc on standard output. It reads
+   * the attempt's own streams, so its times lie on the attempt's zero-based timeline, whose zero is
+   * the earliest start among the streams that a command reads.
    */
   List<String> buildSeekLandingCommand(
       Path source, TranscodeDecision decision, Duration seekPosition) {
@@ -414,6 +413,49 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-ss", seekArgument(seekPosition), "-i", source.toString()));
     addChosenSourceStreams(cmd, decision, 0);
     cmd.addAll(List.of("-c", "copy", "-copyinkf", COPY_PRIOR_SEEK_START, "1", "-frames:v", "1"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
+    return List.copyOf(cmd);
+  }
+
+  /**
+   * The command that finds the first picture of an encode's read from a seek position (ADR 0037,
+   * seek): from where the job attempt's own seek to the position starts reading, for the length, it
+   * decodes the chosen video stream as the attempt does and writes the decoder's first picture as
+   * stream 0 of a framecrc on standard output, beside a copy of the attempt's own streams, which
+   * keeps its times on the attempt's zero-based timeline. The muxer writes nothing before that
+   * picture, so a read that shows none writes nothing. One decoding thread delivers each picture
+   * once the pictures that it waits for have decoded, without frame threads' delay.
+   */
+  List<String> buildFirstPictureCommand(
+      Path source, TranscodeDecision decision, Duration seekPosition, Duration length) {
+    var cmd = new ArrayList<>(List.of(ffmpegPath));
+    cmd.addAll(KEYFRAME_SCAN_OPTIONS);
+    cmd.addAll(List.of("-threads", "1"));
+    if (seekPosition.isPositive()) {
+      cmd.addAll(List.of("-ss", seekArgument(seekPosition), "-noaccurate_seek"));
+    }
+
+    cmd.addAll(List.of("-t", seekArgument(length), "-i", source.toString()));
+    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
+    addChosenSourceStreams(cmd, decision, 0);
+    cmd.addAll(
+        List.of(
+            "-c",
+            "copy",
+            "-copyinkf",
+            COPY_PRIOR_SEEK_START,
+            "1",
+            "-c:v:0",
+            "wrapped_avframe",
+            "-fps_mode:v:0",
+            "passthrough",
+            "-enc_time_base:v:0",
+            "demux",
+            "-frames:v:0",
+            "1",
+            FLUSH_PACKETS,
+            "1"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(FRAMECRC_ON_STANDARD_OUTPUT);
     return List.copyOf(cmd);
@@ -647,14 +689,15 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  // A job that carries a keyframe seek position, the server's or the one that the engine's keyframe
-  // search finds, seeks to that position. A stream copy's keyframe starts the copy's first segment,
-  // and the server sends its decode time. An encode's keyframe is the last one whose presentation
-  // time lies at or before the first segment's start minus 0.5 s, so that the encode decodes the
-  // picture that fills that start. For an encode, the server sends that keyframe's presentation
-  // time from an MP4 or MOV source and its decode time from a Matroska, MPEG-TS or any other
-  // source, and the search finds a time from which the attempt's own seek lands at or before that
-  // keyframe. An MP4 demuxer seeks by presentation time, so a decode time before the keyframe's
+  // A job that carries a keyframe seek position, the server's for a copy or the one that the
+  // engine's read check keeps or finds for an encode, seeks to that position. A stream copy's
+  // keyframe starts the copy's first segment, and the server sends its decode time. An encode's
+  // keyframe is the last one whose presentation time lies at or before the first segment's start
+  // minus 0.5 s and whose read shows a picture by then, so that the encode decodes the picture that
+  // fills that start. For an encode, the server sends that keyframe's presentation time from an MP4
+  // or MOV source and its decode time from a Matroska, MPEG-TS or any other source when it stores
+  // the keyframes, and the engine checks that read or finds another. An MP4 demuxer seeks by
+  // presentation time, so a decode time before the keyframe's
   // presentation time reads from the keyframe before it, a whole GOP earlier. An MPEG-TS seek reads
   // from the last packet whose decode time is at or before the target, so a seek to the segment's
   // boundary skips that keyframe when its decode time lies far enough before the boundary. The seek
@@ -692,8 +735,8 @@ public class FfmpegCommandBuilder {
         .toPlainString();
   }
 
-  // An attempt that encodes video from a later segment always carries a seek position: the server's
-  // keyframe position or the one that the engine's keyframe search finds. Any other attempt without
+  // An attempt that encodes video from a later segment always carries the seek position that the
+  // engine's read check keeps or finds. Any other attempt without
   // the server's keyframe position seeks to its first segment's start. An exact start rounds down
   // to nanoseconds, which the seek rounds up to microseconds.
   private static Duration inputSeekStart(TranscodeRequest request) {

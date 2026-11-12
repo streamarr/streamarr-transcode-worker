@@ -24,6 +24,7 @@ import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
+import com.streamarr.transcode.fakes.ScriptedKeyframeSource;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures;
@@ -120,6 +121,10 @@ class TranscodeWorkerHardwareEncoderFailureTest {
     var next = encodeJob().toBuilder();
     next.getExecutionBuilder().setStartSequenceNumber(5).setSeekPositionSeconds(30);
     next.getExecutionBuilder().getSeekPositionBuilder().setSeconds(28);
+    next.getExecutionBuilder()
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(29)
+        .setNanos(500_000_000);
 
     try (var worker = worker(launcher, Duration.ofHours(1))) {
       worker.start("localhost", 1);
@@ -132,7 +137,7 @@ class TranscodeWorkerHardwareEncoderFailureTest {
       awaitEventCount(connection, EventCase.JOB_ATTEMPT_STARTED, 2);
       assertThat(started(connection, next.build()))
           .isEqualTo(backend("libx264", EncoderKind.ENCODER_KIND_SOFTWARE));
-      assertThat(launcher.command(fromProto(next.getJobAttemptId())))
+      assertThat(launcher.mediaCommand(fromProto(next.getJobAttemptId())))
           .containsSubsequence("-c:v", "libx264")
           .doesNotContain("-hwaccel", "h264_nvenc");
     }
@@ -288,6 +293,10 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   private static ScriptedProcessLauncher launcherFailingNvencWith(String errorOutput) {
     return ScriptedProcessLauncher.forCommands(
         (command, _) -> {
+          if (ScriptedKeyframeSource.isReadCheck(command)) {
+            return ScriptedKeyframeSource.keyframeAtTheSeekOf(command);
+          }
+
           if (command.contains("h264_nvenc")) {
             return ScriptedProcess.builder()
                 .output(new byte[0])

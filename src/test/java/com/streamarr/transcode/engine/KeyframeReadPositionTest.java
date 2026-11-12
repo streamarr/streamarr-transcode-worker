@@ -31,6 +31,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 class KeyframeReadPositionTest {
 
   private static final Duration ONE_MICROSECOND = Duration.ofNanos(1_000);
+  // FFmpeg's command line tool moves a seek this much, 3/23 s, earlier for a stream with B-frames.
+  private static final Duration B_FRAME_READ_BACK = Duration.ofNanos(130_434_783);
 
   private final AtomicLong bytesRead = new AtomicLong();
 
@@ -49,7 +51,7 @@ class KeyframeReadPositionTest {
     assertThat(readPosition).contains(decodeTimeOf(22));
     assertThat(source.scannedIntervals())
         .containsExactly(List.of(seconds("21.5"), seconds("23.5").plus(ONE_MICROSECOND)));
-    assertThat(source.landingChecks()).containsExactly(Duration.ofSeconds(22), decodeTimeOf(22));
+    assertThat(source.readChecks()).containsExactly(Duration.ofSeconds(22), decodeTimeOf(22));
   }
 
   @Test
@@ -66,7 +68,7 @@ class KeyframeReadPositionTest {
         engineReading(source).readPosition(searching(seconds("23.5"), 24), bytesRead::addAndGet);
 
     assertThat(readPosition).contains(Duration.ofSeconds(22));
-    assertThat(source.landingChecks()).containsExactly(Duration.ofSeconds(22));
+    assertThat(source.readChecks()).containsExactly(Duration.ofSeconds(22));
   }
 
   // Keyframes 49 s apart: the first interval is the 2 s period, and each one before it is twice as
@@ -110,7 +112,7 @@ class KeyframeReadPositionTest {
 
   @Test
   @DisplayName(
-      "Should read from the source's start without a landing check when no keyframe presents at or"
+      "Should read from the source's start without a read check when no keyframe presents at or"
           + " before the search time")
   void shouldReadFromTheSourcesStartWhenNoKeyframePresentsAtOrBeforeTheSearchTime()
       throws Exception {
@@ -120,7 +122,7 @@ class KeyframeReadPositionTest {
         engineReading(source).readPosition(searching(seconds("5.5"), 6), bytesRead::addAndGet);
 
     assertThat(readPosition).contains(Duration.ZERO);
-    assertThat(source.landingChecks()).isEmpty();
+    assertThat(source.readChecks()).isEmpty();
     assertThat(source.scannedIntervals().getLast().getFirst()).isZero();
   }
 
@@ -191,7 +193,7 @@ class KeyframeReadPositionTest {
         engine(
             ScriptedProcessLauncher.forCommands(
                 (command, _) ->
-                    command.contains("-frames:v")
+                    ScriptedKeyframeSource.isReadCheck(command)
                         ? ScriptedProcess.builder().output(new byte[0]).build()
                         : source.scan(command)));
 
@@ -215,13 +217,13 @@ class KeyframeReadPositionTest {
   }
 
   // A raw H.264 stream's packets carry decode times alone. The record before the time base line
-  // is not read.
+  // is not read. The read from 10 s starts with the keyframe and shows its picture.
   @Test
   @DisplayName(
       "Should place a keyframe at its decode time when its packet carries no presentation time")
   void shouldPlaceAKeyframeAtItsDecodeTimeWhenItsPacketCarriesNoPresentationTime()
       throws Exception {
-    var framecrc =
+    var scan =
         """
         0, 9000, 9000, 250, 1000, 0x0a1b2c3d
         #tb 0: 1/1000
@@ -229,13 +231,35 @@ class KeyframeReadPositionTest {
         0, 10000, -9223372036854775808, 250, 1000, 0x0a1b2c3d
         0, -9223372036854775808, -9223372036854775808, 250, 1000, 0x0a1b2c3d
         """;
+    var landing =
+        """
+        #tb 0: 1/1000
+        0, 10000, -9223372036854775808, 250, 1000, 0x0a1b2c3d
+        """;
+    var firstPicture =
+        """
+        #tb 0: 1/1000
+        #tb 1: 1/1000
+        1, 10000, -9223372036854775808, 250, 1000, 0x0a1b2c3d
+        0, 10000, 10000, 1, 500, 0x0a1b2c3d
+        """;
     var engine =
         engine(
             ScriptedProcessLauncher.forCommands(
-                (_, _) ->
-                    ScriptedProcess.builder()
-                        .output(framecrc.getBytes(StandardCharsets.US_ASCII))
-                        .build()));
+                (command, _) -> {
+                  var output = scan;
+                  if (ScriptedKeyframeSource.isLandingCheck(command)) {
+                    output = landing;
+                  }
+
+                  if (ScriptedKeyframeSource.isFirstPictureCheck(command)) {
+                    output = firstPicture;
+                  }
+
+                  return ScriptedProcess.builder()
+                      .output(output.getBytes(StandardCharsets.US_ASCII))
+                      .build();
+                }));
 
     var readPosition = engine.readPosition(searching(seconds("23.5"), 24), bytesRead::addAndGet);
 
@@ -270,6 +294,133 @@ class KeyframeReadPositionTest {
     var readPosition = engine.readPosition(searching(seconds("7.5"), 8), bytesRead::addAndGet);
 
     assertThat(readPosition).contains(Duration.ZERO);
+  }
+
+  // The server stores the keyframe at 22 s and sends its decode time.
+  @Test
+  @DisplayName(
+      "Should keep the stored seek position after one read check, without a scan, when its read"
+          + " shows the keyframe's picture at or before the search time")
+  void shouldKeepTheStoredSeekPositionWhenItsReadShowsThePictureAtOrBeforeTheSearchTime()
+      throws Exception {
+    var source = everyTwoSecondsUpTo(30, 30);
+
+    var readPosition =
+        engineReading(source)
+            .readPosition(
+                storing(decodeTimeOf(22), searching(seconds("23.5"), 24)), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(decodeTimeOf(22));
+    assertThat(source.readChecks()).containsExactly(decodeTimeOf(22));
+    assertThat(source.scannedIntervals()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should read from the source's start without a read check when the stored seek position is"
+          + " zero")
+  void shouldReadFromTheSourcesStartWithoutAReadCheckWhenTheStoredSeekPositionIsZero()
+      throws Exception {
+    var source = everyTwoSecondsUpTo(30, 30);
+
+    var readPosition =
+        engineReading(source)
+            .readPosition(
+                storing(Duration.ZERO, searching(seconds("5.5"), 6)), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(Duration.ZERO);
+    assertThat(source.readChecks()).isEmpty();
+    assertThat(source.scannedIntervals()).isEmpty();
+  }
+
+  // A seek to the keyframe's exact decode time, as to its presentation time, reads from the packet
+  // after it, so the decoder shows no picture until the keyframe at 24 s. A seek FFmpeg's B-frame
+  // read-back before the decode time reads the keyframe.
+  @Test
+  @DisplayName(
+      "Should read from FFmpeg's B-frame read-back before the keyframe's decode time when a seek to"
+          + " the stored decode time lands after the keyframe")
+  void shouldReadFromTheBFrameReadBackBeforeTheDecodeTimeWhenTheStoredSeekLandsAfterTheKeyframe()
+      throws Exception {
+    var source = everyTwoSecondsUpTo(30, 30).landingAfterAnExactDecodeTime();
+
+    var readPosition =
+        engineReading(source)
+            .readPosition(
+                storing(decodeTimeOf(22), searching(seconds("23.5"), 24)), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(decodeTimeOf(22).minus(B_FRAME_READ_BACK));
+    // The seek's argument rounds the read-back's time up to whole microseconds.
+    assertThat(source.readChecks())
+        .containsExactly(
+            decodeTimeOf(22), Duration.ofSeconds(22), decodeTimeOf(22), seconds("21.786566"));
+  }
+
+  // From the recovery point at 22 s the decoder shows its first picture 1.75 s later, at 23.75 s,
+  // after the search time. From the keyframe at 20 s it would show it at 21.75 s.
+  @Test
+  @DisplayName(
+      "Should read from the keyframe before when the decoder shows its first picture from the stored"
+          + " keyframe after the search time, as from a recovery point")
+  void shouldReadFromTheKeyframeBeforeWhenTheDecodersFirstPictureFromTheStoredKeyframeIsLate()
+      throws Exception {
+    var source =
+        everyTwoSecondsUpTo(30, 30).recoveringFrom(Duration.ofSeconds(22), seconds("1.75"));
+
+    var readPosition =
+        engineReading(source)
+            .readPosition(
+                storing(decodeTimeOf(22), searching(seconds("23.5"), 24)), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(decodeTimeOf(20));
+    assertThat(source.readChecks())
+        .containsExactly(
+            decodeTimeOf(22),
+            Duration.ofSeconds(22),
+            decodeTimeOf(22),
+            Duration.ofSeconds(20),
+            decodeTimeOf(20));
+  }
+
+  // From the recovery point at 22 s the decoder shows its first picture at 27 s, 5 s later, after
+  // the second past the search time, 24.5 s, at which each read of it stops.
+  @Test
+  @DisplayName(
+      "Should read from the keyframe before when the decoder shows no picture from the last keyframe"
+          + " by a second past the search time")
+  void shouldReadFromTheKeyframeBeforeWhenTheDecoderShowsNoPictureByASecondPastTheSearchTime()
+      throws Exception {
+    var source = everyTwoSecondsUpTo(30, 30).recoveringFrom(Duration.ofSeconds(22), seconds("5"));
+
+    var readPosition =
+        engineReading(source).readPosition(searching(seconds("23.5"), 24), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(decodeTimeOf(20));
+    // Each seek and length round up to whole microseconds.
+    assertThat(source.firstPictureReadEnds())
+        .isNotEmpty()
+        .allSatisfy(end -> assertThat(end).isBetween(seconds("24.5"), seconds("24.500002")));
+  }
+
+  // No keyframe's read shows a picture before the video ends at 30 s.
+  @Test
+  @DisplayName(
+      "Should read from the source's start after checking four keyframes when the decoder shows no"
+          + " picture from any of them")
+  void shouldReadFromTheSourcesStartAfterCheckingFourKeyframesWhenTheDecoderShowsNoPicture()
+      throws Exception {
+    var source = everyTwoSecondsUpTo(30, 30);
+    for (var keyframe : ScriptedKeyframeSource.keyframesEveryTwoSecondsUpTo(30)) {
+      source = source.recoveringFrom(keyframe, Duration.ofSeconds(60));
+    }
+
+    var readPosition =
+        engineReading(source).readPosition(searching(seconds("23.5"), 24), bytesRead::addAndGet);
+
+    assertThat(readPosition).contains(Duration.ZERO);
+    assertThat(source.readChecks())
+        .contains(decodeTimeOf(16))
+        .doesNotContain(Duration.ofSeconds(14), decodeTimeOf(14));
   }
 
   @Test
@@ -335,7 +486,8 @@ class KeyframeReadPositionTest {
         LastKeyframeSearch.Target.builder()
             .searchTime(Duration.ofSeconds(5))
             .firstSegmentStart(Duration.ofSeconds(6))
-            .firstInterval(Duration.ofSeconds(seconds));
+            .firstInterval(Duration.ofSeconds(seconds))
+            .storedSeekPosition(Optional.empty());
 
     assertThatIllegalArgumentException().isThrownBy(target::build);
   }
@@ -379,6 +531,11 @@ class KeyframeReadPositionTest {
         .readFromLastKeyframePresentingAtOrBefore(Optional.of(searchTime))
         .advertisedEnd(Optional.of(Duration.ofSeconds(360)))
         .build();
+  }
+
+  // The request with the server's stored seek position.
+  private static TranscodeRequest storing(Duration seekPosition, TranscodeRequest request) {
+    return request.toBuilder().seekPosition(Optional.of(seekPosition)).build();
   }
 
   private static TranscodeRequest holding(TranscodeRequest request) {
