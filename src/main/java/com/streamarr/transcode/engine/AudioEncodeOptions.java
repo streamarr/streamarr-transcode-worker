@@ -95,7 +95,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   }
 
   // A lossy encode dithers nothing, so the gap fill runs before every stage, each of which then
-  // meets one continuous run of samples.
+  // meets no gap longer than 2 ms.
   private static List<String> filledFirst(List<String> stages, Duration start) {
     var filters = new ArrayList<>(List.of(GapFillFilter.from(start)));
     filters.addAll(stages);

@@ -6128,12 +6128,20 @@ class WorkerMediaSmokeTest {
   private record SilentSamples(long silent, long absent, long notSilent) {}
 
   /**
+   * Of the counted source's samples whose own timestamps put them in a span: how many times one of
+   * them plays at the time its timestamps give it, how many times one plays at another time, and
+   * how many never play.
+   */
+  private record SourceTimes(long atTheirTime, long elsewhere, long absent) {}
+
+  /**
    * The delivered audio's decoded samples by the time each one plays at, in samples: each decoded
    * frame's samples follow its own presentation time, so a frame that is absent leaves its times
    * without a sample instead of moving the samples after it. It keeps the decoded samples in the
-   * order they play as well.
+   * order they play as well, each with the time it plays at.
    */
-  private record DeliveredAudio(int[] byTime, BitSet delivered, long deliveredTwice, int[] played) {
+  private record DeliveredAudio(
+      int[] byTime, BitSet delivered, long deliveredTwice, int[] played, int[] times) {
 
     static DeliveredAudio of(Path media) throws Exception {
       var decoded = media.resolveSibling(media.getFileName() + ".s32le");
@@ -6164,7 +6172,7 @@ class WorkerMediaSmokeTest {
         byTime[time] = played[index];
       }
 
-      return new DeliveredAudio(byTime, delivered, deliveredTwice, played);
+      return new DeliveredAudio(byTime, delivered, deliveredTwice, played, times);
     }
 
     // The delivered audio on a timeline whose zero is this time, where the source's audio starts.
@@ -6173,7 +6181,39 @@ class WorkerMediaSmokeTest {
           Arrays.copyOfRange(byTime, time, byTime.length),
           delivered.get(time, Math.max(time, delivered.length())),
           deliveredTwice,
-          played);
+          played,
+          Arrays.stream(times).map(at -> at - time).toArray());
+    }
+
+    // How the counted source's samples whose own timestamps put them from one time up to another
+    // play. Sample n holds n + 1 in the upper 24 bits, and its timestamps put it at sourceTime[n].
+    SourceTimes sourceTimes(int[] sourceTime, int from, int until) {
+      var plays = new int[sourceTime.length];
+      var atTheirTime = 0L;
+      for (var index = 0; index < played.length; index++) {
+        var sample = (played[index] >> 8) - 1;
+        if (sample < 0
+            || sample >= sourceTime.length
+            || !isWithin(sourceTime[sample], from, until)) {
+          continue;
+        }
+
+        plays[sample]++;
+        if (times[index] == sourceTime[sample]) {
+          atTheirTime++;
+        }
+      }
+
+      var playCount = IntStream.of(plays).asLongStream().sum();
+      var absent =
+          IntStream.range(0, sourceTime.length)
+              .filter(sample -> isWithin(sourceTime[sample], from, until) && plays[sample] == 0)
+              .count();
+      return new SourceTimes(atTheirTime, playCount - atTheirTime, absent);
+    }
+
+    private static boolean isWithin(int time, int from, int until) {
+      return time >= from && time < until;
     }
 
     // The time of the first delivered sample.
@@ -6518,18 +6558,15 @@ class WorkerMediaSmokeTest {
     assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
   }
 
-  // The fill butts each frame against the one before it unless the step between them exceeds 2 ms:
-  // a resampler that kept the times would drop the overlapping samples, and insert silence or drop
-  // samples where small steps add up. Matroska stores whole milliseconds, so each step also moves
-  // by up to 1 ms.
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(StampError.class)
+  // The fill butts a frame against the one before it when its timestamps overlap that frame by more
+  // than 2 ms: a resampler that kept the times would drop the overlapping samples. Matroska stores
+  // whole milliseconds, so the overlap also moves by up to 1 ms.
+  @Test
   @DisplayName(
       "Should deliver every source audio sample once at its own time when an attempt encodes audio"
-          + " whose timestamps overlap by 50 ms or drift by 0.02 %")
-  void shouldDeliverEverySampleOnceAtItsOwnTimeWhenTheAudiosTimestampsOverlapOrDrift(
-      StampError error) throws Exception {
-    var source = misstampedCountedSource(error);
+          + " whose timestamps overlap by 50 ms")
+  void shouldDeliverEverySampleOnceAtItsOwnTimeWhenTheAudiosTimestampsOverlap() throws Exception {
+    var source = misstampedCountedSource(StampError.OVERLAP_OF_50_MS);
     var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     paddedToSlots(job, GAPPED_SOURCE_SEGMENT_COUNT);
 
@@ -6543,18 +6580,121 @@ class WorkerMediaSmokeTest {
     assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
   }
 
+  // The fill passes a step of 2 ms or less through with the frame's own timestamp, as an encode
+  // without the fill does. Joining each step to the audio before it would play every later sample
+  // further from its timestamps, by 1 ms for each step.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = StampError.class,
+      names = {"FAST_BY_0_02_PERCENT", "SLOW_BY_0_02_PERCENT"})
+  @DisplayName(
+      "Should deliver every source audio sample once at the time its timestamps give it when an"
+          + " attempt encodes audio whose timestamps drift by 0.02 %")
+  void shouldDeliverEverySampleOnceAtTheTimeItsTimestampsGiveItWhenTheAudiosTimestampsDrift(
+      StampError error) throws Exception {
+    var source = misstampedCountedSource(error);
+    var sourceTime = countedSampleTimes(source);
+    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    paddedToSlots(job, GAPPED_SOURCE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    assertThat(sourceTime[COUNTED_AUDIO_SAMPLES - 1] - (COUNTED_AUDIO_SAMPLES - 1))
+        .as("how far the source's timestamps put its last sample from its place by count")
+        .isEqualTo(error.lastSampleOffset);
+    assertThat(delivered.sourceTimes(sourceTime, 0, GAPPED_SOURCE_END_SAMPLES))
+        .as("plays of the source's samples at the times their timestamps give them and elsewhere")
+        .isEqualTo(new SourceTimes(COUNTED_AUDIO_SAMPLES, 0, 0));
+  }
+
+  // A player that seeks into an attempt fetches the segment there and plays its audio by that
+  // segment's own timestamps, so audio that the attempt joined across the steps before the segment
+  // would stay that far from its timestamps. Segment 2 runs from 6 s to 9 s, after the first step
+  // at 2.5 s or 2.6 s. Its samples from 6.5 s to 8.5 s lie well inside it.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = StampError.class,
+      names = {"FAST_BY_0_02_PERCENT", "SLOW_BY_0_02_PERCENT"})
+  @DisplayName(
+      "Should play each source audio sample at the time its timestamps give it when a seek fetches"
+          + " a later segment of an attempt whose audio's timestamps drift by 0.02 %")
+  void shouldPlayEachSampleAtTheTimeItsTimestampsGiveItWhenASeekFetchesALaterSegment(
+      StampError error) throws Exception {
+    var source = misstampedCountedSource(error);
+    var sourceTime = countedSampleTimes(source);
+    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    paddedToSlots(job, GAPPED_SOURCE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var seeked =
+        DeliveredAudio.of(playable(uploads.contentOf(List.of("init.mp4", segmentName(2)))));
+    var inside = SampleRange.ofMillis(6_500, 8_500);
+    var expected =
+        IntStream.of(sourceTime)
+            .filter(time -> time >= inside.from() && time < inside.until())
+            .count();
+    assertThat(seeked.sourceTimes(sourceTime, inside.from(), inside.until()))
+        .as(
+            "plays from segment 2 alone of the source's samples that its timestamps put from 6.5 s"
+                + " to 8.5 s")
+        .isEqualTo(new SourceTimes(expected, 0, 0));
+  }
+
   // How the misstamped sources' FLAC frames of 4,800 samples carry their timestamps, as an
   // expression of each one in samples at 48 kHz: from 4.1 s on 50 ms early, or 0.02 % fast or slow.
+  // Matroska rounds them to whole milliseconds, so the fast timestamps step 1 ms forward at 2.5 s
+  // and 7.5 s, and the slow ones 1 ms back at 2.6 s and 7.6 s. FFmpeg keeps a forward step whole
+  // when it decodes them, but moves the first backward step by 24 samples, half of it. Each names
+  // how far the decoded timestamps put the last sample from its place by count, in samples.
   private enum StampError {
-    OVERLAP_OF_50_MS("if(gte(TS,196800),TS-2400,TS)"),
-    FAST_BY_0_02_PERCENT("round(TS*1.0002)"),
-    SLOW_BY_0_02_PERCENT("round(TS*0.9998)");
+    OVERLAP_OF_50_MS("if(gte(TS,196800),TS-2400,TS)", -2_400),
+    FAST_BY_0_02_PERCENT("round(TS*1.0002)", 96),
+    SLOW_BY_0_02_PERCENT("round(TS*0.9998)", -72);
 
     private final String timestamp;
+    private final int lastSampleOffset;
 
-    StampError(String timestamp) {
+    StampError(String timestamp, int lastSampleOffset) {
       this.timestamp = timestamp;
+      this.lastSampleOffset = lastSampleOffset;
     }
+  }
+
+  // The time at which a counted source's own timestamps put each of its samples, in samples at
+  // 48 kHz, as FFmpeg decodes them: the timestamp FFmpeg gives the decoded frame that holds the
+  // sample, plus the samples before it in that frame. An encode that keeps the timestamps plays
+  // each sample there.
+  private static int[] countedSampleTimes(Path source) throws Exception {
+    var frames = seekableSources.resolve(source.getFileName() + ".framecrc");
+    runFfmpeg(
+        List.of(
+            "-copyts",
+            "-i",
+            source.toString(),
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "pcm_s32le",
+            "-f",
+            "framecrc"),
+        frames);
+    var lines = Files.readAllLines(frames);
+    assertThat(lines).as("the decoded audio's time base").contains("#tb 0: 1/48000");
+    var times = new int[COUNTED_AUDIO_SAMPLES];
+    var sample = 0;
+    for (var line : lines.stream().filter(line -> !line.startsWith("#")).toList()) {
+      var fields = line.split(",");
+      var pts = Integer.parseInt(fields[2].strip());
+      var count = Integer.parseInt(fields[4].strip()) / Integer.BYTES;
+      for (var offset = 0; offset < count; offset++) {
+        times[sample++] = pts + offset;
+      }
+    }
+
+    assertThat(sample).as("the source's decoded samples").isEqualTo(COUNTED_AUDIO_SAMPLES);
+    return times;
   }
 
   // The copy of the gapped source that encodes its audio to FLAC in the mono layout and pads it to
