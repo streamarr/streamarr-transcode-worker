@@ -2,7 +2,7 @@
 
 Release Please manages the Maven version, generated changelog, release tag, and draft GitHub releases using the `streamarr-release` GitHub App. Stable release PRs require human review and merge; a maintainer then curates and publishes the draft release separately. Only generated snapshot-version PRs are queued for automatic squash merge after required checks pass. Release maintenance, tag validation, and multi-architecture publication use the pinned workflows in `streamarr/streamarr-workflows`.
 
-The release automation is recorded in [ADR 0034](https://github.com/streamarr/streamarr-adr/blob/main/adr/0034-release-please-owns-maven-release-versions.adoc); [ADR 0058](https://github.com/streamarr/streamarr-adr/blob/main/adr/0058-releases-stay-draft-until-their-notes-are-curated.adoc) adds the draft-publication gate for Streamarr repositories using Release Please.
+The release automation is recorded in [ADR 0034](https://github.com/streamarr/streamarr-adr/blob/main/adr/0034-release-please-owns-maven-release-versions.adoc); [ADR 0059](https://github.com/streamarr/streamarr-adr/blob/main/adr/0059-releases-stay-draft-until-their-notes-are-curated.adoc) adds the draft-publication gate for Streamarr repositories using Release Please.
 
 The first release is `0.1.0`. Its changelog starts after the worker baseline at `a1ef061ef706bb5b5c59cb95417145d66636b8a7`, excluding imported server history. The manifest starts empty because the worker has no previous release. Keep release PR titles, bodies, and labels intact so Release Please can recognize merged releases.
 
