@@ -575,39 +575,61 @@ class KeyframeReadPositionTest {
     assertThat(readPosition).contains(decodeTimeOf(18));
   }
 
-  // The last copied video packet ends at 1,980,000 ticks of 1/90000, exactly 22 s. The server's
-  // video end lies half a microsecond later, as it can when the server subtracts the container's
-  // start time as ffprobe prints it, in whole microseconds, and FFmpeg subtracts it in ticks.
-  @Test
+  // The last copied video packet ends at exactly 22 s on the check's timeline. The server's video
+  // end subtracts the container's start time in whole microseconds, and FFmpeg's -start_at_zero
+  // subtracts it rounded to the nearest tick of the video's time base, so the server's end lies up
+  // to half a tick later.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("videoEndsUpToHalfATickPastTheLastCopiedPacket")
   @Timeout(10)
   @DisplayName(
-      "Should stop the first picture check when a copied video packet ends less than a microsecond"
-          + " before the video's end")
-  void shouldStopTheFirstPictureCheckWhenAPacketEndsLessThanAMicrosecondBeforeTheVideosEnd()
-      throws Exception {
+      "Should stop the first picture check when the copied video packet that ends the video ends up"
+          + " to half a tick before the video's end")
+  void shouldStopTheCheckWhenThePacketThatEndsTheVideoEndsUpToHalfATickBeforeTheVideosEnd(
+      String startTimeCase, String copies, Duration videoEnd) throws Exception {
     var check =
         ScriptedProcess.builder()
             .output(new byte[0])
-            .stderr(
-                """
-                #tb 0: 1/90000
-                #tb 1: 1/90000
-                0, 1964250, 1972500, 3750, 1000, 0x0a1b2c3d, F=0x0
-                1, 1962000, 1962000, 1920, 300, 0x0a1b2c3d
-                0, 1968000, 1976250, 3750, 1000, 0x0a1b2c3d, F=0x0
-                1, 54000000, 54000000, 1920, 300, 0x0a1b2c3d
-                """)
+            .stderr(copies)
             .exitTiming(ScriptedProcess.ExitTiming.AT_QUIT)
             .build();
 
     engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(20, 22)))
         .readPosition(
             endingVideoAt(
-                Duration.ofSeconds(22).plusNanos(500),
-                storing(STORED_POSITION, holding(searching(seconds("23.5"), 24)))),
+                videoEnd, storing(STORED_POSITION, holding(searching(seconds("23.5"), 24)))),
             bytesRead::addAndGet);
 
     assertThat(check.stdinText()).as("the q that ends the check").isEqualTo("q");
+  }
+
+  // The 1/12288 case is the pinned FFmpeg's, on an MP4 whose AAC starts 2 ms into the file.
+  static Stream<Arguments> videoEndsUpToHalfATickPastTheLastCopiedPacket() {
+    return Stream.of(
+        Arguments.of(
+            "ticks of 1/12288: a start at 2 ms is 24.576 ticks, which FFmpeg rounds to 25, so the"
+                + " end lies 34.505 µs later",
+            """
+            #tb 0: 1/12288
+            #tb 1: 1/48000
+            0, 268288, 268800, 512, 1000, 0x0a1b2c3d, F=0x0
+            1, 1046400, 1046400, 1024, 300, 0x0a1b2c3d
+            0, 268800, 269824, 512, 1000, 0x0a1b2c3d, F=0x0
+            1, 28800000, 28800000, 1024, 300, 0x0a1b2c3d
+            """,
+            Duration.ofSeconds(22).plusNanos(34_505)),
+        Arguments.of(
+            "ticks of 1/90000: a start at 50 µs is 4.5 ticks, which FFmpeg rounds to 5, so the end"
+                + " lies half a tick, 5,555.6 ns, later, which the server rounds to 5,556 ns",
+            """
+            #tb 0: 1/90000
+            #tb 1: 1/90000
+            0, 1964250, 1972500, 3750, 1000, 0x0a1b2c3d, F=0x0
+            1, 1962000, 1962000, 1920, 300, 0x0a1b2c3d
+            0, 1968000, 1976250, 3750, 1000, 0x0a1b2c3d, F=0x0
+            1, 54000000, 54000000, 1920, 300, 0x0a1b2c3d
+            """,
+            Duration.ofSeconds(22).plusNanos(5_556)));
   }
 
   // Neither copied video packet decodes at 24.5 s, a second past the search time, and the video's
@@ -643,7 +665,7 @@ class KeyframeReadPositionTest {
     return Stream.of(
         Arguments.of("the video's end is unknown", Optional.empty()),
         Arguments.of(
-            "every copied video packet ends at least 1 ms before the video's end",
+            "every copied video packet ends at least a whole tick, 1 ms, before the video's end",
             Optional.of(Duration.ofMillis(22_001))));
   }
 
