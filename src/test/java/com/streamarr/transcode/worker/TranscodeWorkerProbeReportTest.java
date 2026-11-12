@@ -164,7 +164,8 @@ class TranscodeWorkerProbeReportTest {
       assertThat(connection.reports())
           .extracting(report -> report.getResult().getProbeAttemptId())
           .containsExactly(ended.getProbeAttemptId(), next.getProbeAttemptId());
-      assertThat(connection.reports()).allSatisfy(report -> report.getResult().hasMedia());
+      assertThat(connection.reports())
+          .allSatisfy(report -> assertThat(report.getResult().hasMedia()).isTrue());
       assertThat(connection.reportCalls()).hasSize(2);
     }
   }

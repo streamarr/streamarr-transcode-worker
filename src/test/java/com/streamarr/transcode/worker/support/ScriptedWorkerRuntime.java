@@ -635,7 +635,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         while (unfinished > most.getAsInt()) {
           wait();
         }
-      } catch (InterruptedException interruption) {
+      } catch (InterruptedException _) {
         Thread.currentThread().interrupt();
         throw new AssertionError("Interrupted while a probe report was still being sent");
       }

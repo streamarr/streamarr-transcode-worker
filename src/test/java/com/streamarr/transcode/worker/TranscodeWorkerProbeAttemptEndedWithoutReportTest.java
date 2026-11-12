@@ -325,24 +325,24 @@ class TranscodeWorkerProbeAttemptEndedWithoutReportTest {
   }
 
   private enum EndWithoutAnswer {
-    IS_REFUSED_WITH_A_STATUS(bounds -> bounds, Connection::refuseNextReport, _ -> {}),
+    IS_REFUSED_WITH_A_STATUS(configuration -> configuration, Connection::refuseNextReport, _ -> {}),
     LOSES_ITS_TRANSPORT(
-        bounds -> bounds,
+        configuration -> configuration,
         Connection::withholdReportAnswers,
         call -> {
           call.awaitSentWhole();
           call.failTransport();
         }),
     IS_NOT_READY_WITHIN_THE_UPLOAD_READINESS_TIMEOUT(
-        bounds -> bounds.uploadReadinessTimeout(Duration.ofMillis(200)),
+        configuration -> configuration.uploadReadinessTimeout(Duration.ofMillis(200)),
         Connection::withholdReportReadiness,
         _ -> {}),
     IS_NOT_ANSWERED_WITHIN_THE_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT(
-        bounds -> bounds.uploadAcknowledgementTimeout(Duration.ofMillis(200)),
+        configuration -> configuration.uploadAcknowledgementTimeout(Duration.ofMillis(200)),
         Connection::withholdReportAnswers,
         _ -> {}),
     IS_ANSWERED_WITH_ANOTHER_LENGTH(
-        bounds -> bounds,
+        configuration -> configuration,
         Connection::withholdReportAnswers,
         call -> {
           call.awaitSentWhole();
