@@ -142,9 +142,10 @@ public class FfmpegCommandBuilder {
   // A keyframe scan's options before its seek: its times lie on the attempt's zero-based timeline.
   private static final List<String> KEYFRAME_SCAN_OPTIONS =
       List.of("-nostdin", "-v", "quiet", "-copyts", "-start_at_zero");
-  // A first picture check reads q on its standard input. FFmpeg acts on it when its main thread
-  // wakes to report progress, by default every 0.5 s, in which it can read on far past the check's
-  // end on fast storage; waking every 10 ms keeps the stopped read close to that end.
+  // A first picture check reads q on its standard input. FFmpeg reads that input when its main
+  // thread wakes to report progress, by default every 0.5 s, and at most once every 100 ms. Waking
+  // every 10 ms makes FFmpeg act on q within about 100 ms, in which it still reads on past the
+  // check's end on fast storage.
   private static final List<String> FIRST_PICTURE_CHECK_OPTIONS =
       List.of("-stats_period", "0.01", "-v", "quiet", "-copyts", "-start_at_zero");
   private static final List<String> SOURCE_COPY_OUTPUT =
