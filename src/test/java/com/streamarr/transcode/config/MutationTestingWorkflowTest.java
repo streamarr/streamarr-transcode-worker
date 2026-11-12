@@ -60,6 +60,7 @@ class MutationTestingWorkflowTest {
     assertThat(map(job(REPORT_JOB).get("permissions")))
         .containsOnly(entry("contents", "read"), entry("actions", "read"));
     assertThat(Stream.concat(steps(job(SHARD_JOB)).stream(), steps(job(REPORT_JOB)).stream()))
+        .isNotEmpty()
         .allSatisfy(
             step -> {
               if (step.get("uses") instanceof String action) {
@@ -75,8 +76,8 @@ class MutationTestingWorkflowTest {
     var shards = map(yaml(WORKFLOW).get("env")).get("SHARDS");
     var strategy = map(job(SHARD_JOB).get("strategy"));
 
-    assertThat(map(strategy.get("matrix")).get("shard"))
-        .isEqualTo(IntStream.range(0, (Integer) shards).boxed().toList());
+    assertThat(map(strategy.get("matrix")))
+        .containsEntry("shard", IntStream.range(0, (Integer) shards).boxed().toList());
     assertThat(stepNamed(steps(job(SHARD_JOB)), PIT_STEP).get("run").toString())
         .contains("-P" + PROFILE, "\"-DtargetClasses=$classes\"", "mutationCoverage");
   }
