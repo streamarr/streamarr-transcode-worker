@@ -237,6 +237,17 @@ class WorkerMediaSmokeTest {
         return left.compareTo(right);
       };
 
+  // Two encodes of one picture differ in mean luma by a level or two; the bright copy of a time
+  // that the timestamps-starting-again sources repeat lies about 90 levels above the first.
+  private static final Comparator<Integer> WITHIN_EIGHT_LUMA_LEVELS =
+      (left, right) -> {
+        if (Math.abs(left - right) <= 8) {
+          return 0;
+        }
+
+        return Integer.compare(left, right);
+      };
+
   private static final String DOLBY_VISION_FIXTURE = "dolby-vision-8.2-dvh1.mp4";
   // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
   private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
@@ -7316,6 +7327,118 @@ class WorkerMediaSmokeTest {
                     source.getParent(),
                     sparseKeyframeJob(source, 0).build()),
                 startSequenceNumber));
+  }
+
+  // The source's timestamps start again after its first 10 s, and the 10 s after them carry most of
+  // its bytes. FFmpeg's MPEG-TS seek interpolates a byte position from the target time, so a seek
+  // to the keyframe at 2 s lands in the later 10 s, whose pictures carry the same times. The
+  // attempt from the source's start shows the first 10 s in segment 1 on a 3 s grid. The search
+  // for segment 1 starts one period, 3 s, before its search time of 2.5 s, at the source's start.
+  @Test
+  @DisplayName(
+      "Should deliver segment 1 with the pictures of the attempt from the source's start when the"
+          + " search's first interval reaches the start of a source whose timestamps start again")
+  void shouldDeliverSegment1WithThePicturesFromTheStartWhenTheSourcesTimestampsStartAgain()
+      throws Exception {
+    var source = timestampsStartingAgainSource();
+    var fromSegment1 = timestampsStartingAgainJob(source, 1);
+    fromSegment1
+        .getExecutionBuilder()
+        .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
+        .setSeconds(2)
+        .setNanos(500_000_000);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), fromSegment1.build());
+
+    assertThat(meanLumaOfEachPicture(uploads, 1))
+        .as("segment 1's pictures, each as its mean luma")
+        .isNotEmpty()
+        .usingElementComparator(WITHIN_EIGHT_LUMA_LEVELS)
+        .isEqualTo(
+            meanLumaOfEachPicture(
+                execute(
+                    engine(softwareCapabilities()),
+                    source.getParent(),
+                    timestampsStartingAgainJob(source, 0).build()),
+                1));
+  }
+
+  private static VariantJob.Builder timestampsStartingAgainJob(Path source, int number) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(3)
+        .setStartSequenceNumber(number)
+        .setSeekPositionSeconds(number * 3);
+    return job;
+  }
+
+  private List<Integer> meanLumaOfEachPicture(MediaUploads uploads, int number) throws Exception {
+    var media = playable(uploads.contentOf(List.of("init.mp4", segmentName(number))));
+    var lumas = Files.createTempFile(root, "lumas", ".gray");
+    runFfmpeg(
+        List.of(
+            "-i", media.toString(), "-vf", "scale=1:1:flags=area,format=gray", "-f", "rawvideo"),
+        lumas);
+    var bytes = Files.readAllBytes(lumas);
+    var result = new ArrayList<Integer>();
+    for (var luma : bytes) {
+      result.add(Byte.toUnsignedInt(luma));
+    }
+
+    return result;
+  }
+
+  // 10 s of H.264 at 64x36 and 24 fps with keyframes 2 s apart, beside AAC, in MPEG-TS, followed by
+  // 10 s whose times start again: the same pattern at a bright luma under noise, encoded
+  // losslessly.
+  private static synchronized Path timestampsStartingAgainSource() throws Exception {
+    var source = seekableSources.resolve("timestamps-starting-again.ts");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var first = seekableSources.resolve("timestamps-first.ts");
+    var again = seekableSources.resolve("timestamps-again.ts");
+    for (var part : List.of(first, again)) {
+      var arguments =
+          new ArrayList<>(
+              List.of(
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "testsrc=size=64x36:rate=24",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+                  "-t",
+                  "10"));
+      if (part.equals(again)) {
+        arguments.addAll(List.of("-vf", "lutyuv=y=235,noise=alls=20:allf=t+u", "-qp", "0"));
+      }
+
+      arguments.addAll(
+          List.of(
+              "-c:v",
+              "libx264",
+              "-bf",
+              "3",
+              "-x264-params",
+              "keyint=48:min-keyint=48:scenecut=0",
+              "-c:a",
+              "aac",
+              "-f",
+              "mpegts"));
+      runFfmpeg(arguments, part);
+    }
+
+    var bytes = new ByteArrayOutputStream();
+    bytes.write(Files.readAllBytes(first));
+    bytes.write(Files.readAllBytes(again));
+    Files.write(source, bytes.toByteArray());
+    generatedSeekableSources.add(source);
+    return source;
   }
 
   // A capture that starts inside a GOP holds no parameter set before its first keyframe, 8 s in,
