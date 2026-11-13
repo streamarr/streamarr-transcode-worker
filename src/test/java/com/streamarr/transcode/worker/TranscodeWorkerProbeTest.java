@@ -68,6 +68,10 @@ class TranscodeWorkerProbeTest {
   // A length limit as the server states one when it accepts the worker session.
   private static final int REPORT_LENGTH_LIMIT_BYTES = 131_072;
 
+  // The server's default limits on a probe report's length and on its result's length (ADR 0062).
+  private static final long DEFAULT_REPORT_LENGTH_LIMIT_BYTES = 16L << 20;
+  private static final int RESULT_LENGTH_LIMIT_BYTES = 131_072;
+
   // A source whose container has no index, such as MPEG-TS, needs a packet scan for its keyframes.
   private static final ProbeKeyframes PACKET_SCAN_REQUIRED_WITHOUT_INDEX =
       ProbeKeyframes.newBuilder()
@@ -401,10 +405,63 @@ class TranscodeWorkerProbeTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(ints = {-1, 0})
+  @DisplayName(
+      "Should send the probe report when its encoded result fits within the result length limit"
+          + " that the server stated")
+  void shouldSendTheProbeReportWhenItsEncodedResultFitsWithinTheStatedResultLengthLimit(
+      int bytesFromLimit) throws Exception {
+    var runtime = acceptingResultsWithinTheResultLengthLimit();
+    var request = requestBuilder().build();
+    var language = languageFillingResult(request, RESULT_LENGTH_LIMIT_BYTES + bytesFromLimit);
+
+    assertThat(probeResults(runtime, request, ffprobeOutput(1, language)))
+        .containsExactly(resultWithOneVideoStream(request, language).build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the probe as too large when its encoded result is one byte longer than the"
+          + " result length limit that the server stated")
+  void shouldReportTheProbeAsTooLargeWhenItsResultIsOneByteLongerThanTheStatedResultLengthLimit()
+      throws Exception {
+    var runtime = acceptingResultsWithinTheResultLengthLimit();
+    var request = requestBuilder().build();
+    var language = languageFillingResult(request, RESULT_LENGTH_LIMIT_BYTES + 1);
+
+    assertThat(probeResults(runtime, request, ffprobeOutput(1, language)))
+        .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should send the probe report whatever its result's length when the server stated no result"
+          + " length limit")
+  void shouldSendTheProbeReportWhateverItsResultsLengthWhenTheServerStatedNoResultLengthLimit()
+      throws Exception {
+    var runtime =
+        ScriptedWorkerRuntime.accepting(
+            WorkerSessionAccepted.newBuilder()
+                .setProbeReportLengthLimitBytes(DEFAULT_REPORT_LENGTH_LIMIT_BYTES));
+    var request = requestBuilder().build();
+    var language = languageFillingResult(request, RESULT_LENGTH_LIMIT_BYTES + 1);
+
+    assertThat(probeResults(runtime, request, ffprobeOutput(1, language)))
+        .containsExactly(resultWithOneVideoStream(request, language).build());
+  }
+
   private static ScriptedWorkerRuntime acceptingReportsWithinTheLengthLimit() {
     return ScriptedWorkerRuntime.accepting(
         WorkerSessionAccepted.newBuilder()
             .setProbeReportLengthLimitBytes(REPORT_LENGTH_LIMIT_BYTES));
+  }
+
+  private static ScriptedWorkerRuntime acceptingResultsWithinTheResultLengthLimit() {
+    return ScriptedWorkerRuntime.accepting(
+        WorkerSessionAccepted.newBuilder()
+            .setProbeReportLengthLimitBytes(DEFAULT_REPORT_LENGTH_LIMIT_BYTES)
+            .setProbeResultLengthLimitBytes(RESULT_LENGTH_LIMIT_BYTES));
   }
 
   // The results that a worker sends when the runtime's server stated its limits.
@@ -472,6 +529,12 @@ class TranscodeWorkerProbeTest {
         language ->
             ProbeReports.resultOnly(resultWithOneVideoStream(request, language).build())
                 .getSerializedSize());
+  }
+
+  // The language tag that makes the encoded result take exactly the given number of bytes.
+  private static String languageFillingResult(ProbeRequest request, int bytes) {
+    return languageFilling(
+        bytes, language -> resultWithOneVideoStream(request, language).build().getSerializedSize());
   }
 
   // The language tag that makes an encoding that holds it take exactly the given number of bytes.

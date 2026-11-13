@@ -53,11 +53,13 @@ record ProbeReportLimits(
    * holds neither keyframe positions nor a measurement. Beyond the interval limit a probe's or a
    * keyframe packet scan's report leaves the measurement out, and a bitrate scan chunk fails with
    * {@code PROBE_FAILURE_RESULT_TOO_LARGE}. A report that is then still longer than the length
-   * limit gives way to one that holds only that failure.
+   * limit, or whose result is then longer than the result length limit, gives way to one that holds
+   * only that failure.
    */
   ProbeAttemptReport apply(ProbeRequest request, ProbeAttemptReport report) {
     var withinEntryLimits = withinIntervalLimit(request, withinKeyframeLimit(request, report));
-    if (longerThanTheLengthLimit(request, withinEntryLimits)) {
+    if (longerThanTheLengthLimit(request, withinEntryLimits)
+        || resultLongerThanTheResultLengthLimit(request, withinEntryLimits)) {
       return ProbeReports.failed(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
     }
 
@@ -75,6 +77,22 @@ record ProbeReportLimits(
         fromProto(request.getProbeAttemptId()),
         length,
         Long.toUnsignedString(reportLengthBytes));
+    return true;
+  }
+
+  private boolean resultLongerThanTheResultLengthLimit(
+      ProbeRequest request, ProbeAttemptReport report) {
+    var length = report.getResult().getSerializedSize();
+    if (!exceeds(length, resultLengthBytes)) {
+      return false;
+    }
+
+    log.warn(
+        "The result of probe attempt {} takes {} bytes, more than the {} bytes the server accepts"
+            + " in a probe report",
+        fromProto(request.getProbeAttemptId()),
+        length,
+        Long.toUnsignedString(resultLengthBytes));
     return true;
   }
 

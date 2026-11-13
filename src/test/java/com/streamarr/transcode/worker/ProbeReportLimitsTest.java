@@ -206,7 +206,7 @@ class ProbeReportLimitsTest {
   }
 
   // Each kind of probe attempt, with a report that stays within the keyframe limit and the
-  // interval limit (ADR 0062 fails each kind beyond the length limit).
+  // interval limit (ADR 0062 fails each kind beyond the length limit or the result length limit).
   private enum Kind {
     A_PROBE(PROBE),
     A_KEYFRAME_PACKET_SCAN(KEYFRAME_PACKET_SCAN),
@@ -245,6 +245,58 @@ class ProbeReportLimitsTest {
             .build();
 
     assertThat(report.getSerializedSize()).isGreaterThan(withoutMeasurement.getSerializedSize());
+    assertThat(limits.apply(PROBE, report)).isEqualTo(withoutMeasurement);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(Kind.class)
+  @DisplayName(
+      "Should send the report, whatever the kind of its probe attempt, when its encoded result is"
+          + " exactly as long as the result length limit")
+  void shouldSendTheReportWhenItsEncodedResultIsExactlyAsLongAsTheResultLengthLimit(Kind kind) {
+    var report = kind.report();
+    var limits =
+        ProbeReportLimits.builder()
+            .resultLengthBytes(report.getResult().getSerializedSize())
+            .build();
+
+    assertThat(limits.apply(kind.request, report)).isSameAs(report);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(Kind.class)
+  @DisplayName(
+      "Should fail the probe attempt as too large, whatever its kind, when its encoded result is"
+          + " one byte longer than the result length limit")
+  void shouldFailTheProbeAsTooLargeWhenItsEncodedResultIsOneByteLongerThanTheResultLengthLimit(
+      Kind kind) {
+    var report = kind.report();
+    var limits =
+        ProbeReportLimits.builder()
+            .resultLengthBytes(report.getResult().getSerializedSize() - 1L)
+            .build();
+
+    assertThat(limits.apply(kind.request, report))
+        .isEqualTo(
+            ProbeReports.resultOnly(
+                failure(kind.request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should check the length of the result that the keyframe limit and the interval limit leave"
+          + " when the probe's own result is longer than the result length limit")
+  void shouldCheckTheLengthOfTheResultThatTheOtherLimitsLeaveWhenTheProbesOwnResultIsTooLong() {
+    var report = reportOf(PROBE, 3, List.of(3, 3));
+    var withoutMeasurement = reportOf(PROBE, 3, List.of());
+    var limits =
+        ProbeReportLimits.builder()
+            .measuredKeyframeIntervals(5)
+            .resultLengthBytes(withoutMeasurement.getResult().getSerializedSize())
+            .build();
+
+    assertThat(report.getResult().getSerializedSize())
+        .isGreaterThan(withoutMeasurement.getResult().getSerializedSize());
     assertThat(limits.apply(PROBE, report)).isEqualTo(withoutMeasurement);
   }
 
