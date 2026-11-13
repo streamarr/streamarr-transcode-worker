@@ -169,19 +169,14 @@ final class WorkerVariantJobMapper {
     }
   }
 
-  // The worker reads the advertised end only from a job that holds the last frame or pads audio.
+  // The worker reads the advertised end from every job that carries it, a copy's included, because
+  // it closes the last listed segment's interval. A job that holds the last frame or pads its audio
+  // must carry it.
   private static Optional<Duration> advertisedEnd(VariantJob job) {
-    var decision = job.getDecision();
-    var holds = decision.getVideo().getHoldLastFrameToAdvertisedEnd();
-    var pads = decision.getAudio().getPadWithSilenceToAdvertisedEnd();
-    if (!holds && !pads) {
-      return Optional.empty();
-    }
-
     var execution = job.getExecution();
     if (!execution.hasAdvertisedEnd()) {
-      throw new InvalidJobSpecificationException(
-          "A job that holds the last frame or pads its audio requires the advertised end");
+      requireNoEarlyEndInstruction(job);
+      return Optional.empty();
     }
 
     var end = execution.getAdvertisedEnd();
@@ -193,6 +188,17 @@ final class WorkerVariantJobMapper {
 
     requireAfterTheLastListedStart(advertisedEnd, execution);
     return Optional.of(advertisedEnd);
+  }
+
+  private static void requireNoEarlyEndInstruction(VariantJob job) {
+    var decision = job.getDecision();
+    if (!decision.getVideo().getHoldLastFrameToAdvertisedEnd()
+        && !decision.getAudio().getPadWithSilenceToAdvertisedEnd()) {
+      return;
+    }
+
+    throw new InvalidJobSpecificationException(
+        "A job that holds the last frame or pads its audio requires the advertised end");
   }
 
   // The last listed segment's audio ends at the advertised end, which must follow its start. The

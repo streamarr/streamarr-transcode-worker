@@ -1989,7 +1989,10 @@ class TranscodeWorkerJobAttemptTest {
     heldEncode
         .getExecutionBuilder()
         .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001));
-    return Stream.of(Arguments.of("a held encode", heldEncode));
+    // A copy holds no frame and pads no audio, and its job still carries the advertised end.
+    var copy = copyJobBuilderFor(recording(AUDIO_TAIL_RECORDING));
+    return Stream.of(
+        Arguments.of("a held encode", heldEncode), Arguments.of("a copy of video and audio", copy));
   }
 
   @Test
