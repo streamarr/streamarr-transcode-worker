@@ -6,7 +6,6 @@ import com.streamarr.transcode.engine.MonotonicClock;
 import io.grpc.protobuf.StatusProto;
 import java.time.Duration;
 import java.util.Comparator;
-import java.util.OptionalLong;
 import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.concurrent.CancellationException;
@@ -84,7 +83,7 @@ final class SegmentUploadLimit {
     private boolean holdsCall;
     private long reopenTime = clock.nanoTime();
     private long reopenDelayNanos = FIRST_REOPEN_DELAY_NANOS;
-    private OptionalLong refusalDeadline = OptionalLong.empty();
+    private long deadline;
     private long arrival;
 
     private Turn() {}
@@ -95,7 +94,8 @@ final class SegmentUploadLimit {
     }
 
     /**
-     * Waits until the segment may open its call, and counts that call as open.
+     * Waits until the segment may open its call, and counts that call as open. The timeout, counted
+     * from this first wait, also bounds the segment's waits after refusals.
      *
      * @throws TimeoutException when no call ended within the timeout
      * @throws CancellationException when the turn was cancelled first
@@ -107,8 +107,9 @@ final class SegmentUploadLimit {
         }
 
         arrival = arrivals++;
+        deadline = clock.nanoTime() + timeout.toNanos();
         queue.add(this);
-        awaitCallInQueue(clock.nanoTime() + timeout.toNanos());
+        awaitCallInQueue();
         return this;
       }
     }
@@ -119,14 +120,14 @@ final class SegmentUploadLimit {
      * that the worker cancelled only once it has stored that call's segment, so it can still hold a
      * call that the worker no longer counts. The segment therefore opens its call again after a
      * delay, which doubles with each refusal up to 1 s, and keeps the segments behind it waiting.
-     * Its waits after refusals end within one timeout of its first refusal.
+     * Its waits after refusals end within the timeout of its first wait, so refusals never extend
+     * it.
      *
      * @return false, having waited for nothing, when there is no limit to wait for
-     * @throws TimeoutException when the segment opened no call within the timeout
+     * @throws TimeoutException when the segment opened no call within the timeout of its first wait
      * @throws CancellationException when the turn was cancelled first
      */
-    boolean tryAwaitAgainInItsPlace(Duration timeout)
-        throws InterruptedException, TimeoutException {
+    boolean tryAwaitAgainInItsPlace() throws InterruptedException, TimeoutException {
       synchronized (SegmentUploadLimit.this) {
         if (limit == 0) {
           return false;
@@ -134,25 +135,20 @@ final class SegmentUploadLimit {
 
         holdsCall = false;
         openCalls--;
-        var now = clock.nanoTime();
-        if (refusalDeadline.isEmpty()) {
-          refusalDeadline = OptionalLong.of(now + timeout.toNanos());
-        }
-
-        reopenTime = now + reopenDelayNanos;
+        reopenTime = clock.nanoTime() + reopenDelayNanos;
         reopenDelayNanos = Math.min(2 * reopenDelayNanos, LONGEST_REOPEN_DELAY_NANOS);
         queue.add(this);
         SegmentUploadLimit.this.notifyAll();
-        awaitCallInQueue(refusalDeadline.getAsLong());
+        awaitCallInQueue();
         return true;
       }
     }
 
     // With this turn in the queue.
-    private void awaitCallInQueue(long deadline) throws InterruptedException, TimeoutException {
+    private void awaitCallInQueue() throws InterruptedException, TimeoutException {
       synchronized (SegmentUploadLimit.this) {
         try {
-          awaitAdmission(deadline);
+          awaitAdmission();
         } finally {
           queue.remove(this);
           SegmentUploadLimit.this.notifyAll();
@@ -170,7 +166,7 @@ final class SegmentUploadLimit {
 
     // Holds the limit's monitor. A turn that a call's end admits only after its deadline still
     // times out.
-    private void awaitAdmission(long deadline) throws InterruptedException, TimeoutException {
+    private void awaitAdmission() throws InterruptedException, TimeoutException {
       var now = clock.nanoTime();
       while (!cancelled && deadline - now > 0 && !admits(this, now)) {
         TimeUnit.NANOSECONDS.timedWait(

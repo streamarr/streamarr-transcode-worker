@@ -536,7 +536,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
   @Test
   @DisplayName(
       "Should fail the attempt as a transcode failure when the server refuses the segment at the"
-          + " worker's segment upload limit for an upload deadline from its first refusal")
+          + " worker's segment upload limit for an upload deadline from its first wait")
   void shouldFailTheAttemptWhenServerRefusesTheSegmentAtTheLimitForTheUploadDeadline()
       throws Exception {
     var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
@@ -554,6 +554,51 @@ class TranscodeWorkerSegmentUploadLimitTest {
       assertThat(failureOf(connection, job))
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertThat(worker.queuedSegmentUploads()).isZero();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure when the server keeps refusing a queued"
+          + " segment past the upload deadline counted from the segment's first wait")
+  void shouldFailTheAttemptWhenTheServerKeepsRefusingAQueuedSegmentPastItsFirstWaitsDeadline()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(1);
+    var holding = variantJobBuilder().build();
+    var queued = variantJobBuilder().build();
+    // The queued segment waits four of the five minutes on the clock before its first refusal, and
+    // the clock then passes the five minutes from its first wait while refusals keep it waiting.
+    var clock = new SteppedClock();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMinutes(5)).build();
+
+    try (var worker =
+        worker(
+            WorkerSetup.builder()
+                .runtime(runtime)
+                .launcher(writingTheRecording())
+                .configuration(configuration)
+                .clock(clock)
+                .build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, holding);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 1);
+      startVariant(connection, queued);
+      promptly().until(() -> worker.queuedSegmentUploads() == 1);
+      clock.advance(Duration.ofMinutes(4));
+      connection.refuseUploadsAtTheWorkersLimit();
+      connection.acknowledgeAwaitingUploads();
+      promptly().until(() -> !uploadsOf(connection, queued).isEmpty());
+
+      clock.advance(Duration.ofMinutes(2));
+
+      promptly().until(() -> terminalEventOf(connection, queued).isPresent());
+      assertThat(terminalEventOf(connection, queued)).contains(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(failureOf(connection, queued))
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(uploadsOf(connection, queued))
+          .allSatisfy(upload -> assertThat(upload.wasRefused()).isTrue());
     }
   }
 
@@ -579,7 +624,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
     }
   }
 
-  // Only a deadline counted from a segment's first refusal can end the segment's wait, because each
+  // Only a deadline counted from a segment's first wait can end the segment's wait, because each
   // delay between its uploads is shorter than the upload deadline.
   private TranscodeWorker workerWithADeadlineBeyondTheLongestDelayBetweenUploads(
       ScriptedWorkerRuntime runtime) {

@@ -869,7 +869,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private void awaitAgainInItsPlace(SegmentUploadLimit.Turn turn, StatusException refusal)
       throws InterruptedException, StatusException, TimeoutException {
     // A server that states no limit has none to refuse a call at.
-    if (!turn.tryAwaitAgainInItsPlace(configuration.uploadDeadline())) {
+    if (!turn.tryAwaitAgainInItsPlace()) {
       throw refusal;
     }
   }
