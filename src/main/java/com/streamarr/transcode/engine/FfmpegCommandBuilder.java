@@ -267,7 +267,7 @@ public class FfmpegCommandBuilder {
   public FfmpegPipeline buildPipeline(TranscodeJob job) {
     if (needsRpuMove(job.request())) {
       return new FfmpegPipeline.RpuMovingPipe(
-          buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE));
+          buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE), false);
     }
 
     return new FfmpegPipeline.SingleProcess(

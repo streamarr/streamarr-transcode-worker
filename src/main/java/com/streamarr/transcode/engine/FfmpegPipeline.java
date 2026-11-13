@@ -45,8 +45,13 @@ public sealed interface FfmpegPipeline {
    *
    * @param copyCommand the copying FFmpeg's command, whose last output, the framecrc of the copy's
    *     video packets, lacks the URL it writes to
+   * @param audioInputReadsAhead whether the encoding FFmpeg writes nothing while its audio's input
+   *     reads on
    */
-  record RpuMovingPipe(@NonNull List<String> copyCommand, @NonNull List<String> encodeCommand)
+  record RpuMovingPipe(
+      @NonNull List<String> copyCommand,
+      @NonNull List<String> encodeCommand,
+      boolean audioInputReadsAhead)
       implements FfmpegPipeline {
 
     private static final String VIDEO_TIMING_URL = "<video timing socket>";
@@ -61,12 +66,6 @@ public sealed interface FfmpegPipeline {
       var command = new ArrayList<>(copyCommand);
       command.add(url);
       return List.copyOf(command);
-    }
-
-    /** False: the producer watches the pipe's two FFmpegs by their output alone. */
-    @Override
-    public boolean audioInputReadsAhead() {
-      return false;
     }
 
     @Override

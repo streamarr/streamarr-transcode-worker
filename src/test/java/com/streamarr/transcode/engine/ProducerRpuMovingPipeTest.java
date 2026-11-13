@@ -968,7 +968,7 @@ class ProducerRpuMovingPipeTest {
     var recording = recording(ENCODED_RECORDING);
     return Producer.builder()
         .launcher(launcher)
-        .pipeline(new FfmpegPipeline.RpuMovingPipe(COPY_COMMAND, ENCODE_COMMAND))
+        .pipeline(new FfmpegPipeline.RpuMovingPipe(COPY_COMMAND, ENCODE_COMMAND, false))
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
