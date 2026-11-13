@@ -9,11 +9,13 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import lombok.Builder;
 import lombok.NonNull;
 
@@ -375,8 +377,7 @@ final class SegmentAssembler {
       return;
     }
 
-    var frameDuration =
-        videoSamples.stream().mapToLong(carried -> carried.sample().duration()).max().orElseThrow();
+    var frameDuration = oneVideoFrame(videoSamples);
     var beforeLastFrame = new MediaTime(end - frameDuration, new TimeBase(1, timescale));
     if (videoDecision instanceof VideoDecision.Encode
         && audioTail
@@ -399,6 +400,26 @@ final class SegmentAssembler {
 
     throw new FragmentedMp4Exception(
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
+  }
+
+  // The length of one video frame in the segment: the duration that most of its pictures share, the
+  // shorter of two as common, and never shorter than its last picture, as a full audio frame is
+  // measured. One long picture, such as a still held for half a second, does not widen it unless
+  // that picture is the last.
+  private static long oneVideoFrame(List<CarriedSample> videoSamples) {
+    var lastPicture =
+        videoSamples.stream()
+            .map(CarriedSample::sample)
+            .max(
+                Comparator.comparingLong(
+                    sample -> Math.addExact(sample.presentationTime(), sample.duration())))
+            .orElseThrow();
+    var pictureCounts =
+        videoSamples.stream()
+            .collect(
+                Collectors.groupingBy(
+                    carried -> carried.sample().duration(), Collectors.counting()));
+    return Math.max(lastPicture.duration(), MostCommonDuration.of(pictureCounts).orElseThrow());
   }
 
   // Whether video that ends at this tick ends before the segment's own interval does, wherever its

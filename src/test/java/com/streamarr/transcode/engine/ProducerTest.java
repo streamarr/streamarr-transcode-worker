@@ -67,6 +67,7 @@ import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -1112,6 +1113,143 @@ class ProducerTest {
         TimedFragment.frameAt(24_000 + fullPictures * 1_000L)
             .videoDuration(lastPictureTicks)
             .build());
+  }
+
+  // A variable frame rate. The output ends with segment 1, whose pictures end more than one video
+  // frame before its interval's end. One video frame is the length that most of the segment's
+  // pictures share, the shorter of two as common, and never shorter than its last picture. A longer
+  // picture that is neither does not widen it. The audio ends where segment 1 starts.
+  @ParameterizedTest(name = "{1}, {0}")
+  @MethodSource("silentLastSegmentsThatEndMoreThanOneVideoFrameEarly")
+  @DisplayName(
+      "Should complete a short copy when its silent last segment's video ends more than one video"
+          + " frame before its interval's end and its pictures differ in length")
+  void
+      shouldCompleteAShortCopyWhenItsSilentLastSegmentsVideoEndsMoreThanOneVideoFrameBeforeItsEndAndItsPicturesDifferInLength(
+          CopyLayout layout, SilentLastSegment segment) {
+    var process = ScriptedProcess.builder().output(segment.output()).build();
+    var producer =
+        layout
+            .producerOf(
+                producerLaunching(process).startSequenceNumber(0), segment.intervalSeconds())
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
+  static Stream<Arguments> silentLastSegmentsThatEndMoreThanOneVideoFrameEarly() {
+    return inEveryCopyLayout(
+        List.of(
+            Named.of(
+                "a 0.5 s picture, then six of 1/24 s to 1.75 s",
+                SilentLastSegment.builder()
+                    .intervalSeconds(1)
+                    .opening(new Pictures(1, 12_000))
+                    .closing(new Pictures(6, 1_000))
+                    .build()),
+            Named.of(
+                "a 2 s picture, then 72 of 1/24 s to 11 s",
+                SilentLastSegment.builder()
+                    .intervalSeconds(6)
+                    .opening(new Pictures(1, 48_000))
+                    .closing(new Pictures(72, 1_000))
+                    .build()),
+            Named.of(
+                "eight pictures of 75 ms, then eight of 1/24 s to 1.933 s",
+                SilentLastSegment.builder()
+                    .intervalSeconds(1)
+                    .opening(new Pictures(8, 1_800))
+                    .closing(new Pictures(8, 1_000))
+                    .build())));
+  }
+
+  // A variable frame rate. The output ends with segment 1, whose interval runs from 1 s to 2 s. Its
+  // pictures end within one video frame of 2 s: within the length that most of them share, or
+  // within its last picture when that picture is longer. The audio ends at 1 s. Segment 0 closes
+  // only when the output ends, together with segment 1, so neither is delivered.
+  @ParameterizedTest(name = "{1}, {0}")
+  @MethodSource("silentLastSegmentsThatEndWithinOneVideoFrame")
+  @DisplayName(
+      "Should refuse a copy's last segment without copied audio when its video ends within one"
+          + " video frame of its interval's end and its pictures differ in length")
+  void
+      shouldRefuseACopysLastSegmentWithoutCopiedAudioWhenItsVideoEndsWithinOneVideoFrameOfItsIntervalsEndAndItsPicturesDifferInLength(
+          CopyLayout layout, SilentLastSegment segment) {
+    var process = ScriptedProcess.builder().output(segment.output()).build();
+    var producer =
+        layout
+            .producerOf(
+                producerLaunching(process).startSequenceNumber(0), segment.intervalSeconds())
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  static Stream<Arguments> silentLastSegmentsThatEndWithinOneVideoFrame() {
+    return inEveryCopyLayout(
+        List.of(
+            Named.of(
+                "six pictures of 1/24 s, then one held still for 0.5 s to 1.75 s",
+                SilentLastSegment.builder()
+                    .intervalSeconds(1)
+                    .opening(new Pictures(6, 1_000))
+                    .closing(new Pictures(1, 12_000))
+                    .build()),
+            Named.of(
+                "23 pictures of 1/24 s, then one of 1 ms to 1.959 s",
+                SilentLastSegment.builder()
+                    .intervalSeconds(1)
+                    .opening(new Pictures(23, 1_000))
+                    .closing(new Pictures(1, 24))
+                    .build())));
+  }
+
+  private static Stream<Arguments> inEveryCopyLayout(List<Named<SilentLastSegment>> segments) {
+    return Arrays.stream(CopyLayout.values())
+        .flatMap(layout -> segments.stream().map(segment -> Arguments.of(layout, segment)));
+  }
+
+  /**
+   * A copy whose output ends with segment 1 and whose audio ends where segment 1 starts. Each
+   * interval lasts this many seconds. Segment 0 holds pictures of 1/24 s and audio for its whole
+   * interval. Segment 1 holds no audio, and its pictures run back to back from its start: the
+   * opening ones, the first of them a keyframe, then the closing ones.
+   */
+  @Builder
+  private record SilentLastSegment(int intervalSeconds, Pictures opening, Pictures closing) {
+
+    byte[] output() {
+      var start = 24_000L * intervalSeconds;
+      return IsoBoxes.concat(
+          IsoBoxes.ftyp(),
+          IsoBoxes.videoAndAudioMoov(),
+          TimedFragment.keyframeAt(0)
+              .videoDuration(1_000)
+              .videoSampleCount(24 * intervalSeconds)
+              .audioFrom(0, audioSamples(48 * intervalSeconds, 1_000))
+              .build()
+              .bytes(),
+          TimedFragment.keyframeAt(start)
+              .videoDuration(opening.ticks())
+              .videoSampleCount(opening.count())
+              .build()
+              .bytes(),
+          TimedFragment.frameAt(start + opening.length())
+              .videoDuration(closing.ticks())
+              .videoSampleCount(closing.count())
+              .build()
+              .bytes());
+    }
+  }
+
+  // This many pictures back to back, each lasting this many ticks of the 24 kHz video timescale.
+  private record Pictures(int count, long ticks) {
+
+    long length() {
+      return count * ticks;
+    }
   }
 
   /**
