@@ -32,6 +32,11 @@ final class SingleFfmpegProcess implements FfmpegProcess {
   }
 
   @Override
+  public Process audioReadingProcess() {
+    return process;
+  }
+
+  @Override
   public Duration gracePeriod() {
     return gracePeriod;
   }

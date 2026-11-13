@@ -58,6 +58,12 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses
   /** Every FFmpeg process of the attempt, which a pause stops together. */
   List<Process> processes();
 
+  /**
+   * The FFmpeg process of the attempt that reads the source's audio and writes the attempt's
+   * output: the encoding FFmpeg when two FFmpegs move a profile 5 source's RPUs.
+   */
+  Process audioReadingProcess();
+
   Duration gracePeriod();
 
   /** The fragmented MP4 that the attempt writes. */

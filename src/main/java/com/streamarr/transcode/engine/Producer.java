@@ -234,14 +234,15 @@ public final class Producer {
     return producer;
   }
 
-  // FFmpeg writes nothing while its audio's input reads ahead, so the bytes that it reads count as
-  // its progress too. Such a pipeline runs one FFmpeg.
+  // FFmpeg writes nothing while its audio's input reads ahead, so the bytes that the FFmpeg process
+  // which reads that input reads count as its progress too. A copying FFmpeg that feeds a pipe
+  // waits meanwhile, so its reads show nothing.
   private static StallWatchdog watchdogOf(FfmpegProcess ffmpeg, Settings settings) {
     if (!settings.audioInputReadsAhead()) {
       return new StallWatchdog(settings.stallTimeout());
     }
 
-    var process = ffmpeg.processes().getFirst();
+    var process = ffmpeg.audioReadingProcess();
     return StallWatchdog.watchingReads(
         settings.stallTimeout(), () -> settings.launcher().bytesRead(process));
   }

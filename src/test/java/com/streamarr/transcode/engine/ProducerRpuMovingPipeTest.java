@@ -63,6 +63,9 @@ class ProducerRpuMovingPipeTest {
       UUID.fromString("5b0f8a8e-29b5-4c48-9f0c-7f4f3c1a9d21");
   private static final List<String> COPY_COMMAND = List.of("copy-ffmpeg");
   private static final List<String> ENCODE_COMMAND = List.of("encode-ffmpeg");
+  // A pipe whose encoding FFmpeg writes nothing while its audio's input reads on.
+  private static final FfmpegPipeline READING_AHEAD =
+      new FfmpegPipeline.RpuMovingPipe(COPY_COMMAND, ENCODE_COMMAND, true);
   private static final byte[] COPIED_SOURCE = RpuMovingCopies.copied();
   private static final byte[] NOT_HEVC =
       concat(
@@ -419,6 +422,75 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
     assertThat(copy.wasTerminated()).isTrue();
     assertThat(encode.wasTerminated()).isTrue();
+  }
+
+  // While the audio trails, the encoding FFmpeg holds the copy back and writes nothing, and the
+  // copying FFmpeg waits for the copy to be read and reads nothing. The scripted encoding FFmpeg
+  // has read one more byte at every count while it reads, and the watchdog counts ten times within
+  // a stall timeout: thirty counts span three stall timeouts.
+  @Test
+  @DisplayName(
+      "Should keep the attempt running when the encoding FFmpeg writes nothing for three stall"
+          + " timeouts while it reads and the copying FFmpeg reads nothing")
+  void shouldKeepTheAttemptRunningWhenTheEncodingFfmpegReadsWhileItWritesNothing() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(COPIED_SOURCE)
+            .pauseAfter(COPIED_SOURCE.length / 2)
+            .build();
+    var encode = encodingFfmpeg().pauseAfter(0).build();
+    encode.startReading();
+    var stallTimeout = Duration.ofMillis(200);
+    var producer =
+        producerOf(copy, encode).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
+    assertThat(encode.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    var pausedAt = System.nanoTime();
+    var readAtThePause = encode.bytesRead();
+
+    await()
+        .atMost(OUTCOME_LIMIT)
+        .pollInterval(POLL_INTERVAL)
+        .until(() -> encode.bytesRead() >= readAtThePause + 30 || producer.outcome().isDone());
+
+    assertThat(producer.outcome()).as("the attempt, after thirty counts").isNotDone();
+    assertThat(Duration.ofNanos(System.nanoTime() - pausedAt))
+        .as("how long the encoding FFmpeg has written nothing")
+        .isGreaterThan(stallTimeout.multipliedBy(2));
+    copy.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  // Only the encoding FFmpeg reads the audio's input, so the copying FFmpeg's reads do not show
+  // that the encoding FFmpeg works.
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall when the encoding FFmpeg writes and reads"
+          + " nothing while the copying FFmpeg reads")
+  void shouldFailTheAttemptAsAnEncoderStallWhenTheEncodingFfmpegReadsNothingWhileTheCopyReads() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(COPIED_SOURCE)
+            .pauseAfter(COPIED_SOURCE.length / 2)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    copy.startReading();
+    var encode = encodingFfmpeg().pauseAfter(0).build();
+
+    var producer =
+        producerOf(copy, encode)
+            .pipeline(READING_AHEAD)
+            .stallTimeout(Duration.ofMillis(200))
+            .gracePeriod(Duration.ofMillis(200))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(failure.detail())
+        .isEqualTo(
+            "FFmpeg wrote no output, and the worker counted no bytes that it read, for PT0.2S while"
+                + " the producer read it");
   }
 
   @Test
