@@ -283,7 +283,7 @@ plan_recording() {
   scale_and_format="scale=-2:$height:out_color_matrix=$colour_conversion,format=$pixel_format"
   if [[ $range == "$DOLBY_VISION_RANGE" ]]; then
     gpu_decode=(-hwaccel cuda -hwaccel_output_format cuda)
-    scale_and_format="scale_cuda=-2:$height,tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=$pixel_format"
+    scale_and_format="scale_cuda=-2:$height,setparams=color_trc=smpte2084,tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=$pixel_format"
   fi
   local video_filter="$scale_and_format$frame_colour,fps=$FRAME_RATE:eof_action=pass"
   if ((start > 0)); then

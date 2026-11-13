@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.fixtures.DetectedCapabilities;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -18,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -77,6 +79,8 @@ class HdrEncodeSmokeTest {
   private static final int RASL_R = 9;
   private static final int CRA_NUT = 21;
   private static final int FIRST_NON_SLICE_NUT = 32;
+  // The NAL unit type that carries a Dolby Vision RPU.
+  private static final int UNSPEC62 = 62;
 
   /** A P3 D65 display of 1000 cd/m² and 0.005 cd/m², with MaxCLL 1000 and MaxFALL 400. */
   private static final StaticHdrMetadata SOURCE_METADATA =
@@ -481,6 +485,24 @@ class HdrEncodeSmokeTest {
                     .contains(HardwareEncoderFault.DECODER_REFUSED));
   }
 
+  // ADR 0013: the encode keeps every picture, also a picture that reaches the reshape without its
+  // RPU. Such a picture comes out unreshaped. The CPU reshape completes the encode of these
+  // sources.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(MissingRpu.class)
+  @DisplayName(
+      "Should deliver every picture when hevc_nvenc reshapes on the GPU a profile 5 source that"
+          + " declares no transfer and whose decoder hands the reshape pictures without an RPU")
+  void shouldDeliverEveryPictureWhenHevcNvencReshapesOnTheGpuPicturesWithoutAnRpu(
+      MissingRpu missing) throws Exception {
+    assumeHevcNvencReshapesOnTheGpu();
+    var source = profile5SourceWith(missing);
+
+    var delivered = encoded(source, onHevcNvenc(profile5EncodeBuilder()).build(), 0);
+
+    assertThat(pictureCount(delivered.acceptedBytes())).isEqualTo(pictureCount(source));
+  }
+
   // ADR 0037 drops the leading pictures of a hardware decode's first keyframe with a bitstream
   // filter. The worker's NVDEC decode of an HEVC source runs without it: FFmpeg's HEVC decoder
   // skips the RASL pictures of the CRA picture it starts at before they reach NVDEC. The software
@@ -517,6 +539,15 @@ class HdrEncodeSmokeTest {
             fromStart.stream()
                 .filter(picture -> picture.time().compareTo(segment2Start) >= 0)
                 .toList());
+  }
+
+  /** Which pictures of a profile 5 source reach the reshape without an RPU. */
+  enum MissingRpu {
+    // The RPU of the 11th picture, which FFmpeg's RPU parser rejects.
+    ONE_UNREADABLE_RPU,
+    // Every RPU, as for a raw HEVC stream whose RPUs come ahead of the slices: FFmpeg's decoder
+    // ignores each RPU of such a stream (ADR 0013).
+    NO_RPU
   }
 
   /** How the worker decodes and reshapes a profile 5 source for hevc_nvenc. */
@@ -722,6 +753,129 @@ class HdrEncodeSmokeTest {
         .isNotEmpty()
         .allSatisfy(count -> assertThat(count).isPositive());
     return Files.move(written, source);
+  }
+
+  // The 256x144 source with the pictures that reach the reshape without an RPU. The stream declares
+  // no colour primaries, transfer or matrix, as a profile 5 stream usually does.
+  private static Path profile5SourceWith(MissingRpu missing) throws Exception {
+    var elementary = root.resolve("dolby-vision-5-" + missing + ".hevc");
+    runToCompletion(
+        List.of(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            profile5SourceThatNvdecDecodes().toString(),
+            "-map",
+            "0:v:0",
+            "-c",
+            "copy",
+            "-bsf:v",
+            "hevc_mp4toannexb",
+            "-f",
+            "hevc",
+            elementary.toString()));
+    var nalUnits = nalUnitsOf(Files.readAllBytes(elementary));
+    Files.write(
+        elementary,
+        concatenated(
+            switch (missing) {
+              case ONE_UNREADABLE_RPU -> withTheEleventhRpuUnreadable(nalUnits);
+              case NO_RPU ->
+                  nalUnits.stream().filter(unit -> nalUnitType(unit) != UNSPEC62).toList();
+            }));
+    var source = root.resolve("dolby-vision-5-" + missing + ".mp4");
+    runToCompletion(
+        List.of(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-r",
+            "24",
+            "-i",
+            elementary.toString(),
+            "-c",
+            "copy",
+            "-bsf:v",
+            "hevc_metadata=colour_primaries=2:transfer_characteristics=2:matrix_coefficients=2",
+            "-tag:v",
+            "dvh1",
+            "-strict",
+            "unofficial",
+            source.toString()));
+    return source;
+  }
+
+  // FFmpeg's RPU parser requires the last byte of an RPU to be 0x80.
+  private static List<byte[]> withTheEleventhRpuUnreadable(List<byte[]> nalUnits) {
+    var rpu =
+        nalUnits.stream()
+            .filter(unit -> nalUnitType(unit) == UNSPEC62)
+            .skip(10)
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("the source has no 11th RPU"));
+    var last = rpu.length - 1;
+    while (rpu[last] == 0) {
+      last--;
+    }
+
+    assertThat(rpu[last]).isEqualTo((byte) 0x80);
+    rpu[last] = (byte) 0x81;
+    return nalUnits;
+  }
+
+  // Each NAL unit of an Annex B stream, from its start code to the next one.
+  private static List<byte[]> nalUnitsOf(byte[] annexB) {
+    var starts = new ArrayList<Integer>();
+    for (var index = 0; index + 3 <= annexB.length; index++) {
+      if (annexB[index] == 0 && annexB[index + 1] == 0 && annexB[index + 2] == 1) {
+        starts.add(index);
+      }
+    }
+
+    starts.add(annexB.length);
+    return IntStream.range(0, starts.size() - 1)
+        .mapToObj(unit -> Arrays.copyOfRange(annexB, starts.get(unit), starts.get(unit + 1)))
+        .toList();
+  }
+
+  // H.265 7.3.1.2: the type follows the 3-byte start code.
+  private static int nalUnitType(byte[] nalUnit) {
+    return (nalUnit[3] >> 1) & 0x3F;
+  }
+
+  private static byte[] concatenated(List<byte[]> nalUnits) {
+    var stream = new ByteArrayOutputStream();
+    nalUnits.forEach(stream::writeBytes);
+    return stream.toByteArray();
+  }
+
+  private static long pictureCount(byte[] media) throws Exception {
+    var file = Files.createTempFile(root, "counted", ".mp4");
+    Files.write(file, media);
+    return pictureCount(file);
+  }
+
+  private static long pictureCount(Path media) throws Exception {
+    return Long.parseLong(
+        runToCompletion(
+                List.of(
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-count_frames",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=nb_read_frames",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    media.toString()))
+            .strip());
   }
 
   private static List<Long> raslPicturesAfterEachCraPicture(Path source) throws Exception {

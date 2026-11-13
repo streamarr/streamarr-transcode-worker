@@ -61,9 +61,13 @@ public class FfmpegCommandBuilder {
   static final List<String> GPU_DECODE_OPTIONS =
       List.of("-hwaccel", "cuda", "-hwaccel_output_format", "cuda");
 
-  // tonemap_cuda reshapes each CUDA frame with its RPU, as tonemapx does in system memory.
+  // tonemap_cuda reshapes each CUDA frame with its RPU, as tonemapx does in system memory. A
+  // profile 5 stream declares no transfer, and tonemap_cuda fails a frame without an RPU unless the
+  // frame is PQ or HLG. The filters therefore declare every frame PQ first. A frame without an RPU
+  // then comes out unreshaped, and the attempt keeps every picture (ADR 0013). tonemap_cuda ignores
+  // the declaration of a frame that carries an RPU.
   private static final String GPU_DOLBY_VISION_TO_PQ_RESHAPE_FILTER =
-      "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=";
+      "setparams=color_trc=smpte2084,tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP =
       traits().fixedGop(true).tenBitPixelFormat(P010).build();

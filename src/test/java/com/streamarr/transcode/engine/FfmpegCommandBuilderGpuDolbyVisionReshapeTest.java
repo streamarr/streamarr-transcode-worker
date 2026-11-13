@@ -29,8 +29,11 @@ class FfmpegCommandBuilderGpuDolbyVisionReshapeTest {
 
   private static final List<String> GPU_DECODE =
       List.of("-hwaccel", "cuda", "-hwaccel_output_format", "cuda");
+  // A profile 5 stream declares no transfer, and tonemap_cuda fails a picture without an RPU unless
+  // the picture is PQ, so the filters declare PQ ahead of it (ADR 0013).
   private static final String GPU_FILTERS =
-      "scale_cuda=-2:1080,tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=p010le,"
+      "scale_cuda=-2:1080,setparams=color_trc=smpte2084,"
+          + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=p010le,"
           + "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv,"
           + "sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,"
           + "sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL,fps=24/1:eof_action=pass";

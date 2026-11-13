@@ -593,7 +593,8 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         .containsSubsequence("-frames:v", "1", "-c:v", "hevc_nvenc", "-profile:v", "main10");
     assertThat(filtersOf(gpuTest))
         .isEqualTo(
-            "scale_cuda=-2:240,tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=p010le,"
+            "scale_cuda=-2:240,setparams=color_trc=smpte2084,"
+                + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=p010le,"
                 + frameColour("smpte2084")
                 + STATIC_METADATA_DELETION);
     assertThat(afterFilters(gpuTest)).isEqualTo(afterFilters(cpuReshape));
@@ -662,7 +663,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     assertThat(command)
         .containsSubsequence("-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i")
         .containsSubsequence("-c:v", "hevc_nvenc");
-    assertThat(filtersOf(command)).startsWith("scale_cuda=-2:1080,tonemap_cuda=");
+    assertThat(filtersOf(command)).startsWith("scale_cuda=-2:1080,").contains(",tonemap_cuda=");
   }
 
   @Test
