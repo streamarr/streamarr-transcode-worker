@@ -333,22 +333,9 @@ final class SegmentAssembler {
       return;
     }
 
+    var earlierTail = copiedAudioTail.or(audio::prerollTail);
     if (!samples.isEmpty()) {
       copiedAudioTail = Optional.of(audio.tailOf(samples.getLast()));
-    }
-
-    if (videoDecision instanceof VideoDecision.Copy && !samples.isEmpty()) {
-      return;
-    }
-
-    // The audio dropped after the output's last segment's interval starts after this segment, so
-    // when no copied audio reached the segment before that, the segment comes before the copied
-    // audio's first sample.
-    var copiedTail = copiedAudioTail.or(audio::prerollTail);
-    if (copiedTail.isEmpty() && audio.discardedTail().isPresent()) {
-      throw new FragmentedMp4Exception(
-          Reason.COPIED_AUDIO_RAN_SHORT,
-          "a media segment comes before the copied audio's first sample");
     }
 
     var videoSamples = segment.videoSamples();
@@ -369,6 +356,17 @@ final class SegmentAssembler {
     }
 
     var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
+    if (earlierTail.isEmpty() && comesBeforeTheCopiedAudiosFirstSample(samples)) {
+      throw new FragmentedMp4Exception(
+          Reason.COPIED_AUDIO_RAN_SHORT,
+          "a media segment comes before the copied audio's first sample");
+    }
+
+    if (videoDecision instanceof VideoDecision.Copy && !samples.isEmpty()) {
+      return;
+    }
+
+    var copiedTail = copiedAudioTail.or(audio::prerollTail);
     // The audio after the output's last segment's interval was dropped, because no keyframe opened
     // the interval it belongs to; it still shows how far the copied audio reaches beside the
     // segment's pictures past its interval.
@@ -400,6 +398,13 @@ final class SegmentAssembler {
 
     throw new FragmentedMp4Exception(
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
+  }
+
+  // Whether a segment that no copied audio reached before it comes before the copied audio's first
+  // sample: it takes no copied audio, and audio was dropped after the output's last segment's
+  // interval, which starts after this segment.
+  private boolean comesBeforeTheCopiedAudiosFirstSample(List<CarriedSample> samples) {
+    return samples.isEmpty() && audio.discardedTail().isPresent();
   }
 
   // The length of one video frame in the segment: the duration that most of its pictures share, the
