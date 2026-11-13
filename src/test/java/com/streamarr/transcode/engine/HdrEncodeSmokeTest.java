@@ -256,12 +256,7 @@ class HdrEncodeSmokeTest {
                     0)
                 .acceptedBytes());
 
-    assertThat(delivered).hasSameSizeAs(source);
-    for (var component = 0; component < source.length; component++) {
-      assertThat(delivered[component])
-          .as("component %d", component)
-          .isCloseTo(source[component], within(4));
-    }
+    assertCloseSamples(delivered, source);
   }
 
   @Test
@@ -296,6 +291,14 @@ class HdrEncodeSmokeTest {
     assertThat(staticMetadataLines(probed(fromSegment2.acceptedBytes())))
         .isNotEmpty()
         .isEqualTo(staticMetadataLines(probed(fromStart.acceptedBytes())));
+  }
+
+  // Every delivered sample within 4 code values (out of 1023) of the source's.
+  private static void assertCloseSamples(int[] delivered, int[] source) {
+    assertThat(delivered).hasSameSizeAs(source);
+    for (var sample = 0; sample < source.length; sample++) {
+      assertThat(delivered[sample]).as("sample %d", sample).isCloseTo(source[sample], within(4));
+    }
   }
 
   private static VideoDecision.Encode profile5Encode() {
