@@ -7,6 +7,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -161,17 +163,29 @@ final class KeyframePacketScan {
     return arguments;
   }
 
+  // FFmpeg's output stream 0 is the chosen video stream, and each later one an audio stream.
   private static List<ScannedStreamEnd> streamEnds(
       List<ScannedStream> scanned, PacketKeyframes packets) {
     var ends = new ArrayList<ScannedStreamEnd>();
-    for (var output = 0; output < scanned.size(); output++) {
-      var stream = scanned.get(output);
-      packets
-          .streamEnd(output)
-          .ifPresent(end -> ends.add(new ScannedStreamEnd(stream.index(), stream.timeBase(), end)));
+    packets
+        .streamEnd(0)
+        .latestPacketEnd()
+        .ifPresent(ticks -> ends.add(endOf(scanned.getFirst(), ticks)));
+    for (var output = 1; output < scanned.size(); output++) {
+      var audio = scanned.get(output);
+      packets.streamEnd(output).latestPacketEnd().ifPresent(ticks -> ends.add(endOf(audio, ticks)));
     }
 
     return ends;
+  }
+
+  private static ScannedStreamEnd endOf(ScannedStream stream, long ticks) {
+    return ScannedStreamEnd.builder()
+        .streamIndex(stream.index())
+        .timeBase(stream.timeBase())
+        .ticks(BigInteger.valueOf(ticks))
+        .marginSeconds(BigDecimal.ZERO)
+        .build();
   }
 
   private static ProbeAttemptReport unavailable(
@@ -320,9 +334,9 @@ final class KeyframePacketScan {
       return times;
     }
 
-    /** The end of the output stream's packets, in ticks from the demuxer's zero, when known. */
-    OptionalLong streamEnd(int outputStream) {
-      return streamEnds.get(outputStream).ticks();
+    /** Where the output stream's packets end. */
+    StreamEnd streamEnd(int outputStream) {
+      return streamEnds.get(outputStream);
     }
   }
 
@@ -358,7 +372,8 @@ final class KeyframePacketScan {
       latestEnd = Math.max(latestEnd, time.getAsLong() + duration);
     }
 
-    OptionalLong ticks() {
+    /** The latest packet end, in ticks from the demuxer's zero, when known. */
+    OptionalLong latestPacketEnd() {
       if (isUnknown || !latestPacketHasDuration) {
         return OptionalLong.empty();
       }

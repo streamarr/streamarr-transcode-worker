@@ -16,7 +16,6 @@ import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
@@ -136,7 +135,7 @@ record KeyframePositionsReport(
   private static Optional<Duration> endTimeOf(ScannedStreamEnd end, ProbeTimeline timeline) {
     Duration endTime;
     try {
-      endTime = timeline.at(BigInteger.valueOf(end.ticks()), end.timeBase());
+      endTime = timeline.at(end.ticks(), end.timeBase(), end.marginSeconds());
     } catch (ArithmeticException _) {
       return Optional.empty();
     }
