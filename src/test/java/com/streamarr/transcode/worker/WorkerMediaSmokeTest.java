@@ -6493,18 +6493,19 @@ class WorkerMediaSmokeTest {
             DeliveredAudio.of(playable(startAttempt.contentOf(fromSegment2))).played());
   }
 
-  // A lossy encoder's frames overlap, so a frame next to a gap's end sounds before the gap ends.
-  // The tone starts at 6.5 s, behind digital silence, so the only sound before then is what the
-  // encoder took from after the first gap's end at 6.51 s: the frame that fills the gap's end, at
-  // most 100 ms before it, and any samples placed early. The 1 kHz tone crosses zero on 2 of every
-  // 48 samples at 48 kHz.
+  // A lossy encoder's frames overlap, so a frame next to an edge of the source's sound sounds on
+  // the other side of that edge, at most 100 ms away. The source holds digital silence before
+  // 6.5 s and a 1 kHz tone after it. So the tone sounds from the first gap's end at 6.51 s to the
+  // second gap at 8.01 s, and from the second gap's end at 9.03 s to the audio's end at 10 s.
+  // Silence fills all other times up to the advertised end at 12 s, the padding included.
   @ParameterizedTest(name = "{0}")
   @ValueSource(strings = {"aac", "ac3", "eac3", "opus"})
   @DisplayName(
-      "Should play nothing of the audio after a gap before the gap ends, and fill every time from"
-          + " zero to the advertised end, when an attempt encodes audio with gaps to a lossy codec")
-  void shouldPlayNothingOfTheAudioAfterAGapBeforeItEndsWhenALossyEncodeFillsTheGap(String codec)
-      throws Exception {
+      "Should play the tone from each gap's end to the next gap or the audio's end, and silence at"
+          + " all other times up to the advertised end, when an attempt encodes audio with gaps to"
+          + " a lossy codec")
+  void shouldPlayTheToneOnlyBetweenTheGapsAndSilenceElsewhereWhenALossyEncodeFillsTheGaps(
+      String codec) throws Exception {
     var source = gappedSource(GappedSource.TONE_AFTER_THE_FIRST_GAP);
     var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     job.getDecisionBuilder().getAudioBuilder().setCodec(codec).setBitrateBitsPerSecond(96_000);
@@ -6512,20 +6513,38 @@ class WorkerMediaSmokeTest {
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
     var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
-    var firstGap = GAPPED_SOURCE_FIRST_GAP;
-    var beforeTheEndsFrame = firstGap.until() - LOSSY_FRAME_REACH_SAMPLES;
-    assertThat(delivered.samplesBeyond(SIXTY_DECIBELS_BELOW_FULL_SCALE, 0, beforeTheEndsFrame))
-        .as(
-            "samples louder than -60 dBFS before the frame that fills the first gap's end at 6.51 s")
-        .isZero();
-    assertThat(
-            delivered.samplesBeyond(
-                SIXTY_DECIBELS_BELOW_FULL_SCALE, firstGap.until(), GAPPED_SOURCE_SECOND_GAP.from()))
-        .as("samples louder than -60 dBFS of the tone from 6.51 s to the second gap at 8.01 s")
-        .isGreaterThan((GAPPED_SOURCE_SECOND_GAP.from() - firstGap.until()) * 46L / 48 * 99 / 100);
+    var tone =
+        GAPPED_COUNTED_AUDIO.stream()
+            .filter(stretch -> stretch.from() >= GAPPED_SOURCE_FIRST_GAP.until())
+            .toList();
+    var reach = LOSSY_FRAME_REACH_SAMPLES;
+    var silences =
+        List.of(
+            new SampleRange(0, tone.getFirst().from() - reach),
+            new SampleRange(tone.getFirst().until() + reach, tone.getLast().from() - reach),
+            new SampleRange(tone.getLast().until() + reach, GAPPED_SOURCE_END_SAMPLES));
     assertThat(delivered.silentSamples(0, GAPPED_SOURCE_END_SAMPLES).absent())
         .as("times from zero to the advertised end at 12 s that no delivered sample holds")
         .isZero();
+    for (var stretch : tone) {
+      assertThat(delivered.millisecondsWithoutTheTone(stretch.from(), stretch.until()))
+          .as(
+              "milliseconds of the source's tone from sample %d to sample %d in which the tone"
+                  + " does not sound",
+              stretch.from(), stretch.until())
+          .isEmpty();
+    }
+
+    for (var silence : silences) {
+      assertThat(
+              delivered.samplesBeyond(
+                  SIXTY_DECIBELS_BELOW_FULL_SCALE, silence.from(), silence.until()))
+          .as(
+              "samples louder than -60 dBFS from sample %d to sample %d, where the source holds"
+                  + " digital silence further than a frame's reach from the tone",
+              silence.from(), silence.until())
+          .isZero();
+    }
   }
 
   // A FLAC encode that writes 16 bits dithers every sample, so silence that the fill writes before
