@@ -70,7 +70,13 @@ public class FfmpegTranscodeEngine {
       SegmentMemoryBudget memoryBudget) {
     requireAvailableFfmpeg();
     var videoEncoder = encoderBackend.map(EncoderBackend::encoder).orElse("copy");
-    var job = TranscodeJob.builder().request(request).videoEncoder(videoEncoder).build();
+    var job =
+        TranscodeJob.builder()
+            .request(request)
+            .videoEncoder(videoEncoder)
+            .gpuDolbyVisionReshapeVerified(
+                capabilityService.reshapesDolbyVisionOnTheGpu(videoEncoder))
+            .build();
     var pipeline = commandBuilder.buildPipeline(job);
     log.debug("FFmpeg command for job attempt {}: {}", request.attemptId(), pipeline.commandLine());
     var producer =

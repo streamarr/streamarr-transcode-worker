@@ -2,7 +2,8 @@
 
 These recordings show how `h264_nvenc` and `hevc_nvenc` handle the worker's FFmpeg recipe. They
 decide whether an NVENC encoder joins ADR 0037's list of keyframe-verified encoders, and whether
-the worker tests `hevc_nvenc` for its 10-bit, PQ and HLG outputs.
+the worker tests `hevc_nvenc` for its 10-bit, PQ and HLG outputs and for the GPU reshape of Dolby
+Vision into PQ.
 
 ## Results
 
@@ -35,9 +36,16 @@ source that each keep their range:
   producer writes the job's values into the `hvc1` record and into the sample entry's `mdcv` and
   `clli` boxes. The recorded initialization segments are FFmpeg's own and hold neither box.
 
-The reshape of Dolby Vision profile 5 or 10.0 into PQ runs on the CPU before the encoder, which
-takes the arguments of a PQ encode, so the PQ recordings also stand for that encode. No recording
-runs the reshape; `HdrEncodeSmokeTest` runs it into `hevc_nvenc` on an NVIDIA GPU host.
+The CPU reshape of Dolby Vision profile 5 or 10.0 into PQ runs before the encoder, which takes the
+arguments of a PQ encode from frames in system memory, so the PQ recordings also stand for that
+encode. No recording runs the CPU reshape.
+
+The GPU reshape of a profile 5 source has recordings of its own, because the encoder takes its
+frames from the GPU: NVDEC decodes the source, and `scale_cuda` and `tonemap_cuda` hand `hevc_nvenc`
+CUDA frames. They show the same verdicts at every rung, PQ's colour description and no static HDR
+metadata in a sample. They show the keyframes and the signalling, not the colours: the source's
+RPUs come from dovi_tool's generator. `HdrEncodeSmokeTest` runs both reshapes into `hevc_nvenc` on
+an NVIDIA GPU host: the GPU reshape, and the CPU reshape of a job that also deinterlaces.
 
 ## Recording
 
@@ -62,8 +70,11 @@ results directory, which the script removes on every exit. The source is synthes
 35 s of 1920x1080 `testsrc2` at 24000/1001, with a cut to SMPTE bars from 3.5 s to 4.5 s and from
 27.5 s to 28.5 s. The Main 10 recordings read the same picture as libx265 Main 10, once for each
 range with its colour description. The PQ source also carries constructed HDR10 static metadata: a
-P3 D65 display of 1000 cd/m² and 0.005 cd/m², MaxCLL 1000 and MaxFALL 400. No media file from the
-host is read. The run stops at `--time-limit`, 1200 s by default.
+P3 D65 display of 1000 cd/m² and 0.005 cd/m², MaxCLL 1000 and MaxFALL 400. The Dolby Vision
+profile 5 source is the same picture as libx265 Main 10 under `dvh1`. Each of its frames carries an
+RPU of this repository's synthetic `sample-entries/dolby-vision-5-dvh1.mp4`, whose 144 RPUs repeat:
+FFmpeg's test sources generate no RPU. The script copies that fixture into the work directory, and
+reads no other media file from the host. The run stops at `--time-limit`, 1200 s by default.
 
 ## What is recorded
 
@@ -83,7 +94,9 @@ For each encoder and each rung of the default ladder (1080p, 720p, 480p and 360p
 
 `hevc_nvenc` also records the three extended encodes in Main 10 at every rung, once for each 10-bit
 range: `hevc_nvenc-RUNG-sdr10-…` from the BT.709 source, `hevc_nvenc-RUNG-pq-…` and
-`hevc_nvenc-RUNG-hlg-…`.
+`hevc_nvenc-RUNG-hlg-…`. `hevc_nvenc-RUNG-dolby-vision-…` are the same three encodes of the Dolby
+Vision source with hardware decode and the GPU reshape, which is the worker's command once
+`hevc_nvenc` passed its GPU reshape test.
 
 `NvencRecorderCommandsTest` runs `record-nvenc.sh --print-commands`. It requires the
 `extended-first` and `extended-replacement` commands to equal the worker's own command for the same
@@ -122,8 +135,9 @@ committed initialization segments and re-derives every verdict from the committe
 `NvencRecordingsTest` runs the worker's own rewrite and output check over each initialization
 segment, and fails while an encoder that `FfmpegCommandBuilder` marks keyframe-verified has an
 extended recording that does not show every verdict above. It also fails while the worker tests an
-NVENC encoder for an encode feature whose range lacks a Main 10 recording at a rung, and while a
-Main 10 recording carries static HDR metadata in a sample. The same check runs by hand:
+NVENC encoder for an encode feature whose range lacks a Main 10 recording at a rung, while it tests
+one for the GPU reshape without a Dolby Vision recording at a rung, and while a Main 10 recording
+carries static HDR metadata in a sample. The same check runs by hand:
 
 ```
 node src/test/fmp4-recorder/nvenc-recordings.mjs check

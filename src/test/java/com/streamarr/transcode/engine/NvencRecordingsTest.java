@@ -178,6 +178,31 @@ class NvencRecordingsTest {
 
   @Test
   @DisplayName(
+      "Should hold the extended recordings of the GPU Dolby Vision reshape at every default-ladder"
+          + " rung when the worker tests an NVENC encoder for that reshape")
+  void
+      shouldHoldTheExtendedRecordingsOfTheGpuDolbyVisionReshapeAtEveryDefaultLadderRungWhenTheWorkerTestsAnNvencEncoderForThatReshape() {
+    var required =
+        NVENC_ENCODERS.stream()
+            .filter(FfmpegCommandBuilder::testsGpuDolbyVisionReshape)
+            .flatMap(
+                encoder ->
+                    DEFAULT_LADDER_RUNGS.stream()
+                        .map(
+                            rung ->
+                                encoder
+                                    + "-"
+                                    + rung
+                                    + "-"
+                                    + NvencRecordedEncodes.DOLBY_VISION_RANGE))
+            .toList();
+
+    assertThat(required).as("the rungs of the NVENC encoders with a GPU reshape").hasSize(4);
+    assertHoldsTheExtendedRecordingsOf(required);
+  }
+
+  @Test
+  @DisplayName(
       "Should declare 10 bits and carry static HDR metadata in no sample of any Main 10 recording"
           + " when the worker deletes the frames' static HDR metadata before NVENC")
   void
@@ -207,8 +232,9 @@ class NvencRecordingsTest {
     softly.assertAll();
   }
 
-  // The range whose recordings show the encoder's keyframes for the feature. The reshape of Dolby
-  // Vision into PQ runs before the encoder, which takes the arguments of a PQ encode.
+  // The range whose recordings show the encoder's keyframes for the feature. The CPU reshape of
+  // Dolby Vision into PQ runs before the encoder, which takes the arguments of a PQ encode from
+  // frames in system memory, as a PQ encode does; the GPU reshape has recordings of its own.
   private static String recordedRangeOf(EncodeFeature feature) {
     return switch (feature) {
       case TEN_BIT -> "sdr10";

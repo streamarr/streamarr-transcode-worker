@@ -69,6 +69,17 @@ class TranscodeWorkerHardwareEncoderFailureTest {
       (no details)
       [h264_nvenc @ 0x55d0c8a4e1c0] No capable devices found
       """;
+  // The end of FFmpeg's error output when NVDEC refuses the source's picture and the GPU filters
+  // then get frames from system memory.
+  private static final String DECODER_REFUSAL =
+      """
+          src: yuv420p yuv420p10le p010le p016le
+          dst: cuda
+      [vf#0:0 @ 0x5613beacf940] Error reinitializing filters!
+      [vost#0:0/h264_nvenc @ 0x5613beaf3780] [enc:h264_nvenc @ 0x5613beaf3a40] Could not open \
+      encoder before EOF
+      Conversion failed!
+      """;
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
 
   @TempDir Path tempDir;
@@ -144,6 +155,33 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   void shouldKeepOfferingNvencAndGiveTheNextJobNvencWhenTheDriverRefusesASessionAtItsLimit()
       throws Exception {
     var launcher = launcherFailingNvencOnceWith(SESSION_LIMIT);
+    var refused = encodeJob();
+    var next = encodeJob();
+
+    try (var worker = worker(launcher, Duration.ofHours(1))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, refused);
+      awaitEventCount(connection, EventCase.JOB_ATTEMPT_FAILED, 1);
+
+      startVariant(connection, next);
+
+      awaitEventCount(connection, EventCase.JOB_ATTEMPT_STARTED, 2);
+      assertThat(event(connection, EventCase.JOB_ATTEMPT_FAILED).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_HARDWARE_ENCODER_FAILED);
+      assertThat(eventsOf(connection)).doesNotContain(EventCase.VIDEO_ENCODERS_CHANGED);
+      assertThat(started(connection, next).getEncoder()).isEqualTo("h264_nvenc");
+    }
+  }
+
+  // The server places the fallback on the software encoder, whose command decodes in software.
+  @Test
+  @DisplayName(
+      "Should keep offering NVENC and report the hardware encoder failure of that job alone when"
+          + " the hardware decoder refuses the job's source")
+  void shouldKeepOfferingNvencAndReportTheFailureOfThatJobWhenTheHardwareDecoderRefusesItsSource()
+      throws Exception {
+    var launcher = launcherFailingNvencOnceWith(DECODER_REFUSAL);
     var refused = encodeJob();
     var next = encodeJob();
 

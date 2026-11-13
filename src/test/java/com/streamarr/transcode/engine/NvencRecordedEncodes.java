@@ -4,8 +4,9 @@ import java.util.Optional;
 
 /**
  * The encode decision of a recording that src/test/fmp4-recorder/record-nvenc.sh plans, from its
- * encoder and the range it names: {@code sdr} for 8-bit BT.709 from the H.264 source, and {@code
- * sdr10}, {@code pq} or {@code hlg} for Main 10 from the HEVC source of that range.
+ * encoder and the range it names: {@code sdr} for 8-bit BT.709 from the H.264 source, {@code
+ * sdr10}, {@code pq} or {@code hlg} for Main 10 from the HEVC source of that range, and {@code
+ * dolby-vision} for Main 10 PQ from the Dolby Vision profile 5 source.
  */
 final class NvencRecordedEncodes {
 
@@ -23,6 +24,23 @@ final class NvencRecordedEncodes {
               .build(),
           new PlannedCopyOutput.ContentLightLevel(1000, 400));
 
+  // Decision 173's fallback, which the job of a profile 5 source carries: the source has no static
+  // HDR metadata of its own.
+  private static final StaticHdrMetadata FALLBACK_METADATA =
+      new StaticHdrMetadata(
+          PlannedCopyOutput.MasteringDisplay.builder()
+              .red(new PlannedCopyOutput.Chromaticity(34000, 16000))
+              .green(new PlannedCopyOutput.Chromaticity(13250, 34500))
+              .blue(new PlannedCopyOutput.Chromaticity(7500, 3000))
+              .whitePoint(new PlannedCopyOutput.Chromaticity(15635, 16450))
+              .maxLuminance(10_000_000)
+              .minLuminance(1)
+              .build(),
+          new PlannedCopyOutput.ContentLightLevel(0, 0));
+
+  /** The range of the recordings whose decode, scale and reshape run on the GPU. */
+  static final String DOLBY_VISION_RANGE = "dolby-vision";
+
   private NvencRecordedEncodes() {}
 
   /** The decision without its tier, level and codec string, which each recording's plan names. */
@@ -36,6 +54,23 @@ final class NvencRecordedEncodes {
               encoder.startsWith("hevc")
                   ? VideoCodecProfile.HEVC_MAIN
                   : VideoCodecProfile.H264_HIGH);
+    }
+
+    if (range.equals(DOLBY_VISION_RANGE)) {
+      return VideoDecision.Encode.builder()
+          .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
+          .sourceDynamicRange(
+              new VideoDynamicRange(
+                  VideoDynamicRange.CompatibleBase.NONE,
+                  VideoDynamicRange.Presence.ABSENT,
+                  new VideoDynamicRange.DolbyVision.Present(
+                      Optional.empty(),
+                      VideoDynamicRange.Presence.PRESENT,
+                      VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE)))
+          .outputDynamicRange(dynamicRangeOf("pq"))
+          .codecProfile(VideoCodecProfile.HEVC_MAIN_10)
+          .outputPictureFormat(new PictureFormat(10, ChromaSubsampling.CHROMA_420))
+          .staticHdrMetadata(Optional.of(FALLBACK_METADATA));
     }
 
     var dynamicRange = dynamicRangeOf(range);

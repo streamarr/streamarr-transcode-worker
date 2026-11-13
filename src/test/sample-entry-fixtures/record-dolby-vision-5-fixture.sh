@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Regenerates src/test/resources/sample-entries/dolby-vision-5-dvh1.mp4, the Dolby Vision profile 5
-# source of the HDR encode smoke tests, with the images that record-fixtures.sh uses, and its first
-# frame, src/main/resources/com/streamarr/transcode/engine/dolby-vision-5-test-frame.mp4, the input
-# of the worker's own test encode of the Dolby Vision reshape.
+# source of the HDR encode smoke tests, with the images that record-fixtures.sh uses, and
+# src/main/resources/com/streamarr/transcode/engine/dolby-vision-5-test-frame.mp4, the input of the
+# worker's own test encodes of the Dolby Vision reshape: one frame of the same recipe at 320x240,
+# because NVDEC decodes no HEVC picture smaller than 144x144.
 #
 # The source is 6 s of 64x64 testsrc2 video at 24 fps with a keyframe every second, from FFmpeg's
 # lavfi test sources. Nothing comes from a media library. dovi_tool's profile 5 generator writes one
@@ -29,6 +30,8 @@ set -euo pipefail
 cd /work
 ffmpeg -hide_banner -nostdin -loglevel error -y -f lavfi -i testsrc2=size=64x64:rate=24:duration=6 \
   -pix_fmt yuv420p10le -strict -1 profile-5.y4m
+ffmpeg -hide_banner -nostdin -loglevel error -y -f lavfi -i testsrc2=size=320x240:rate=24 \
+  -frames:v 1 -pix_fmt yuv420p10le -strict -1 test-frame.y4m
 CONTAINER
 
 cat > "$WORK/dolby-vision.sh" <<'CONTAINER'
@@ -47,18 +50,23 @@ x265 --input profile-5.y4m --output profile-5.hevc --profile main10 \
   --dolby-vision-profile 5 --dolby-vision-rpu rpu.bin --keyint 24 --min-keyint 24 --no-scenecut \
   --no-open-gop --vbv-bufsize 1000 --vbv-maxrate 1000 --pools none --frame-threads 1 \
   --log-level error --no-progress
+x265 --input test-frame.y4m --output test-frame.hevc --profile main10 \
+  --dolby-vision-profile 5 --dolby-vision-rpu rpu.bin --keyint 24 --min-keyint 24 --no-scenecut \
+  --no-open-gop --vbv-bufsize 1000 --vbv-maxrate 1000 --pools none --frame-threads 1 \
+  --log-level error --no-progress
 CONTAINER
 
 cat > "$WORK/mux.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
 MP4Box -add profile-5.hevc:dvp=f5:fps=24 -new dolby-vision-5-dvh1.mp4 > /dev/null 2>&1
+MP4Box -add test-frame.hevc:dvp=f5:fps=24 -new test-frame.mp4 > /dev/null 2>&1
 CONTAINER
 
 cat > "$WORK/test-frame.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
-ffmpeg -hide_banner -nostdin -loglevel error -y -i dolby-vision-5-dvh1.mp4 -frames:v 1 -c copy \
+ffmpeg -hide_banner -nostdin -loglevel error -y -i test-frame.mp4 -frames:v 1 -c copy \
   -strict unofficial -tag:v dvh1 -f mp4 dolby-vision-5-test-frame.mp4
 CONTAINER
 
