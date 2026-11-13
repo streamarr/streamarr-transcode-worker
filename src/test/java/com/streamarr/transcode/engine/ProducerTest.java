@@ -4021,16 +4021,18 @@ class ProducerTest {
         .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
-  // The watchdog dates the bytes that a count finds to the count before it, the earliest moment
-  // they can have been read. The scripted FFmpeg reads its last byte between that count and the
-  // one that finds it, so the stall comes no sooner than the stall timeout after the first and
-  // within the stall timeout of the second. The watchdog counts every 200 ms here, which leaves the
-  // producer that long to end FFmpeg once the stall is decided.
+  // The watchdog dates the bytes that a count finds to that count, so it never fails an FFmpeg
+  // that a count found reading within the stall timeout. The watchdog counts ten times within the
+  // stall timeout, every 200 ms here, and an FFmpeg that stops reading is caught within one count
+  // interval more than the stall timeout. That interval leaves the producer 200 ms to end FFmpeg
+  // once the stall is decided.
   @Test
   @DisplayName(
-      "Should fail the attempt as an encoder stall within the stall timeout of FFmpeg's last read"
-          + " when FFmpeg stops reading while its audio's input reads ahead")
-  void shouldFailTheAttemptWithinTheStallTimeoutOfTheLastReadWhenFfmpegStopsReadingAhead() {
+      "Should fail the attempt as an encoder stall no sooner than the stall timeout after the count"
+          + " that found FFmpeg's last read, and within one count interval more, when FFmpeg stops"
+          + " reading while its audio's input reads ahead")
+  void
+      shouldFailTheAttemptOneStallTimeoutAfterTheCountThatFoundTheLastReadWhenFfmpegStopsReading() {
     var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
@@ -4053,13 +4055,13 @@ class ProducerTest {
         .isEqualTo(
             "FFmpeg wrote no output, and the worker counted no bytes that it read, for PT2S while"
                 + " the producer read it");
-    var stalledAt = process.terminatedAtNanos().orElseThrow();
-    assertThat(Duration.ofNanos(stalledAt - process.countBeforeTheLastReadAtNanos()))
-        .as("from the count before the one that found FFmpeg's last read to the stall")
-        .isGreaterThanOrEqualTo(stallTimeout);
-    assertThat(Duration.ofNanos(stalledAt - process.lastReadCountedAtNanos()))
+    var fromTheCountThatFoundTheLastRead =
+        Duration.ofNanos(
+            process.terminatedAtNanos().orElseThrow() - process.lastReadCountedAtNanos());
+    assertThat(fromTheCountThatFoundTheLastRead)
         .as("from the count that found FFmpeg's last read to the stall")
-        .isLessThan(stallTimeout);
+        .isGreaterThanOrEqualTo(stallTimeout)
+        .isLessThan(stallTimeout.plus(stallTimeout.dividedBy(10)));
   }
 
   // A count that comes two stall timeouts after the one before it, as when the system does not run
