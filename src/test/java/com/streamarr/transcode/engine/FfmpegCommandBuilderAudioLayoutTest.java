@@ -135,7 +135,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("flac", "5.1"), Optional.of(pcm.build()));
 
-      assertThat(audioFilter(cmd)).startsWith("aresample=");
+      assertThat(audioFilter(cmd)).startsWith(FILL_IN_GAPS + ",aresample=");
     }
   }
 
@@ -334,7 +334,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(
-              FLOAT_PAN
+              FILL_IN_GAPS
+                  + ","
+                  + FLOAT_PAN
                   + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s16:"
                   + TUNED_RESAMPLER
                   + ","
@@ -417,7 +419,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(
-              FLOAT_PAN
+              FILL_IN_GAPS
+                  + ","
+                  + FLOAT_PAN
                   + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s32:"
                   + TUNED_RESAMPLER
                   + ","
@@ -583,7 +587,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "stereo"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo("aresample=osf=s32:" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
+          .isEqualTo(FILL_IN_GAPS + ",aresample=osf=s32:" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @Test
@@ -601,12 +605,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
     @ParameterizedTest(name = "{0}, {1}, {2} bits")
     @CsvSource({
-      "pcm_s24le, s32, 24, s32p",
-      "pcm_s16le, s16, 16, s16p",
-      "pcm_f32le, flt, 32, s32p:output_sample_bits=24:dither_method=triangular",
-      "pcm_s32le, s32, 32, s32p:output_sample_bits=24:dither_method=triangular",
-      "truehd, s32, 24, s32p",
-      "flac, s16, 16, s16p"
+      "pcm_s24le, s32, 24, 'agapfill,aresample=osf=s32p'",
+      "pcm_s16le, s16, 16, 'agapfill,aresample=osf=s16p'",
+      "pcm_f32le, flt, 32, aresample=osf=s32p:output_sample_bits=24:dither_method=triangular",
+      "pcm_s32le, s32, 32, aresample=osf=s32p:output_sample_bits=24:dither_method=triangular",
+      "truehd, s32, 24, 'agapfill,aresample=osf=s32p'",
+      "flac, s16, 16, 'agapfill,aresample=osf=s16p'"
     })
     @DisplayName("Should keep a lossless track's depth up to 24 bits when ALAC encodes it")
     void shouldKeepALosslessTracksDepthUpTo24BitsWhenAlacEncodesIt(
@@ -620,11 +624,14 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("alac", "stereo"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo("aresample=osf=" + written + ":" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
+          .isEqualTo(written + ":" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @ParameterizedTest(name = "{0}")
-    @CsvSource({"DTS-HD MA, s32", "DTS, s16:dither_method=triangular"})
+    @CsvSource({
+      "DTS-HD MA, 'agapfill,aresample=osf=s32'",
+      "DTS, aresample=osf=s16:dither_method=triangular"
+    })
     @DisplayName("Should count only DTS-HD MA as lossless when FLAC encodes DTS")
     void shouldCountOnlyDtsHdMaAsLosslessWhenFlacEncodesDts(String profile, String written) {
       var source =
@@ -637,7 +644,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "5.1(side)"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo("aresample=osf=" + written + ":" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
+          .isEqualTo(written + ":" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -648,7 +655,14 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "stereo"), source(codec, "stereo"));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo("aresample=osf=" + written + ":" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
+          .isEqualTo(
+              FILL_IN_GAPS
+                  + ",aresample=osf="
+                  + written
+                  + ":"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -680,7 +694,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(audio, Optional.of(hiResFlac(96_000, 24)));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo("aresample=osf=s32p:" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
+          .isEqualTo(
+              FILL_IN_GAPS + ",aresample=osf=s32p:" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @Test
@@ -967,6 +982,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
   // samples after it into the frame before it, and a resampler or a downmix's limiter joins the
   // audio on both sides of it. The gap fill writes digital silence for every gap and from the
   // attempt's start to the first frame. Its silence stays digital only where no dither follows it.
+  // A FLAC or ALAC format stage resamples when FFmpeg rebuilds the graph for a new source rate, so
+  // the gaps are filled before it wherever it adds no dither.
   @Nested
   @DisplayName("Gap Fill")
   class GapFillTests {
@@ -990,13 +1007,30 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
     @Test
     @DisplayName(
-        "Should fill the gaps after the channels that a pad adds when ALAC pads a layout without"
-            + " resampling")
-    void shouldFillTheGapsAfterThePadsChannelsWhenAlacPadsALayoutWithoutResampling() {
+        "Should fill the gaps before the format stage and the silence before the audio after the"
+            + " channels that a pad adds when ALAC pads a layout without dither")
+    void shouldFillTheGapsBeforeTheFormatStageWhenAlacPadsALayoutWithoutDither() {
       var cmd = command(encode("alac", "6.1(back)"), Optional.of(hiResSource("6.0", 48_000)));
 
       assertThat(audioFilter(cmd))
-          .startsWith("aresample=osf=s32p:" + TUNED_RESAMPLER + ",pan=6.1(back)|")
+          .startsWith(FILL_IN_GAPS + ",aresample=osf=s32p:" + TUNED_RESAMPLER + ",pan=6.1(back)|")
+          .endsWith("," + FILL_FROM_ZERO);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"flac", "alac"})
+    @DisplayName(
+        "Should fill the gaps and the silence before the audio after the format stage alone when a"
+            + " lossless encode dithers without resampling")
+    void shouldFillTheGapsAfterTheFormatStageAloneWhenALosslessEncodeDithersWithoutResampling(
+        String codec) {
+      var audio = encodeBuilder(codec, "stereo").outputBitDepth(OptionalInt.of(16)).build();
+
+      var cmd = command(audio, Optional.of(hiResFlac(48_000, 24)));
+
+      assertThat(audioFilter(cmd))
+          .startsWith("aresample=osf=s16")
+          .contains(":dither_method=triangular:")
           .endsWith("," + FILL_FROM_ZERO)
           .containsOnlyOnce(FILL_IN_GAPS);
     }
@@ -1026,10 +1060,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
               Optional.of(hiResFlac(48_000, 24)),
               Optional.of(Duration.ofSeconds(66)));
 
-      assertThat(audioFilter(padded))
-          .containsOnlyOnce(FILL_IN_GAPS)
+      var filter = audioFilter(padded);
+      assertThat(filter)
           .contains(FILL_FROM_ZERO + ",")
           .endsWith(",apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67");
+      assertThat(filter.substring(filter.indexOf(",apad,"))).doesNotContain(FILL_IN_GAPS);
     }
   }
 

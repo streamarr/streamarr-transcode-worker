@@ -47,8 +47,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     var stages = filters(encoder, audio, source, rate, channels);
     var filters =
         encoder == Encoder.LOSSLESS
-            ? filledAroundTheDither(
-                stages.filters(), holdsSamples(rate, source, channels), fillStart)
+            ? filledAroundTheDither(stages, holdsSamples(rate, source, channels), fillStart)
             : filledFirst(stages.filters(), fillStart);
 
     var outputOptions = new ArrayList<>(List.of("-c:a", encoder.ffmpegName(audio.codec())));
@@ -104,18 +103,20 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   }
 
   // A FLAC or ALAC encode's format stage can dither, and dither would turn the fill's silence into
-  // noise. That stage holds no samples, so where no resampler or limiter runs before it, the fill
-  // follows it and its silence stays digital. A resampler or a downmix's limiter would join the
-  // audio on both sides of a gap, so a fill before it fills the gaps, and only the silence before
-  // the first frame, which a second fill writes after the format stage, stays digital.
+  // noise, so a fill after the format stage writes the silence before the first frame. A resampler
+  // or a downmix's limiter would join the audio on both sides of a gap, so a fill before it fills
+  // the gaps, even where the format stage then dithers their silence. When FFmpeg rebuilds the
+  // graph for a new source rate, the format stage resamples too, so a fill before it also fills
+  // the gaps wherever that stage adds no dither. Only a format stage that dithers, with nothing
+  // before it that holds samples, leaves the gaps to the fill after it.
   private static List<String> filledAroundTheDither(
-      List<String> stages, boolean holdsSamples, Duration start) {
+      Stages stages, boolean holdsSamples, Duration start) {
     var filters = new ArrayList<String>();
-    if (holdsSamples) {
+    if (holdsSamples || !stages.dithers()) {
       filters.add(GapFillFilter.inGaps());
     }
 
-    filters.addAll(stages);
+    filters.addAll(stages.filters());
     filters.add(GapFillFilter.from(start));
     return filters;
   }

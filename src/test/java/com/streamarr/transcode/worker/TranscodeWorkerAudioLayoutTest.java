@@ -247,7 +247,7 @@ class TranscodeWorkerAudioLayoutTest {
                 """)
             .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
             .outputChannels(2)
-            .audioFilter("aresample=osf=s16:" + tunedResampler + ",agapfill=start=0")
+            .audioFilter("agapfill,aresample=osf=s16:" + tunedResampler + ",agapfill=start=0")
             .flacFrameSize("2205")
             .build(),
         ReadAudioStream.builder()
@@ -260,7 +260,7 @@ class TranscodeWorkerAudioLayoutTest {
                 """)
             .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
             .outputChannels(6)
-            .audioFilter("aresample=osf=s32:" + tunedResampler + ",agapfill=start=0")
+            .audioFilter("agapfill,aresample=osf=s32:" + tunedResampler + ",agapfill=start=0")
             .flacFrameSize("2400")
             .build(),
         ReadAudioStream.builder()
@@ -274,7 +274,7 @@ class TranscodeWorkerAudioLayoutTest {
             .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
             .outputChannels(6)
             .audioFilter(
-                "aresample=osf=s32:"
+                "agapfill,aresample=osf=s32:"
                     + tunedResampler
                     + ",channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|BL-SL|BR-SR"
                     + ":channel_layout=5.1(side),agapfill=start=0")

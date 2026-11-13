@@ -6802,6 +6802,104 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // FFmpeg builds a new filter graph when the decoded audio's sample rate changes, and keeps the
+  // encoder at the rate it opened with, so a FLAC or ALAC encode's format stage then resamples. A
+  // resampler holds samples, and would carry the last samples before a gap across it. The source's
+  // tone runs at 48 kHz to 4 s, then at 44.1 kHz to its gap from 6 s to 6.6 s, and only digital
+  // silence follows the gap. The encode writes the source's 24 bits, so its format stage adds no
+  // dither. The resampler rings into the gap's first 3 ms.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"flac", "alac"})
+  @DisplayName(
+      "Should play none of the audio before a gap inside or after the gap when a lossless encode's"
+          + " source changes its sample rate before the gap")
+  void shouldPlayNoneOfTheAudioBeforeAGapInsideOrAfterItWhenTheSourceChangesItsSampleRate(
+      String codec) throws Exception {
+    var source = sampleRateChangeSource();
+    var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    var gap = SampleRange.ofMillis(6_000, 6_600);
+    var afterTheRinging = gap.from() + 3 * COUNTED_AUDIO_SAMPLE_RATE / 1_000;
+    assertThat(
+            delivered.samplesBeyond(
+                SIXTY_DECIBELS_BELOW_FULL_SCALE, afterTheRinging, GAPPED_SOURCE_END_SAMPLES))
+        .as(
+            "samples louder than -60 dBFS from 3 ms after the gap's start at 6 s to the advertised"
+                + " end at 12 s")
+        .isZero();
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 12 s, beside 24-bit mono FLAC: a 1 kHz
+  // tone at -6 dBFS at 48 kHz to 4 s, then at 44.1 kHz the tone to 6 s and digital silence to 12 s,
+  // of which every frame from 6 s to 6.6 s is cut out.
+  private static synchronized Path sampleRateChangeSource() throws Exception {
+    var source = seekableSources.resolve("tone-changes-its-sample-rate-before-a-gap.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      var at48 = seekableSources.resolve("tone-at-48-khz.mka");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc='0.5*sin(2*PI*1000*t)':s=48000:d=4:c=mono",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s32",
+              "-frame_size",
+              "4800"),
+          at48);
+      var at44 = seekableSources.resolve("tone-then-silence-at-44-1-khz.mka");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc='if(lt(t,2),0.5*sin(2*PI*1000*t),0)':s=44100:d=8:c=mono",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s32",
+              "-frame_size",
+              "4410"),
+          at44);
+      var parts = seekableSources.resolve("tone-changes-its-sample-rate.txt");
+      Files.writeString(parts, "file '" + at48 + "'\nfile '" + at44 + "'\n");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=12",
+              "-f",
+              "concat",
+              "-safe",
+              "0",
+              "-i",
+              parts.toString(),
+              "-map",
+              "0:v",
+              "-map",
+              "1:a",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "copy",
+              "-bsf:a",
+              "noise=drop='between(pts*tb,6,6.59)'"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   @Test
   @DisplayName(
       "Should upload only the audio of its own interval in the segment that holds the video's end"
