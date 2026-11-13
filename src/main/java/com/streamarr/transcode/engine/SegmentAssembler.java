@@ -350,12 +350,14 @@ final class SegmentAssembler {
     // The segment takes only the audio that starts inside its interval, so the audio beside video
     // that a late keyframe leaves past the interval's end belongs to the next segment. The output's
     // last segment has no next segment to carry it.
+    var intervalEnd = intervals.endOf(segment.sequenceNumber(), timescale);
     var end = lastPictureEnd;
     if (!segment.lastOfTheOutput()) {
-      end = Math.min(end, intervals.endOf(segment.sequenceNumber(), timescale).orElse(end));
+      end = Math.min(end, intervalEnd.orElse(end));
     }
 
-    var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
+    var timeBase = new TimeBase(1, timescale);
+    var videoEnd = new MediaTime(end, timeBase);
     if (earlierTail.isEmpty() && comesBeforeTheCopiedAudiosFirstSample(samples, videoEnd)) {
       throw new FragmentedMp4Exception(
           Reason.COPIED_AUDIO_RAN_SHORT,
@@ -376,11 +378,8 @@ final class SegmentAssembler {
     }
 
     var frameDuration = oneVideoFrame(videoSamples);
-    var beforeLastFrame = new MediaTime(end - frameDuration, new TimeBase(1, timescale));
     if (videoDecision instanceof VideoDecision.Encode
-        && audioTail
-            .filter(tail -> tail.coversToWithinOneFrame(videoEnd, beforeLastFrame))
-            .isPresent()) {
+        && reachesToWithinOneFrame(audioTail, videoEnd, frameDuration)) {
       return;
     }
 
@@ -398,6 +397,16 @@ final class SegmentAssembler {
 
     throw new FragmentedMp4Exception(
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
+  }
+
+  // Whether the copied audio reaches this end of the segment's video to within one audio or video
+  // frame: past the start of the video's last frame, or with one full audio frame more.
+  private static boolean reachesToWithinOneFrame(
+      Optional<AudioTail> audioTail, MediaTime videoEnd, long frameDuration) {
+    var beforeLastFrame = new MediaTime(videoEnd.ticks() - frameDuration, videoEnd.timeBase());
+    return audioTail
+        .filter(tail -> tail.coversToWithinOneFrame(videoEnd, beforeLastFrame))
+        .isPresent();
   }
 
   // Whether a segment that no copied audio reached before it comes before the copied audio's first
