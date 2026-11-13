@@ -982,7 +982,7 @@ class ProducerTest {
       shouldRefuseTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioStopsInsideTheIntervalAndResumesAfterIt() {
     var producer =
         producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
-            audioSamples(24, 1_000), audioSamples(4, 1_000));
+            audioSamples(24, 1_000), 48_000);
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
     assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
@@ -1001,7 +1001,7 @@ class ProducerTest {
       shouldDeliverTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioResumesAfterItWithinOneFrameOfWhereItStopped() {
     var producer =
         producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
-            joined(audioSamples(47, 1_000), audioSamples(1, 952)), audioSamples(4, 1_000));
+            joined(audioSamples(47, 1_000), audioSamples(1, 952)), 48_000);
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
@@ -1009,9 +1009,9 @@ class ProducerTest {
 
   // A fragment from a keyframe at 0 s holds 24 pictures of 1/24 s and copied audio of these
   // durations from 0 s. Without a keyframe, a second fragment holds two more pictures, to 1.083 s,
-  // and copied audio of those durations from 1 s.
+  // and four copied audio samples of 1/48 s from this tick of the audio's 48,000.
   private Producer producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
-      Integer[] audioBeforeOneSecond, Integer[] audioFromOneSecond) {
+      Integer[] audioBeforeOneSecond, long laterAudioStart) {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
@@ -1023,7 +1023,7 @@ class ProducerTest {
             TimedFragment.frameAt(24_000)
                 .videoDuration(1_000)
                 .videoSampleCount(2)
-                .audioFrom(48_000, audioFromOneSecond)
+                .audioFrom(laterAudioStart, audioSamples(4, 1_000))
                 .build());
     var process = ScriptedProcess.builder().output(output.bytes()).build();
     return producerOfOneSecondSegments(process)
