@@ -59,7 +59,7 @@ class FfprobeExecutorPacketScanNoKeyframesTest {
 
     var report = executorScanning(printing(packetScan)).probe(source, request());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setUnavailable(
@@ -67,7 +67,7 @@ class FfprobeExecutorPacketScanNoKeyframesTest {
                         .setReason(
                             KeyframesUnavailableReason.KEYFRAMES_UNAVAILABLE_REASON_NO_KEYFRAMES))
                 .build());
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   // A scan that stopped early has not read every packet, so it fails for a retry: the server keeps
@@ -95,7 +95,8 @@ class FfprobeExecutorPacketScanNoKeyframesTest {
 
     var report = executorScanning(packetScan).probe(source, request());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   private static FfprobeExecutor executorScanning(Process packetScan) {

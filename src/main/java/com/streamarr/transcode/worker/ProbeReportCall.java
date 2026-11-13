@@ -1,0 +1,119 @@
+package com.streamarr.transcode.worker;
+
+import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
+import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReportMetadata;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
+import com.google.protobuf.ByteString;
+import io.grpc.Context;
+import io.grpc.StatusException;
+import io.grpc.stub.BlockingClientCall;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * One probe attempt's report call (ADR 0062). The first message names the worker session, the
+ * worker and the probe attempt, and states the length of the encoded probe report. Every later
+ * message holds consecutive bytes of that encoding. The server then answers once with the length it
+ * accepted. The upload deadline covers the whole call, from its opening to the server's answer.
+ */
+final class ProbeReportCall {
+
+  /** The most bytes of the encoded report that one message carries. */
+  private static final int MESSAGE_BYTES = 64 * 1024;
+
+  private final UUID probeAttemptId;
+  private final ByteString encoded;
+  // Cancelling the context ends the open call from any thread without touching the call, which
+  // only the report thread uses.
+  private final Context.CancellableContext cancellation = Context.ROOT.withCancellation();
+
+  ProbeReportCall(ProbeAttemptReport report) {
+    probeAttemptId = fromProto(report.getResult().getProbeAttemptId());
+    encoded = report.toByteString();
+  }
+
+  /** Opens a report call for the worker session that produced the report. */
+  @FunctionalInterface
+  interface Opener {
+
+    /**
+     * Names the worker session and the worker in the first message's metadata and opens the call in
+     * the context, whose cancellation ends it, or returns nothing, and opens no call, when that
+     * worker session has ended. A call that opens in a cancelled context never reaches the server.
+     */
+    Optional<BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse>> open(
+        ProbeAttemptReportMetadata.Builder metadata, Context context);
+  }
+
+  UUID probeAttemptId() {
+    return probeAttemptId;
+  }
+
+  /**
+   * Sends the report and waits for the server's answer.
+   *
+   * @return whether the call opened; the report of a worker session that has ended is never sent
+   * @throws StatusException when the call ended without the server's answer
+   * @throws WorkerJobException when the server accepted another length than the report's
+   */
+  boolean send(Opener opener) throws InterruptedException, StatusException {
+    var metadata =
+        ProbeAttemptReportMetadata.newBuilder()
+            .setProbeAttemptId(toProto(probeAttemptId))
+            .setReportLengthBytes(encoded.size());
+    try (cancellation) {
+      var call = opener.open(metadata, cancellation);
+      if (call.isEmpty()) {
+        return false;
+      }
+
+      sendOn(call.get(), metadata);
+      return true;
+    }
+  }
+
+  private void sendOn(
+      BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call,
+      ProbeAttemptReportMetadata.Builder metadata)
+      throws InterruptedException, StatusException {
+    var accepted = acceptedLength(call, metadata);
+    if (accepted.filter(length -> length == encoded.size()).isEmpty()) {
+      throw new WorkerJobException(
+          "Server accepted "
+              + accepted.map(String::valueOf).orElse("no")
+              + " bytes of a probe report of "
+              + encoded.size());
+    }
+  }
+
+  // A write after the server has closed the call sends nothing, and the answer then decides. A
+  // cancelled context ends the call's stream but leaves the end of its deadline timer to the call's
+  // close, which only this thread reads, so this thread cancels a call that it leaves open.
+  private Optional<Long> acceptedLength(
+      BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call,
+      ProbeAttemptReportMetadata.Builder metadata)
+      throws InterruptedException, StatusException {
+    try {
+      call.write(ReportProbeAttemptRequest.newBuilder().setMetadata(metadata).build());
+      for (var sent = 0; sent < encoded.size(); sent += MESSAGE_BYTES) {
+        var end = Math.min(sent + MESSAGE_BYTES, encoded.size());
+        call.write(
+            ReportProbeAttemptRequest.newBuilder().setData(encoded.substring(sent, end)).build());
+      }
+
+      return CallAnswers.answerOf(call).map(ReportProbeAttemptResponse::getAcceptedLengthBytes);
+    } catch (InterruptedException | RuntimeException e) {
+      call.cancel("The worker left the report call", e);
+      throw e;
+    }
+  }
+
+  /** Ends the open call, or keeps the call from reaching the server when it has not opened yet. */
+  void cancel(Throwable reason) {
+    cancellation.cancel(reason);
+  }
+}

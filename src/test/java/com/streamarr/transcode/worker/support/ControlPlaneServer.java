@@ -12,17 +12,29 @@ import lombok.NonNull;
 /** A scripted control plane's gRPC server on an ephemeral port. */
 public final class ControlPlaneServer implements AutoCloseable {
 
+  // gRPC's own default for the largest message that a server reads.
+  private static final int DEFAULT_INBOUND_MESSAGE_BYTES = 4 * 1024 * 1024;
+
   private final BindableService service;
   private final boolean callbacksInFrameOrder;
+  private final int inboundMessageBytes;
   private Server server;
 
   public ControlPlaneServer(@NonNull BindableService service) {
-    this(service, false);
+    this(service, false, DEFAULT_INBOUND_MESSAGE_BYTES);
   }
 
-  private ControlPlaneServer(BindableService service, boolean callbacksInFrameOrder) {
+  private ControlPlaneServer(
+      BindableService service, boolean callbacksInFrameOrder, int inboundMessageBytes) {
     this.service = service;
     this.callbacksInFrameOrder = callbacksInFrameOrder;
+    this.inboundMessageBytes = inboundMessageBytes;
+  }
+
+  /** A server that, as Streamarr's does, refuses a message longer than this many bytes. */
+  public static ControlPlaneServer withInboundMessageLimit(
+      @NonNull BindableService service, int inboundMessageBytes) {
+    return new ControlPlaneServer(service, false, inboundMessageBytes);
   }
 
   /**
@@ -31,11 +43,14 @@ public final class ControlPlaneServer implements AutoCloseable {
    * block.
    */
   public static ControlPlaneServer withCallbacksInFrameOrder(@NonNull BindableService service) {
-    return new ControlPlaneServer(service, true);
+    return new ControlPlaneServer(service, true, DEFAULT_INBOUND_MESSAGE_BYTES);
   }
 
   public void start() throws IOException {
-    var builder = NettyServerBuilder.forPort(0).addService(service);
+    var builder =
+        NettyServerBuilder.forPort(0)
+            .maxInboundMessageSize(inboundMessageBytes)
+            .addService(service);
     if (callbacksInFrameOrder) {
       builder.directExecutor();
     }

@@ -591,7 +591,7 @@ class FfprobeExecutorCodecStringTest {
                     .build();
               });
 
-      var result = executor.probe(Path.of("/media/source"), request()).result();
+      var result = executor.probe(Path.of("/media/source"), request()).getResult();
 
       assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
     }

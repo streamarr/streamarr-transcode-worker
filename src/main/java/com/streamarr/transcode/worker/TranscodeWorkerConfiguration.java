@@ -14,14 +14,12 @@ public record TranscodeWorkerConfiguration(
     int availableSlots,
     @NonNull BackgroundProbeCapacity backgroundProbeCapacity,
     @NonNull Map<UUID, Path> sourceNamespaces,
-    Duration uploadReadinessTimeout,
-    Duration uploadAcknowledgementTimeout,
+    Duration uploadDeadline,
     Duration sessionAcceptanceTimeout,
     Duration audioStreamReadTimeout,
     Duration hardwareEncoderRecheckInterval) {
 
-  static final Duration DEFAULT_UPLOAD_READINESS_TIMEOUT = Duration.ofSeconds(30);
-  static final Duration DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(60);
+  static final Duration DEFAULT_UPLOAD_DEADLINE = Duration.ofSeconds(60);
   // Covers a server cold start, database migrations included, when both start together.
   static final Duration DEFAULT_SESSION_ACCEPTANCE_TIMEOUT = Duration.ofMinutes(5);
   // ffprobe reads a healthy source's first audio stream within a second.
@@ -35,11 +33,8 @@ public record TranscodeWorkerConfiguration(
     }
 
     sourceNamespaces = Map.copyOf(sourceNamespaces);
-    if (uploadReadinessTimeout == null) {
-      uploadReadinessTimeout = DEFAULT_UPLOAD_READINESS_TIMEOUT;
-    }
-    if (uploadAcknowledgementTimeout == null) {
-      uploadAcknowledgementTimeout = DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT;
+    if (uploadDeadline == null) {
+      uploadDeadline = DEFAULT_UPLOAD_DEADLINE;
     }
 
     if (sessionAcceptanceTimeout == null) {

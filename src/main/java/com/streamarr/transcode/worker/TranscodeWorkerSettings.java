@@ -47,16 +47,11 @@ record TranscodeWorkerSettings(
             .availableSlots(positiveInteger(environment, PREFIX + "SLOTS", 1))
             .backgroundProbeCapacity(backgroundProbeCapacity(environment, availableCores))
             .sourceNamespaces(Map.of(sourceNamespaceId, path(environment, PREFIX + "SOURCE_ROOT")))
-            .uploadReadinessTimeout(
+            .uploadDeadline(
                 positiveDuration(
                     environment,
-                    PREFIX + "UPLOAD_READINESS_TIMEOUT",
-                    TranscodeWorkerConfiguration.DEFAULT_UPLOAD_READINESS_TIMEOUT))
-            .uploadAcknowledgementTimeout(
-                positiveDuration(
-                    environment,
-                    PREFIX + "UPLOAD_ACKNOWLEDGEMENT_TIMEOUT",
-                    TranscodeWorkerConfiguration.DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT))
+                    PREFIX + "UPLOAD_DEADLINE",
+                    TranscodeWorkerConfiguration.DEFAULT_UPLOAD_DEADLINE))
             .sessionAcceptanceTimeout(
                 positiveDuration(
                     environment,

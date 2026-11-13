@@ -35,7 +35,10 @@ final class ProbeSummary {
     running.put(attemptId, clock.nanoTime());
   }
 
-  /** Counts a sent result. A probe that the worker refused before it started has no start. */
+  /**
+   * Counts an ended probe by its result, also when the server canceled the probe and the worker
+   * sends no probe report. A probe that the worker refused before it started has no start.
+   */
   synchronized void finished(@NonNull UUID attemptId, @NonNull ProbeAttemptResult result) {
     finished++;
     if (result.hasFailure()) {

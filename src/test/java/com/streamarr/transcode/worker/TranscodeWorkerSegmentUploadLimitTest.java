@@ -158,19 +158,17 @@ class TranscodeWorkerSegmentUploadLimitTest {
   @Test
   @DisplayName(
       "Should fail the attempt as a transcode failure without opening an upload when no upload"
-          + " ends within the acknowledgement timeout")
-  void shouldFailTheAttemptWithoutOpeningAnUploadWhenNoUploadEndsWithinTheAcknowledgementTimeout()
+          + " ends within the upload deadline")
+  void shouldFailTheAttemptWithoutOpeningAnUploadWhenNoUploadEndsWithinTheUploadDeadline()
       throws Exception {
     var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(1);
     var holding = variantJobBuilder().build();
+    var ahead = variantJobBuilder().build();
     var queued = variantJobBuilder().build();
-    // The holding upload waits for readiness far beyond the acknowledgement timeout, and it sends
-    // nothing, so only the queued segment's wait can end within the test.
-    var configuration =
-        configurationBuilder()
-            .uploadReadinessTimeout(Duration.ofMinutes(5))
-            .uploadAcknowledgementTimeout(Duration.ofMillis(200))
-            .build();
+    // The server answers no upload, so each call ends at its deadline. The segment ahead opens its
+    // call only when the holding call ends, so that call is still open when the queued segment has
+    // waited one upload deadline.
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofSeconds(1)).build();
 
     try (var worker =
         worker(
@@ -181,9 +179,11 @@ class TranscodeWorkerSegmentUploadLimitTest {
                 .build())) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
-      connection.withholdUploadReadiness();
+      connection.withholdAcknowledgements();
       startVariant(connection, holding);
-      promptly().until(() -> connection.uploads().size() == 1);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 1);
+      startVariant(connection, ahead);
+      promptly().until(() -> worker.queuedSegmentUploads() == 1);
 
       startVariant(connection, queued);
 
@@ -191,10 +191,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
       assertThat(terminalEventOf(connection, queued)).contains(EventCase.JOB_ATTEMPT_FAILED);
       assertThat(failureOf(connection, queued))
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(connection.uploads())
-          .singleElement()
-          .satisfies(upload -> assertThat(upload.wasCancelled()).isFalse());
-      assertThat(terminalEventOf(connection, holding)).isEmpty();
+      assertThat(uploadsOf(connection, queued)).isEmpty();
       assertThat(worker.queuedSegmentUploads()).isZero();
     }
   }
@@ -202,17 +199,17 @@ class TranscodeWorkerSegmentUploadLimitTest {
   @Test
   @DisplayName(
       "Should fail the attempt as a transcode failure without opening an upload when an upload"
-          + " ends only after the queued segment's acknowledgement timeout")
-  void shouldFailTheAttemptWithoutOpeningAnUploadWhenAnUploadEndsOnlyAfterTheQueuedSegmentsTimeout()
-      throws Exception {
+          + " ends only after the queued segment's upload deadline")
+  void
+      shouldFailTheAttemptWithoutOpeningAnUploadWhenAnUploadEndsOnlyAfterTheQueuedSegmentsDeadline()
+          throws Exception {
     var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(1);
     var holding = variantJobBuilder().build();
     var queued = variantJobBuilder().build();
-    // The queued segment waits on the clock's reading of its timeout, so the clock can pass that
-    // timeout while the segment still waits, and the end of the holding upload then wakes it.
+    // The queued segment waits on the clock's reading of the upload deadline, so the clock can pass
+    // that deadline while the segment still waits, and the end of the holding upload then wakes it.
     var clock = new SteppedClock();
-    var configuration =
-        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMinutes(5)).build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMinutes(5)).build();
 
     try (var worker =
         worker(
@@ -243,6 +240,47 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
   @Test
   @DisplayName(
+      "Should give the upload of a segment that waited for a call the whole upload deadline when"
+          + " the call opens")
+  void shouldGiveTheUploadOfASegmentThatWaitedForACallTheWholeUploadDeadlineWhenTheCallOpens()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(1);
+    var holding = variantJobBuilder().build();
+    var queued = variantJobBuilder().build();
+    // The queued segment's wait passes four of the five minutes on the clock, which counts the
+    // wait, and leaves the call's deadline to count from the call's opening.
+    var clock = new SteppedClock();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMinutes(5)).build();
+
+    try (var worker =
+        worker(
+            WorkerSetup.builder()
+                .runtime(runtime)
+                .launcher(writingTheRecording())
+                .configuration(configuration)
+                .clock(clock)
+                .build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, holding);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 1);
+      startVariant(connection, queued);
+      promptly().until(() -> worker.queuedSegmentUploads() == 1);
+      clock.advance(Duration.ofMinutes(4));
+
+      connection.acknowledgeAwaitingUploads();
+
+      promptly().until(() -> !uploadsOf(connection, queued).isEmpty());
+      assertThat(firstUploadOf(connection, queued).deadline())
+          .hasValueSatisfying(
+              deadline ->
+                  assertThat(deadline.timeRemaining(TimeUnit.MINUTES)).isGreaterThanOrEqualTo(4));
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should stop the attempt without opening an upload when it stops while its segment waits"
           + " for an upload")
   void shouldStopTheAttemptWithoutOpeningAnUploadWhenItStopsWhileItsSegmentWaitsForAnUpload()
@@ -263,7 +301,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
       stopVariant(connection, queued);
 
-      // The default acknowledgement timeout of 60 s outlasts this wait, so only the stop ends it.
+      // The default upload deadline of 60 s outlasts this wait, so only the stop ends it.
       promptly().until(() -> terminalEventOf(connection, queued).isPresent());
       assertThat(terminalEventOf(connection, queued)).contains(EventCase.JOB_ATTEMPT_STOPPED);
       assertThat(worker.queuedSegmentUploads()).isZero();
@@ -295,7 +333,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
       connection.fail("the server went away");
 
-      // The default acknowledgement timeout of 60 s outlasts this wait, so only the session's end
+      // The default upload deadline of 60 s outlasts this wait, so only the session's end
       // ends it.
       promptly().until(() -> worker.queuedSegmentUploads() == 0);
       assertThat(connection.uploads()).hasSize(1);
@@ -498,13 +536,13 @@ class TranscodeWorkerSegmentUploadLimitTest {
   @Test
   @DisplayName(
       "Should fail the attempt as a transcode failure when the server refuses the segment at the"
-          + " worker's segment upload limit for an acknowledgement timeout from its first refusal")
-  void shouldFailTheAttemptWhenServerRefusesTheSegmentAtTheLimitForTheAcknowledgementTimeout()
+          + " worker's segment upload limit for an upload deadline from its first wait")
+  void shouldFailTheAttemptWhenServerRefusesTheSegmentAtTheLimitForTheUploadDeadline()
       throws Exception {
     var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
     var job = variantJobBuilder().build();
 
-    try (var worker = workerWithATimeoutBeyondTheLongestDelayBetweenUploads(runtime)) {
+    try (var worker = workerWithADeadlineBeyondTheLongestDelayBetweenUploads(runtime)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       connection.refuseUploadsAtTheWorkersLimit();
@@ -521,6 +559,51 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt as a transcode failure when the server keeps refusing a queued"
+          + " segment past the upload deadline counted from the segment's first wait")
+  void shouldFailTheAttemptWhenTheServerKeepsRefusingAQueuedSegmentPastItsFirstWaitsDeadline()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(1);
+    var holding = variantJobBuilder().build();
+    var queued = variantJobBuilder().build();
+    // The queued segment waits four of the five minutes on the clock before its first refusal, and
+    // the clock then passes the five minutes from its first wait while refusals keep it waiting.
+    var clock = new SteppedClock();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMinutes(5)).build();
+
+    try (var worker =
+        worker(
+            WorkerSetup.builder()
+                .runtime(runtime)
+                .launcher(writingTheRecording())
+                .configuration(configuration)
+                .clock(clock)
+                .build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, holding);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 1);
+      startVariant(connection, queued);
+      promptly().until(() -> worker.queuedSegmentUploads() == 1);
+      clock.advance(Duration.ofMinutes(4));
+      connection.refuseUploadsAtTheWorkersLimit();
+      connection.acknowledgeAwaitingUploads();
+      promptly().until(() -> !uploadsOf(connection, queued).isEmpty());
+
+      clock.advance(Duration.ofMinutes(2));
+
+      promptly().until(() -> terminalEventOf(connection, queued).isPresent());
+      assertThat(terminalEventOf(connection, queued)).contains(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(failureOf(connection, queued))
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(uploadsOf(connection, queued))
+          .allSatisfy(upload -> assertThat(upload.wasRefused()).isTrue());
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should wait between the uploads of a refused segment when the server keeps refusing it at"
           + " the worker's segment upload limit")
   void shouldWaitBetweenTheUploadsOfARefusedSegmentWhenServerKeepsRefusingItAtTheWorkersLimit()
@@ -528,7 +611,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
     var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
     var job = variantJobBuilder().build();
 
-    try (var worker = workerWithATimeoutBeyondTheLongestDelayBetweenUploads(runtime)) {
+    try (var worker = workerWithADeadlineBeyondTheLongestDelayBetweenUploads(runtime)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       connection.refuseUploadsAtTheWorkersLimit();
@@ -536,17 +619,16 @@ class TranscodeWorkerSegmentUploadLimitTest {
       startVariant(connection, job);
 
       promptly().until(() -> terminalEventOf(connection, job).isPresent());
-      // Opening the call again at once would open thousands within the timeout.
+      // Opening the call again at once would open thousands within the upload deadline.
       assertThat(connection.uploads()).hasSizeBetween(2, 10);
     }
   }
 
-  // Only a timeout counted from a segment's first refusal can end the segment's wait, because each
-  // delay between its uploads is shorter than the acknowledgement timeout.
-  private TranscodeWorker workerWithATimeoutBeyondTheLongestDelayBetweenUploads(
+  // Only a deadline counted from a segment's first wait can end the segment's wait, because each
+  // delay between its uploads is shorter than the upload deadline.
+  private TranscodeWorker workerWithADeadlineBeyondTheLongestDelayBetweenUploads(
       ScriptedWorkerRuntime runtime) {
-    var configuration =
-        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofSeconds(2)).build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofSeconds(2)).build();
     return worker(
         WorkerSetup.builder()
             .runtime(runtime)
@@ -628,7 +710,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
       stopVariant(connection, job);
 
-      // The default acknowledgement timeout of 60 s outlasts this wait, so only the stop ends it.
+      // The default upload deadline of 60 s outlasts this wait, so only the stop ends it.
       promptly().until(() -> terminalEventOf(connection, job).isPresent());
       assertThat(terminalEventOf(connection, job)).contains(EventCase.JOB_ATTEMPT_STOPPED);
       assertThat(worker.queuedSegmentUploads()).isZero();
@@ -657,7 +739,7 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
       connection.fail("the server went away");
 
-      // The default acknowledgement timeout of 60 s outlasts this wait, so only the session's end
+      // The default upload deadline of 60 s outlasts this wait, so only the session's end
       // ends it.
       promptly().until(() -> worker.queuedSegmentUploads() == 0);
       assertThat(connection.uploads())

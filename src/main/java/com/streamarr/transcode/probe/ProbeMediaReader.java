@@ -70,7 +70,7 @@ final class ProbeMediaReader {
 
   /**
    * The titles and handler names of one result take at most {@link
-   * StreamLabels#MAXIMUM_ENCODED_BYTES}, so that a file's text cannot fill the session message.
+   * StreamLabels#MAXIMUM_ENCODED_BYTES} (ADR 0032).
    */
   private static void addLabels(
       ProbeMediaInfo.Builder media, Map<ProbeStreamInfo.Builder, StreamLabels> labels) {

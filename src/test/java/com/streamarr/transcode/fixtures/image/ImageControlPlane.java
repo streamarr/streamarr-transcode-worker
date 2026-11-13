@@ -10,6 +10,8 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
+import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
@@ -19,6 +21,7 @@ import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
+import com.streamarr.transcode.worker.support.ReceivedProbeReports;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.grpc.Server;
@@ -52,6 +55,8 @@ public final class ImageControlPlane
 
   private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
   private final CompletableFuture<ProbeAttemptResult> probe = new CompletableFuture<>();
+  private final ReceivedProbeReports probeReports =
+      new ReceivedProbeReports(report -> probe.complete(report.getResult()));
   private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
   private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
   private final CompletableFuture<JobAttemptStarted> started = new CompletableFuture<>();
@@ -270,9 +275,6 @@ public final class ImageControlPlane
         if (request.hasRegistration()) {
           registration.complete(request.getRegistration());
         }
-        if (request.hasProbeResult()) {
-          probe.complete(request.getProbeResult());
-        }
         if (request.hasJobAttemptCompleted()) {
           completed.complete(request.getJobAttemptCompleted());
           var cause =
@@ -326,6 +328,12 @@ public final class ImageControlPlane
     failed.completeExceptionally(failure);
     started.completeExceptionally(failure);
     disconnected.complete(true);
+  }
+
+  @Override
+  public StreamObserver<ReportProbeAttemptRequest> reportProbeAttempt(
+      StreamObserver<ReportProbeAttemptResponse> responseObserver) {
+    return probeReports.serve(responseObserver);
   }
 
   @Override

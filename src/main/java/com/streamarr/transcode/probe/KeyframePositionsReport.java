@@ -3,11 +3,9 @@ package com.streamarr.transcode.probe;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.MeasuredStream;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
-import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
@@ -15,7 +13,6 @@ import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.ArrayList;
 import java.util.List;
 import lombok.Builder;
 import lombok.NonNull;
@@ -35,32 +32,12 @@ record KeyframePositionsReport(
     @NonNull List<KeyframeTime> keyframes,
     List<TrackMeasurement> measured) {
 
-  /** The contract bounds each list of a ProbeKeyframePositionsPart to this many entries. */
-  static final int MAXIMUM_KEYFRAMES_PER_PART = 4_096;
-
-  /** The contract bounds the entries across one attempt's ProbeKeyframePositionsPart messages. */
-  static final int MAXIMUM_KEYFRAMES_PER_PROBE = 1_048_576;
-
-  /** The contract bounds the interval entries across one attempt's measurement parts. */
-  static final long MAXIMUM_INTERVALS_PER_PROBE = 8_388_608;
-
-  /** The contract bounds the streams that one attempt's measurement parts name. */
-  static final int MAXIMUM_MEASURED_STREAMS = 1_024;
-
   KeyframePositionsReport {
     keyframes = List.copyOf(keyframes);
     measured = measured == null ? List.of() : List.copyOf(measured);
   }
 
   ProbeAttemptReport report() {
-    if (keyframes.size() > MAXIMUM_KEYFRAMES_PER_PROBE) {
-      return ProbeAttemptReport.resultOnly(
-          probed.result().toBuilder()
-              .clearMedia()
-              .setFailure(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE)
-              .build());
-    }
-
     var start = containerStart(probed.ffprobeOutput(), timeBase);
     var zeroBased =
         keyframes.stream()
@@ -83,32 +60,45 @@ record KeyframePositionsReport(
                 .filter(stream -> stream.streamIndex() == streamIndex)
                 .findFirst()
                 .flatMap(TrackMeasurement::maximumFrameRate));
+    var report = withPositions(zeroBased);
     if (!isReportable(measured, zeroBased.size())) {
-      return ProbeAttemptReport.builder()
-          .keyframePositionsParts(parts(probed.result(), zeroBased))
-          .result(result)
-          .build();
+      return report.setResult(result).build();
     }
 
-    return ProbeAttemptReport.builder()
-        .keyframePositionsParts(parts(probed.result(), zeroBased))
-        .streamMeasurementParts(measurementParts(result, measured))
-        .result(
+    measured.forEach(
+        stream ->
+            report.addStreamMeasurementIntervals(
+                ProbeReports.intervals(
+                    stream.streamIndex(), stream.intervalBytes(), stream.intervalPacketCounts())));
+    return report
+        .setResult(
             result.toBuilder()
-                .setMedia(result.getMedia().toBuilder().setStreamMeasurements(measurements()))
-                .build())
+                .setMedia(result.getMedia().toBuilder().setStreamMeasurements(measurements())))
         .build();
+  }
+
+  // Each keyframe's times as deltas from the keyframe before it, and the first one's from 0.
+  private static ProbeAttemptReport.Builder withPositions(List<KeyframeTime> keyframes) {
+    var report = ProbeAttemptReport.newBuilder();
+    var previous = new KeyframeTime(0, 0);
+    for (var keyframe : keyframes) {
+      report
+          .addKeyframePresentationTimeDeltas(
+              keyframe.presentationTime() - previous.presentationTime())
+          .addKeyframeDecodeTimeDeltas(keyframe.decodeTime() - previous.decodeTime());
+      previous = keyframe;
+    }
+
+    return report;
   }
 
   /**
    * Whether the contract can carry the measurement: each stream has one entry for each keyframe,
-   * the time bases fit, and the entries stay within the attempt's bounds. A measurement that cannot
-   * be carried is left out, and the result reports no measurement.
+   * and the time bases fit. A measurement that cannot be carried is left out, and the result
+   * reports no measurement.
    */
   private static boolean isReportable(List<TrackMeasurement> measured, int keyframeCount) {
     return !measured.isEmpty()
-        && measured.size() <= MAXIMUM_MEASURED_STREAMS
-        && (long) keyframeCount * measured.size() <= MAXIMUM_INTERVALS_PER_PROBE
         && measured.stream()
             .allMatch(
                 stream ->
@@ -132,23 +122,6 @@ record KeyframePositionsReport(
     }
 
     return measurements;
-  }
-
-  private static List<ProbeStreamMeasurementPart> measurementParts(
-      ProbeAttemptResult result, List<TrackMeasurement> measured) {
-    var parts = new ArrayList<ProbeStreamMeasurementPart>();
-    for (var stream : measured) {
-      parts.addAll(
-          StreamMeasurementParts.of(
-              ProbeStreamMeasurementPart.newBuilder()
-                  .setProbeAttemptId(result.getProbeAttemptId())
-                  .setStreamIndex(stream.streamIndex())
-                  .build(),
-              stream.intervalBytes(),
-              stream.intervalPacketCounts()));
-    }
-
-    return parts;
   }
 
   static ProbeAttemptResult withKeyframes(
@@ -175,25 +148,5 @@ record KeyframePositionsReport(
         .multiply(BigDecimal.valueOf(timeBase.denominator()))
         .divide(BigDecimal.valueOf(timeBase.numerator()), 0, RoundingMode.HALF_UP)
         .longValueExact();
-  }
-
-  private static List<ProbeKeyframePositionsPart> parts(
-      ProbeAttemptResult result, List<KeyframeTime> keyframes) {
-    var parts = new ArrayList<ProbeKeyframePositionsPart>();
-    var previous = new KeyframeTime(0, 0);
-    for (var first = 0; first < keyframes.size(); first += MAXIMUM_KEYFRAMES_PER_PART) {
-      var part =
-          ProbeKeyframePositionsPart.newBuilder().setProbeAttemptId(result.getProbeAttemptId());
-      var end = Math.min(first + MAXIMUM_KEYFRAMES_PER_PART, keyframes.size());
-      for (var keyframe : keyframes.subList(first, end)) {
-        part.addPresentationTimeDeltas(keyframe.presentationTime() - previous.presentationTime());
-        part.addDecodeTimeDeltas(keyframe.decodeTime() - previous.decodeTime());
-        previous = keyframe;
-      }
-
-      parts.add(part.build());
-    }
-
-    return parts;
   }
 }

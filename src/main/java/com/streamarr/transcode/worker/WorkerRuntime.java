@@ -11,4 +11,7 @@ public interface WorkerRuntime {
       throws IOException;
 
   ExecutorService newProbeScope();
+
+  /** The executor whose threads send one worker session's probe reports. */
+  ExecutorService newProbeReportScope();
 }

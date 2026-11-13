@@ -1,14 +1,12 @@
 package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.cancel;
-import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.failure;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.processBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
@@ -45,8 +43,9 @@ class WorkerProbeCommandTest {
       cancel(connection, request);
       runtime.probes().drain();
 
-      assertThat(connection.results())
-          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId());
+      assertThat(connection.results()).isEmpty();
     }
   }
 }

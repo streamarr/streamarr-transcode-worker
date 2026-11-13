@@ -8,8 +8,8 @@ import build.buf.gen.streamarr.transcode.v1.BitrateScanChunkResult;
 import build.buf.gen.streamarr.transcode.v1.BitrateScanChunkStream;
 import build.buf.gen.streamarr.transcode.v1.BitrateScanChunkStreams;
 import build.buf.gen.streamarr.transcode.v1.BitrateScanCopyChangesPackets;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
 import com.streamarr.transcode.probe.ChunkPackets.AudioWindow;
 import com.streamarr.transcode.probe.ChunkPackets.SixBlockDuration;
 import com.streamarr.transcode.probe.ChunkPackets.StreamCounts;
@@ -647,9 +647,8 @@ final class BitrateScanChunkRun {
       ProbedSource probed, Timeline timeline, List<StreamCounts> counts) {
     var countsByStream = new HashMap<Integer, StreamCounts>();
     counts.forEach(stream -> countsByStream.put(stream.streamIndex(), stream));
-    var attemptId = probed.result().getProbeAttemptId();
     var streams = BitrateScanChunkStreams.newBuilder();
-    var parts = new ArrayList<ProbeStreamMeasurementPart>();
+    var report = ProbeAttemptReport.newBuilder();
     for (var stream : timeline.streams()) {
       var counted = countsByStream.get(stream.index());
       var start = KeyframePositionsReport.containerStart(probed.ffprobeOutput(), stream.timeBase());
@@ -665,28 +664,20 @@ final class BitrateScanChunkRun {
           .ifPresent(time -> measured.setFirstPresentationTime(Math.subtractExact(time, start)));
       counted.endTime().ifPresent(time -> measured.setEndTime(Math.subtractExact(time, start)));
       streams.addStreams(measured);
-      parts.addAll(
-          StreamMeasurementParts.of(
-              ProbeStreamMeasurementPart.newBuilder()
-                  .setProbeAttemptId(attemptId)
-                  .setStreamIndex(stream.index())
-                  .build(),
-              counted.intervalBytes(),
-              counted.intervalPacketCounts()));
+      report.addStreamMeasurementIntervals(
+          ProbeReports.intervals(
+              stream.index(), counted.intervalBytes(), counted.intervalPacketCounts()));
     }
 
-    return ProbeAttemptReport.builder()
-        .keyframePositionsParts(List.of())
-        .streamMeasurementParts(parts)
-        .result(
+    return report
+        .setResult(
             probed.result().toBuilder()
-                .setBitrateScanChunk(BitrateScanChunkResult.newBuilder().setMeasured(streams))
-                .build())
+                .setBitrateScanChunk(BitrateScanChunkResult.newBuilder().setMeasured(streams)))
         .build();
   }
 
   private static ProbeAttemptReport copyChangesPackets(ProbedSource probed, int streamIndex) {
-    return ProbeAttemptReport.resultOnly(
+    return ProbeReports.resultOnly(
         probed.result().toBuilder()
             .setBitrateScanChunk(
                 BitrateScanChunkResult.newBuilder()
@@ -696,7 +687,7 @@ final class BitrateScanChunkRun {
   }
 
   private static ProbeAttemptReport failed(ProbedSource probed, ProbeFailure failure) {
-    return ProbeAttemptReport.resultOnly(probed.result().toBuilder().setFailure(failure).build());
+    return ProbeReports.resultOnly(probed.result().toBuilder().setFailure(failure).build());
   }
 
   /** Passes each line of a listing to the chunk's packets, and counts the lines that it took. */

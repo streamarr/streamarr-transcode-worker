@@ -21,7 +21,6 @@ import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
@@ -29,13 +28,13 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
 import build.buf.gen.streamarr.transcode.v1.MeasuredStream;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
+import build.buf.gen.streamarr.transcode.v1.StreamMeasurementIntervals;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import com.streamarr.transcode.probe.SyntheticMp4.DurationRun;
@@ -133,7 +132,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), request);
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setPositions(
@@ -144,13 +143,10 @@ class FfprobeExecutorKeyframeTest {
                         .setSource(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_CONTAINER_INDEX)
                         .setKeyframeCount(4))
                 .build());
-    assertThat(report.keyframePositionsParts())
-        .containsExactly(
-            ProbeKeyframePositionsPart.newBuilder()
-                .setProbeAttemptId(request.getProbeAttemptId())
-                .addAllPresentationTimeDeltas(List.of(0L, 8_704L, 16_896L, 10_240L))
-                .addAllDecodeTimeDeltas(List.of(-1_024L, 8_704L, 16_896L, 10_240L))
-                .build());
+    assertThat(report.getKeyframePresentationTimeDeltasList())
+        .containsExactly(0L, 8_704L, 16_896L, 10_240L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList())
+        .containsExactly(-1_024L, 8_704L, 16_896L, 10_240L);
   }
 
   @Test
@@ -167,7 +163,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mkv-libavformat.mkv"), request);
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setPositions(
@@ -179,13 +175,9 @@ class FfprobeExecutorKeyframeTest {
                         .setKeyframeCount(4))
                 .build());
     // The container starts 23 ms before the video, at the first audio packet.
-    assertThat(report.keyframePositionsParts())
-        .containsExactly(
-            ProbeKeyframePositionsPart.newBuilder()
-                .setProbeAttemptId(request.getProbeAttemptId())
-                .addAllPresentationTimeDeltas(List.of(23L, 708L, 1_375L, 834L))
-                .addAllDecodeTimeDeltas(List.of(23L, 708L, 1_375L, 834L))
-                .build());
+    assertThat(report.getKeyframePresentationTimeDeltasList())
+        .containsExactly(23L, 708L, 1_375L, 834L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).containsExactly(23L, 708L, 1_375L, 834L);
   }
 
   @ParameterizedTest
@@ -201,13 +193,13 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture(fixture), keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setPacketScanRequired(
                     KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX)
                 .build());
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @ParameterizedTest
@@ -223,14 +215,14 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture(fixture), keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setPacketScanRequired(
                     KeyframePacketScanReason
                         .KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME)
                 .build());
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @ParameterizedTest
@@ -251,8 +243,9 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), request);
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
-    assertThat(report.result().hasMedia()).isFalse();
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
+    assertThat(report.getResult().hasMedia()).isFalse();
   }
 
   @ParameterizedTest(name = "{0}")
@@ -280,15 +273,17 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPacketScanRequired())
+    assertThat(report.getResult().getMedia().getKeyframes().getPacketScanRequired())
         .as(trackIdCase)
         .isEqualTo(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
   }
 
   @Test
-  @DisplayName("Should split the keyframe positions into parts when the source has many keyframes")
-  void shouldSplitKeyframePositionsIntoPartsWhenSourceHasManyKeyframes(@TempDir Path directory)
-      throws Exception {
+  @DisplayName(
+      "Should report every keyframe position in the one probe report when the source has many"
+          + " keyframes")
+  void shouldReportEveryKeyframePositionInTheOneProbeReportWhenSourceHasManyKeyframes(
+      @TempDir Path directory) throws Exception {
     var source =
         Files.write(
             directory.resolve("source.mp4"),
@@ -305,19 +300,18 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(5_000);
-    assertThat(report.keyframePositionsParts())
-        .extracting(ProbeKeyframePositionsPart::getDecodeTimeDeltasCount)
-        .containsExactly(4_096, 904);
-    assertThat(report.keyframePositionsParts().get(1).getDecodeTimeDeltas(0)).isEqualTo(1);
+    assertThat(report.getKeyframePresentationTimeDeltasCount()).isEqualTo(5_000);
+    assertThat(report.getKeyframeDecodeTimeDeltasCount()).isEqualTo(5_000);
+    assertThat(report.getKeyframeDecodeTimeDeltas(4_096)).isEqualTo(1);
   }
 
   @Test
   @DisplayName(
-      "Should split each stream's interval bytes into parts that fit one session message when a"
-          + " three-hour source has a keyframe every half second")
-  void shouldSplitEachStreamsIntervalBytesIntoPartsWhenThreeHourSourceHasKeyframeEveryHalfSecond(
+      "Should report every interval of a stream in the one probe report when a three-hour source"
+          + " has a keyframe every half second")
+  void shouldReportEveryIntervalOfAStreamInTheOneProbeReportWhenThreeHourSourceHasManyKeyframes(
       @TempDir Path directory) throws Exception {
     var source =
         Files.write(
@@ -342,24 +336,16 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    var video = report.result().getMedia().getStreamMeasurements().getStreams(0);
+    var video = report.getResult().getMedia().getStreamMeasurements().getStreams(0);
     assertThat(video.getMeasuredBytes()).isEqualTo(86_400_000L);
     assertThat(video.getMeasuredDuration()).isEqualTo(10_800_000L);
-    assertThat(report.streamMeasurementParts())
-        .extracting(ProbeStreamMeasurementPart::getKeyframeIntervalBytesCount)
-        .containsExactly(4_096, 4_096, 4_096, 4_096, 4_096, 1_120);
-    assertThat(report.streamMeasurementParts())
-        .extracting(ProbeStreamMeasurementPart::getKeyframeIntervalPacketCountsCount)
-        .containsExactly(4_096, 4_096, 4_096, 4_096, 4_096, 1_120);
-    assertThat(report.streamMeasurementParts())
-        .allSatisfy(
-            part ->
-                assertThat(
-                        EstablishWorkerSessionRequest.newBuilder()
-                            .setProbeStreamMeasurementPart(part)
-                            .build()
-                            .getSerializedSize())
-                    .isLessThan(131_072));
+    assertThat(report.getStreamMeasurementIntervalsList())
+        .singleElement()
+        .satisfies(
+            intervals -> {
+              assertThat(intervals.getKeyframeIntervalBytesCount()).isEqualTo(21_600);
+              assertThat(intervals.getKeyframeIntervalPacketCountsCount()).isEqualTo(21_600);
+            });
   }
 
   @Test
@@ -370,7 +356,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
 
-    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsList())
         .extracting(MeasuredStream::getStreamIndex)
         .containsExactly(0, 1);
   }
@@ -390,7 +376,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
 
-    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsList())
         .extracting(MeasuredStream::getStreamIndex)
         .containsExactly(0);
   }
@@ -411,7 +397,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsList())
         .extracting(MeasuredStream::getStreamIndex)
         .containsExactly(0);
   }
@@ -426,8 +412,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = eac3Ffprobe().executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   @Test
@@ -440,7 +426,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = eac3Ffprobe().executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsList())
         .extracting(MeasuredStream::getStreamIndex)
         .containsExactly(0, 1);
   }
@@ -464,46 +450,30 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().hasPositions()).isTrue();
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getResult().getMedia().getKeyframes().hasPositions()).isTrue();
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
   }
 
   @Test
-  @DisplayName("Should report the measurement when it measures exactly 1,024 streams")
-  void shouldReportMeasurementWhenItMeasuresExactly1024Streams(@TempDir Path directory)
-      throws Exception {
-    var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 24_000));
-    var ffprobe = twoTrackFfprobe(audioStreamsOfSecondTrack(1_023));
-
-    var report = ffprobe.executor().probe(source, keyframeRequest());
-
-    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsCount())
-        .isEqualTo(1_024);
-  }
-
-  // worker_session.proto: the parts of one attempt name at most 1,024 streams.
-  @Test
-  @DisplayName("Should report no measurement when it would measure more than 1,024 streams")
-  void shouldReportNoMeasurementWhenItWouldMeasureMoreThan1024Streams(@TempDir Path directory)
+  @DisplayName("Should report the measurement of every stream when it measures 1,025 streams")
+  void shouldReportTheMeasurementOfEveryStreamWhenItMeasures1025Streams(@TempDir Path directory)
       throws Exception {
     var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 24_000));
     var ffprobe = twoTrackFfprobe(audioStreamsOfSecondTrack(1_024));
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().hasPositions()).isTrue();
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsCount())
+        .isEqualTo(1_025);
+    assertThat(report.getStreamMeasurementIntervalsList()).hasSize(1_025);
   }
 
-  // worker_session.proto: the parts of one attempt hold at most 8,388,608 interval entries.
   @Test
   @DisplayName(
-      "Should report no measurement when its streams would hold more than 8,388,608 keyframe"
-          + " intervals in all")
-  void shouldReportNoMeasurementWhenItsStreamsWouldHoldMoreThan8388608KeyframeIntervals(
+      "Should report the measurement when its streams hold 8,389,632 keyframe intervals in all")
+  void shouldReportTheMeasurementWhenItsStreamsHold8389632KeyframeIntervalsInAll(
       @TempDir Path directory) throws Exception {
-    // 8,193 keyframe intervals in each of 1,024 streams make 8,389,632.
+    // 8,193 keyframe intervals in each of 1,024 streams.
     var source =
         Files.write(
             directory.resolve("source.mp4"),
@@ -521,10 +491,44 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
-        .isEqualTo(8_193);
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreamsCount())
+        .isEqualTo(1_024);
+    assertThat(
+            report.getStreamMeasurementIntervalsList().stream()
+                .mapToLong(StreamMeasurementIntervals::getKeyframeIntervalBytesCount)
+                .sum())
+        .isEqualTo(8_389_632L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should report every keyframe position when an MP4 without a sync-sample table holds"
+          + " 1,048,577 samples")
+  void shouldReportEveryKeyframePositionWhenMp4WithoutSyncSampleTableHolds1048577Samples(
+      @TempDir Path directory) throws Exception {
+    // No stss: every sample is a sync sample, as in an intra-only track.
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(1_048_577, 1)
+                .build()
+                .bytes());
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(streamsBesideVideoTrack(""))
+            .packet(
+                "1048.576000%+#1",
+                "{\"packets\":[{\"pts\":1048576,\"dts\":1048576,\"flags\":\"K__\"}]}")
+            .build();
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(1_048_577);
+    assertThat(report.getKeyframePresentationTimeDeltasCount()).isEqualTo(1_048_577);
+    assertThat(report.getKeyframeDecodeTimeDeltasCount()).isEqualTo(1_048_577);
   }
 
   // FFmpeg walks the stss in order, as the keyframe reader does, so a sync sample that the stss
@@ -551,10 +555,10 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(1);
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   @Test
@@ -565,9 +569,9 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().hasPositions()).isTrue();
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getMedia().getKeyframes().hasPositions()).isTrue();
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   /** An MP4 whose video track 1 has keyframes at 0, 0.5, 1 and 1.5 s, beside video track 2. */
@@ -638,8 +642,8 @@ class FfprobeExecutorKeyframeTest {
     try {
       var report = ffprobe.executor().probe(fixture(fixture), keyframeRequest());
 
-      assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
-      assertThat(report.keyframePositionsParts()).isEmpty();
+      assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
+      assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
       assertThat(Thread.currentThread().isInterrupted()).isTrue();
     } finally {
       Thread.interrupted();
@@ -667,7 +671,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(source, keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setPacketScanRequired(
@@ -697,14 +701,14 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setPacketScanRequired(
                     KeyframePacketScanReason
                         .KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME)
                 .build());
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @Test
@@ -719,13 +723,10 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), request);
 
-    assertThat(report.keyframePositionsParts())
-        .containsExactly(
-            ProbeKeyframePositionsPart.newBuilder()
-                .setProbeAttemptId(request.getProbeAttemptId())
-                .addAllPresentationTimeDeltas(List.of(0L, 8_704L, 16_896L, 10_240L))
-                .addAllDecodeTimeDeltas(List.of(-1_024L, 8_704L, 16_896L, 10_240L))
-                .build());
+    assertThat(report.getKeyframePresentationTimeDeltasList())
+        .containsExactly(0L, 8_704L, 16_896L, 10_240L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList())
+        .containsExactly(-1_024L, 8_704L, 16_896L, 10_240L);
   }
 
   @Test
@@ -751,7 +752,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions())
         .extracting(KeyframePositions::getStreamIndex, KeyframePositions::getKeyframeCount)
         .containsExactly(2, 4);
   }
@@ -772,7 +773,8 @@ class FfprobeExecutorKeyframeTest {
 
     assertThat(report)
         .extracting(
-            found -> found.result().getFailure(), ProbeAttemptReport::keyframePositionsParts)
+            found -> found.getResult().getFailure(),
+            ProbeAttemptReport::getKeyframePresentationTimeDeltasList)
         .containsExactly(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM, List.of());
   }
 
@@ -796,7 +798,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), request);
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setPositions(
@@ -808,13 +810,10 @@ class FfprobeExecutorKeyframeTest {
                         .setKeyframeCount(4))
                 .build());
     // The container starts at 1.460111 s, which is 131,410 ticks, at the first audio packet.
-    assertThat(report.keyframePositionsParts())
-        .containsExactly(
-            ProbeKeyframePositionsPart.newBuilder()
-                .setProbeAttemptId(request.getProbeAttemptId())
-                .addAllPresentationTimeDeltas(List.of(2_090L, 63_750L, 123_750L, 75_000L))
-                .addAllDecodeTimeDeltas(List.of(-5_410L, 63_750L, 123_750L, 75_000L))
-                .build());
+    assertThat(report.getKeyframePresentationTimeDeltasList())
+        .containsExactly(2_090L, 63_750L, 123_750L, 75_000L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList())
+        .containsExactly(-5_410L, 63_750L, 123_750L, 75_000L);
   }
 
   @Test
@@ -840,13 +839,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("avi.avi"), packetScanRequest());
 
-    assertThat(report.keyframePositionsParts())
-        .singleElement()
-        .satisfies(
-            part -> {
-              assertThat(part.getPresentationTimeDeltasList()).containsExactly(0L, 18L);
-              assertThat(part.getDecodeTimeDeltasList()).containsExactly(0L, 18L);
-            });
+    assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(0L, 18L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).containsExactly(0L, 18L);
   }
 
   @Test
@@ -866,13 +860,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
 
-    assertThat(report.keyframePositionsParts())
-        .singleElement()
-        .satisfies(
-            part -> {
-              assertThat(part.getPresentationTimeDeltasList()).containsExactly(23L, 708L);
-              assertThat(part.getDecodeTimeDeltasList()).containsExactly(23L, 708L);
-            });
+    assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(23L, 708L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).containsExactly(23L, 708L);
   }
 
   @ParameterizedTest
@@ -902,7 +891,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setUnavailable(
@@ -911,7 +900,7 @@ class FfprobeExecutorKeyframeTest {
                             KeyframesUnavailableReason
                                 .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))
                 .build());
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @Test
@@ -934,7 +923,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getUnavailable().getReason())
+    assertThat(report.getResult().getMedia().getKeyframes().getUnavailable().getReason())
         .isEqualTo(
             KeyframesUnavailableReason.KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP);
     assertThat(ffmpeg.isAlive()).isFalse();
@@ -974,9 +963,9 @@ class FfprobeExecutorKeyframeTest {
 
     assertThat(report)
         .isEqualTo(
-            ProbeAttemptReport.resultOnly(
+            ProbeReports.resultOnly(
                 ProbeAttemptResult.newBuilder()
-                    .setProbeAttemptId(report.result().getProbeAttemptId())
+                    .setProbeAttemptId(report.getResult().getProbeAttemptId())
                     .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
                     .setFailure(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA)
                     .build()));
@@ -1000,8 +989,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @Test
@@ -1022,13 +1011,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
 
-    assertThat(report.keyframePositionsParts())
-        .singleElement()
-        .satisfies(
-            part -> {
-              assertThat(part.getPresentationTimeDeltasList()).containsExactly(23L, 625L);
-              assertThat(part.getDecodeTimeDeltasList()).containsExactly(23L, 625L);
-            });
+    assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(23L, 625L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).containsExactly(23L, 625L);
   }
 
   @Test
@@ -1050,7 +1034,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.getResult().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
     assertThat(ffmpeg.isAlive()).isFalse();
   }
 
@@ -1068,9 +1052,9 @@ class FfprobeExecutorKeyframeTest {
 
     assertThat(report)
         .isEqualTo(
-            ProbeAttemptReport.resultOnly(
+            ProbeReports.resultOnly(
                 ProbeAttemptResult.newBuilder()
-                    .setProbeAttemptId(report.result().getProbeAttemptId())
+                    .setProbeAttemptId(report.getResult().getProbeAttemptId())
                     .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
                     .setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED)
                     .build()));
@@ -1097,9 +1081,9 @@ class FfprobeExecutorKeyframeTest {
 
     assertThat(report)
         .isEqualTo(
-            ProbeAttemptReport.resultOnly(
+            ProbeReports.resultOnly(
                 ProbeAttemptResult.newBuilder()
-                    .setProbeAttemptId(report.result().getProbeAttemptId())
+                    .setProbeAttemptId(report.getResult().getProbeAttemptId())
                     .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
                     .setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED)
                     .build()));
@@ -1119,7 +1103,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(1);
   }
 
@@ -1131,7 +1115,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   @ParameterizedTest
@@ -1159,7 +1144,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   @Test
@@ -1185,13 +1171,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.keyframePositionsParts())
-        .singleElement()
-        .satisfies(
-            part -> {
-              assertThat(part.getPresentationTimeDeltasList()).containsExactly(0L, 67_500L);
-              assertThat(part.getDecodeTimeDeltasList()).containsExactly(0L, 67_500L);
-            });
+    assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(0L, 67_500L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).containsExactly(0L, 67_500L);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1205,7 +1186,7 @@ class FfprobeExecutorKeyframeTest {
           String recording) {
     var report = recordedScan(recording).executor().probe(Path.of(recording), packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes())
+    assertThat(report.getResult().getMedia().getKeyframes())
         .isEqualTo(
             ProbeKeyframes.newBuilder()
                 .setUnavailable(
@@ -1214,7 +1195,7 @@ class FfprobeExecutorKeyframeTest {
                             KeyframesUnavailableReason
                                 .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))
                 .build());
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1232,15 +1213,10 @@ class FfprobeExecutorKeyframeTest {
 
     var report = recordedScan(recording).executor().probe(Path.of(recording), packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getSource())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getSource())
         .isEqualTo(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
-    assertThat(report.keyframePositionsParts())
-        .singleElement()
-        .satisfies(
-            part -> {
-              assertThat(part.getPresentationTimeDeltasList()).isEqualTo(expected);
-              assertThat(part.getDecodeTimeDeltasList()).isEqualTo(expected);
-            });
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEqualTo(expected);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).isEqualTo(expected);
   }
 
   @Test
@@ -1261,10 +1237,10 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("avi.avi"), packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getUnavailable().getReason())
+    assertThat(report.getResult().getMedia().getKeyframes().getUnavailable().getReason())
         .isEqualTo(
             KeyframesUnavailableReason.KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP);
-    assertThat(report.keyframePositionsParts()).isEmpty();
+    assertThat(report.getKeyframePresentationTimeDeltasList()).isEmpty();
   }
 
   @Test
@@ -1289,13 +1265,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.keyframePositionsParts())
-        .singleElement()
-        .satisfies(
-            part -> {
-              assertThat(part.getPresentationTimeDeltasList()).containsExactly(133_500L, 63_750L);
-              assertThat(part.getDecodeTimeDeltasList()).containsExactly(126_000L, 63_750L);
-            });
+    assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(133_500L, 63_750L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).containsExactly(126_000L, 63_750L);
   }
 
   @Test
@@ -1316,7 +1287,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getStreamIndex())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getStreamIndex())
         .isEqualTo(1);
   }
 
@@ -1336,7 +1307,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   @Nested
@@ -1440,12 +1412,14 @@ class FfprobeExecutorKeyframeTest {
     }
 
     @Test
-    @DisplayName("Should report no maximum for a second video track that the probe does not choose")
-    void shouldReportNoMaximumForASecondVideoTrackThatTheProbeDoesNotChoose(@TempDir Path directory)
-        throws Exception {
+    @DisplayName(
+        "Should report no maximum for a second video track when the probe does not choose it")
+    void shouldReportNoMaximumForASecondVideoTrackWhenTheProbeDoesNotChooseIt(
+        @TempDir Path directory) throws Exception {
       var ffprobe = twoTrackFfprobe("{\"index\":1,\"codec_type\":\"video\",\"id\":\"0x2\"}");
 
-      var media = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest()).result();
+      var media =
+          ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest()).getResult();
 
       assertThat(media.getMedia().getStreamsList())
           .filteredOn(stream -> stream.getIndex() == 1)
@@ -1485,7 +1459,7 @@ class FfprobeExecutorKeyframeTest {
                       .formatted(lastTime, lastTime))
               .build();
 
-      var media = ffprobe.executor().probe(source, keyframeRequest()).result().getMedia();
+      var media = ffprobe.executor().probe(source, keyframeRequest()).getResult().getMedia();
 
       assertThat(media.getKeyframes().hasPositions())
           .as("keyframes from the sample table")
@@ -1527,13 +1501,10 @@ class FfprobeExecutorKeyframeTest {
         String description, byte[] info) throws IOException {
       var report = probe(document(info, videoTrack(1), cues(cue(0, 1), cue(2_000, 1))));
 
-      assertThat(report.result().getMedia().getKeyframes().getPositions())
+      assertThat(report.getResult().getMedia().getKeyframes().getPositions())
           .as(description)
           .isEqualTo(cuePositions(1_000, 2));
-      assertThat(report.keyframePositionsParts())
-          .singleElement()
-          .extracting(ProbeKeyframePositionsPart::getPresentationTimeDeltasList)
-          .isEqualTo(List.of(0L, 2_000L));
+      assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(0L, 2_000L);
     }
 
     static Stream<Arguments> infosThatFfmpegReadsInMilliseconds() {
@@ -1560,7 +1531,7 @@ class FfprobeExecutorKeyframeTest {
 
       var report = probe(document(info, videoTrack(1), cues(cue(41, 1))));
 
-      assertThat(report.result().getMedia().getKeyframes().getPositions())
+      assertThat(report.getResult().getMedia().getKeyframes().getPositions())
           .isEqualTo(cuePositions(10_000, 1));
     }
 
@@ -1573,7 +1544,7 @@ class FfprobeExecutorKeyframeTest {
         String description, byte[] file) throws IOException {
       var report = probe(file);
 
-      assertThat(report.result().getMedia().getKeyframes())
+      assertThat(report.getResult().getMedia().getKeyframes())
           .as(description)
           .isEqualTo(
               ProbeKeyframes.newBuilder()
@@ -1617,7 +1588,7 @@ class FfprobeExecutorKeyframeTest {
 
       var report = probe(file);
 
-      assertThat(report.result().getMedia().getKeyframes().getPositions())
+      assertThat(report.getResult().getMedia().getKeyframes().getPositions())
           .isEqualTo(cuePositions(1_000, 2));
     }
 
@@ -1637,10 +1608,7 @@ class FfprobeExecutorKeyframeTest {
 
       var report = probe(document(info(), tracks, cues(cue(0, 1, 2), cue(500, 1), cue(2_000, 2))));
 
-      assertThat(report.keyframePositionsParts())
-          .singleElement()
-          .extracting(ProbeKeyframePositionsPart::getPresentationTimeDeltasList)
-          .isEqualTo(List.of(0L, 2_000L));
+      assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(0L, 2_000L);
     }
 
     @Test
@@ -1654,7 +1622,7 @@ class FfprobeExecutorKeyframeTest {
       var report =
           probe(document(info(), videoTrack(1), cues(cue(0, 1), cue(2_000, 1)), malformed));
 
-      assertThat(report.result().getMedia().getKeyframes().getPositions())
+      assertThat(report.getResult().getMedia().getKeyframes().getPositions())
           .isEqualTo(cuePositions(1_000, 2));
     }
 
@@ -1743,7 +1711,7 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture(source), request);
 
-    var measurements = report.result().getMedia().getStreamMeasurements();
+    var measurements = report.getResult().getMedia().getStreamMeasurements();
     assertThat(measurements.getSource())
         .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_SAMPLE_TABLE);
     assertThat(measurements.getStreamsList()).hasSize(listing.streams().size());
@@ -1782,22 +1750,22 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mp4-fragmented.mp4"), keyframeRequest());
 
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   private static long[] intervalBytes(ProbeAttemptReport report, int streamIndex) {
-    return report.streamMeasurementParts().stream()
-        .filter(part -> part.getStreamIndex() == streamIndex)
-        .flatMap(part -> part.getKeyframeIntervalBytesList().stream())
+    return report.getStreamMeasurementIntervalsList().stream()
+        .filter(intervals -> intervals.getStreamIndex() == streamIndex)
+        .flatMap(intervals -> intervals.getKeyframeIntervalBytesList().stream())
         .mapToLong(Integer::toUnsignedLong)
         .toArray();
   }
 
   private static long[] intervalPacketCounts(ProbeAttemptReport report, int streamIndex) {
-    return report.streamMeasurementParts().stream()
-        .filter(part -> part.getStreamIndex() == streamIndex)
-        .flatMap(part -> part.getKeyframeIntervalPacketCountsList().stream())
+    return report.getStreamMeasurementIntervalsList().stream()
+        .filter(intervals -> intervals.getStreamIndex() == streamIndex)
+        .flatMap(intervals -> intervals.getKeyframeIntervalPacketCountsList().stream())
         .mapToLong(Integer::toUnsignedLong)
         .toArray();
   }

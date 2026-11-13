@@ -68,7 +68,7 @@ class FfprobeExecutorLoggingTest {
               throw new UncheckedIOException(new IOException("binary unavailable"));
             });
 
-    var result = executor.probe(SOURCE, request).result();
+    var result = executor.probe(SOURCE, request).getResult();
 
     assertExecutionFailure(result, request);
     assertThat(eventsFor(attemptId))
@@ -99,7 +99,7 @@ class FfprobeExecutorLoggingTest {
             .build();
     var executor = new FfprobeExecutor(new ObjectMapper(), _ -> process);
 
-    var result = executor.probe(SOURCE, request).result();
+    var result = executor.probe(SOURCE, request).getResult();
 
     assertExecutionFailure(result, request);
     assertThat(eventsFor(attemptId))
@@ -125,7 +125,7 @@ class FfprobeExecutorLoggingTest {
     var process = ControlledProbeProcess.builder().stdout(output).exitCode(19).build();
     var executor = new FfprobeExecutor(new ObjectMapper(), _ -> process);
 
-    var result = executor.probe(SOURCE, request).result();
+    var result = executor.probe(SOURCE, request).getResult();
 
     assertExecutionFailure(result, request);
     assertThat(eventsFor(attemptId))
@@ -161,7 +161,7 @@ class FfprobeExecutorLoggingTest {
         new FfprobeExecutor(
             new ObjectMapper(), _ -> ControlledProbeProcess.builder().stdout(streams).build());
 
-    var result = executor.probe(SOURCE, request).result();
+    var result = executor.probe(SOURCE, request).getResult();
 
     assertExecutionFailure(result, request);
     assertThat(events)

@@ -1,12 +1,11 @@
 package com.streamarr.transcode.worker.support;
 
 import build.buf.gen.streamarr.transcode.v1.BitrateScanChunk;
-import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
+import build.buf.gen.streamarr.transcode.v1.StreamMeasurementIntervals;
 import com.streamarr.transcode.probe.FfprobeExecutor;
-import com.streamarr.transcode.probe.ProbeAttemptReport;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,7 +16,7 @@ import lombok.Singular;
 
 /**
  * Bitrate scan chunk requests as the server builds them from a file's stored keyframe positions,
- * and the per-interval counts that a worker's measurement parts carry.
+ * and the per-interval counts that a worker's probe report carries.
  */
 public final class BitrateScanChunks {
 
@@ -38,11 +37,9 @@ public final class BitrateScanChunks {
       @Singular List<Keyframe> keyframes,
       @Singular List<Integer> measuredStreamIndexes) {
 
-    /**
-     * The positions and streams that a probe reported in its result and keyframe position parts.
-     */
+    /** The positions and streams that a probe reported in its result and keyframe positions. */
     public static Positions of(@NonNull ProbeAttemptReport report) {
-      var media = report.result().getMedia();
+      var media = report.getResult().getMedia();
       var positions = media.getKeyframes().getPositions();
       var measured = new ArrayList<Integer>();
       measured.add(positions.getStreamIndex());
@@ -53,20 +50,18 @@ public final class BitrateScanChunks {
           positions.getStreamIndex(),
           positions.getTimeBaseNumerator(),
           positions.getTimeBaseDenominator(),
-          keyframes(report.keyframePositionsParts()),
+          keyframes(report),
           measured);
     }
 
-    private static List<Keyframe> keyframes(List<ProbeKeyframePositionsPart> parts) {
+    private static List<Keyframe> keyframes(ProbeAttemptReport report) {
       var keyframes = new ArrayList<Keyframe>();
       long presentation = 0;
       long decode = 0;
-      for (var part : parts) {
-        for (var i = 0; i < part.getPresentationTimeDeltasCount(); i++) {
-          presentation += part.getPresentationTimeDeltas(i);
-          decode += part.getDecodeTimeDeltas(i);
-          keyframes.add(new Keyframe(presentation, decode));
-        }
+      for (var i = 0; i < report.getKeyframePresentationTimeDeltasCount(); i++) {
+        presentation += report.getKeyframePresentationTimeDeltas(i);
+        decode += report.getKeyframeDecodeTimeDeltas(i);
+        keyframes.add(new Keyframe(presentation, decode));
       }
 
       return keyframes;
@@ -128,17 +123,18 @@ public final class BitrateScanChunks {
     }
   }
 
-  /** Each stream's counts from the parts, joined in part order and keyed in first-seen order. */
+  /** Each stream's counts from a probe report's measurement, keyed in the report's order. */
   public static Map<Integer, IntervalCounts> intervalCounts(
-      @NonNull List<ProbeStreamMeasurementPart> parts) {
+      @NonNull List<StreamMeasurementIntervals> measured) {
     var counts = new LinkedHashMap<Integer, IntervalCounts>();
-    for (var part : parts) {
+    for (var stream : measured) {
       var bytes =
-          part.getKeyframeIntervalBytesList().stream().map(Integer::toUnsignedLong).toList();
+          stream.getKeyframeIntervalBytesList().stream().map(Integer::toUnsignedLong).toList();
       var packets =
-          part.getKeyframeIntervalPacketCountsList().stream().map(Integer::toUnsignedLong).toList();
-      counts.merge(
-          part.getStreamIndex(), new IntervalCounts(bytes, packets), IntervalCounts::followedBy);
+          stream.getKeyframeIntervalPacketCountsList().stream()
+              .map(Integer::toUnsignedLong)
+              .toList();
+      counts.put(stream.getStreamIndex(), new IntervalCounts(bytes, packets));
     }
 
     return counts;

@@ -7,10 +7,10 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.probe.FfprobeExecutor;
-import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.IOException;
 import java.io.InputStream;
@@ -68,7 +68,7 @@ class WorkerProbeFrameRateCancellationTest {
 
         assertThat(worker.hasAcceptedSession()).isTrue();
         assertThat(scan.isAlive()).isTrue();
-        assertThat(connection.results())
+        assertThat(connection.attemptsEndedWithoutReport())
             .as("server capacity remains claimed until the scan process exits")
             .isEmpty();
         assertThat(running).isNotDone();
@@ -76,8 +76,9 @@ class WorkerProbeFrameRateCancellationTest {
         running.get();
 
         assertThat(scan.isAlive()).isFalse();
-        assertThat(connection.results())
-            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+        assertThat(connection.attemptsEndedWithoutReport())
+            .containsExactly(request.getProbeAttemptId());
+        assertThat(connection.results()).isEmpty();
       } finally {
         scan.finish();
       }
@@ -160,7 +161,7 @@ class WorkerProbeFrameRateCancellationTest {
       scan.finish();
 
       var completion = completed.get();
-      assertThat(completion.report().result())
+      assertThat(completion.report().getResult())
           .isEqualTo(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
       assertThat(completion.interrupted()).isTrue();
     } finally {
@@ -251,7 +252,7 @@ class WorkerProbeFrameRateCancellationTest {
       assertThat(completed).isNotDone();
       process.finish();
 
-      assertThat(completed.get().result())
+      assertThat(completed.get().getResult())
           .isEqualTo(failure(request, ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED));
       assertThat(process.isAlive()).isFalse();
     } finally {

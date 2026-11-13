@@ -209,7 +209,7 @@ final class RecordedFfprobe {
                   .output(output.getBytes(StandardCharsets.UTF_8))
                   .build();
             });
-    return executor.probe(SOURCE, request()).result();
+    return executor.probe(SOURCE, request()).getResult();
   }
 
   /** Probes with the given ffprobe output while the frame-rate scan exits with the given code. */
@@ -224,7 +224,7 @@ final class RecordedFfprobe {
                   .exitCode(isScan ? exitCode : 0)
                   .build();
             });
-    return executor.probe(SOURCE, request()).result();
+    return executor.probe(SOURCE, request()).getResult();
   }
 
   static ProbeAttemptResult probeResult(Answers answers) {
@@ -251,7 +251,7 @@ final class RecordedFfprobe {
                       : answer(answers.ffprobeOutput(), command.arguments());
               return printing(output, 0);
             });
-    return executor.probe(answers.source(), request()).result();
+    return executor.probe(answers.source(), request()).getResult();
   }
 
   private static Process firstFramesRead(

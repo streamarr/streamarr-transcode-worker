@@ -2,6 +2,7 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
@@ -105,12 +106,12 @@ public final class FfprobeExecutor {
             .setProbeAttemptId(request.getProbeAttemptId())
             .setProbeVersion(request.getProbeVersion());
     if (request.getProbeVersion() != PROBE_VERSION) {
-      return ProbeAttemptReport.resultOnly(
+      return ProbeReports.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION).build());
     }
 
     if (Thread.currentThread().isInterrupted()) {
-      return ProbeAttemptReport.resultOnly(
+      return ProbeReports.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build());
     }
 
@@ -120,7 +121,7 @@ public final class FfprobeExecutor {
     } catch (InterruptedException | ClosedByInterruptException _) {
       // An interrupt closes a FileChannel that the keyframe step is reading.
       Thread.currentThread().interrupt();
-      return ProbeAttemptReport.resultOnly(
+      return ProbeReports.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build());
     } catch (Exception failure) {
       log.warn(
@@ -128,7 +129,7 @@ public final class FfprobeExecutor {
           fromProto(request.getProbeAttemptId()),
           source,
           failure);
-      return ProbeAttemptReport.resultOnly(
+      return ProbeReports.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build());
     }
   }
@@ -251,7 +252,7 @@ public final class FfprobeExecutor {
     try {
       json = objectMapper.readTree(output.stdout());
     } catch (RuntimeException failure) {
-      return ProbeAttemptReport.resultOnly(unusableOutput(output, attempt, failure));
+      return ProbeReports.resultOnly(unusableOutput(output, attempt, failure));
     }
 
     if (output.exitCode() == 0) {
@@ -265,7 +266,7 @@ public final class FfprobeExecutor {
 
     var result = readResult(json, output, attempt);
     if (!result.hasMedia()) {
-      return ProbeAttemptReport.resultOnly(result);
+      return ProbeReports.resultOnly(result);
     }
 
     var chosen = ChosenVideoStream.find(json.path("streams"));
@@ -304,11 +305,11 @@ public final class FfprobeExecutor {
     try {
       json = objectMapper.readTree(output.stdout());
     } catch (RuntimeException failure) {
-      return ProbeAttemptReport.resultOnly(unusableOutput(output, attempt, failure));
+      return ProbeReports.resultOnly(unusableOutput(output, attempt, failure));
     }
 
     if (output.exitCode() != 0) {
-      return ProbeAttemptReport.resultOnly(
+      return ProbeReports.resultOnly(
           attempt
               .result()
               .setFailure(failureFor(json.path(ERROR_FIELD).path("code").asInt()))
