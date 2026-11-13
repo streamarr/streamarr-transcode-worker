@@ -10528,6 +10528,7 @@ class WorkerMediaSmokeTest {
           if (message.hasJobAttemptCompleted()) {
             completedAt.set(System.nanoTime());
             completed.complete(message.getJobAttemptCompleted());
+            failed.completeExceptionally(new AssertionError(message.getJobAttemptCompleted()));
           }
 
           if (message.hasJobAttemptFailed()) {
