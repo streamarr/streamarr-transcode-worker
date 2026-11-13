@@ -91,6 +91,8 @@ public sealed interface VideoDecision {
    * @param outputPictureFormat the bit depth and chroma subsampling that the encoder writes
    * @param staticHdrMetadata the HDR10 static metadata that the encoder writes; present exactly
    *     when the output is PQ
+   * @param assumedSourceMatrix the matrix with which the encode reads the source's pixels; empty
+   *     when the encode reads each frame with the matrix that the frame names
    */
   @Builder
   record Encode(
@@ -107,7 +109,8 @@ public sealed interface VideoDecision {
       boolean holdsLastFrameToAdvertisedEnd,
       boolean softwareEncoder,
       @NonNull PictureFormat outputPictureFormat,
-      @NonNull Optional<StaticHdrMetadata> staticHdrMetadata)
+      @NonNull Optional<StaticHdrMetadata> staticHdrMetadata,
+      @NonNull Optional<AssumedSourceMatrix> assumedSourceMatrix)
       implements VideoDecision {
 
     // A PQ or HLG picture in 8 bits bands visibly, and FFmpeg's tonemapx filter aborts the process
@@ -138,6 +141,7 @@ public sealed interface VideoDecision {
       private Optional<Deinterlace> deinterlace = Optional.empty();
       private PictureFormat outputPictureFormat = PictureFormat.EIGHT_BIT_420;
       private Optional<StaticHdrMetadata> staticHdrMetadata = Optional.empty();
+      private Optional<AssumedSourceMatrix> assumedSourceMatrix = Optional.empty();
     }
   }
 }

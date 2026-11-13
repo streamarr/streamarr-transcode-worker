@@ -19,6 +19,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
+import build.buf.gen.streamarr.transcode.v1.MatrixCoefficients;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
@@ -198,6 +199,76 @@ class TranscodeWorkerHdrEncodeTest {
     var command = commandOf(job);
 
     assertThat(valueOf(command, "-vf")).contains("format=yuv420p,");
+  }
+
+  // ADR 0013: the job names the matrix of an SDR source that names none, and the worker reads every
+  // frame with it. swscale would otherwise read such a frame as BT.601 at every picture size.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"MATRIX_COEFFICIENTS_BT709, bt709", "MATRIX_COEFFICIENTS_SMPTE170M, smpte170m"})
+  @DisplayName(
+      "Should read the source with the matrix that the job assumes when an SDR encode assumes one")
+  void shouldReadTheSourceWithTheMatrixThatTheJobAssumesWhenAnSdrEncodeAssumesOne(
+      MatrixCoefficients assumed, String matrix) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setAssumedSourceMatrix(assumed);
+
+    var command = commandOf(job);
+
+    assertThat(valueOf(command, "-vf"))
+        .containsPattern(
+            "scale=-2:\\d+:in_color_matrix="
+                + matrix
+                + ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,");
+  }
+
+  @Test
+  @DisplayName(
+      "Should read each frame with the matrix that the frame names when an SDR encode assumes none")
+  void shouldReadEachFrameWithTheMatrixThatTheFrameNamesWhenAnSdrEncodeAssumesNone()
+      throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+
+    var command = commandOf(job);
+
+    assertThat(valueOf(command, "-vf"))
+        .containsPattern("scale=-2:\\d+:out_color_matrix=bt709:")
+        .doesNotContain("in_color_matrix");
+  }
+
+  // The contract lets only an SDR encode assume a matrix, and only BT.709 or SMPTE 170M.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("forbiddenAssumedSourceMatrices")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when it assumes a source matrix that the"
+          + " contract forbids")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItAssumesAForbiddenSourceMatrix(
+      String assumption, VariantJob.Builder job) throws Exception {
+    assertRefusedAsAnInvalidSpecification(job);
+  }
+
+  static Stream<Arguments> forbiddenAssumedSourceMatrices() {
+    var encode = TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE;
+    return Stream.of(
+        forbidden(
+            "BT.2020 for an SDR encode",
+            variantJobBuilder(encode),
+            video ->
+                video.setAssumedSourceMatrix(MatrixCoefficients.MATRIX_COEFFICIENTS_BT2020_NCL)),
+        forbidden(
+            "a matrix that this worker's contract does not name",
+            variantJobBuilder(encode),
+            video -> video.setAssumedSourceMatrixValue(99)),
+        forbidden(
+            "BT.709 for a PQ source",
+            variantJobBuilder(encode),
+            video ->
+                video
+                    .setSourceDynamicRange(range(CompatibleBase.COMPATIBLE_BASE_PQ))
+                    .setAssumedSourceMatrix(MatrixCoefficients.MATRIX_COEFFICIENTS_BT709)),
+        forbidden(
+            "BT.709 for a stream copy",
+            variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX),
+            video -> video.setAssumedSourceMatrix(MatrixCoefficients.MATRIX_COEFFICIENTS_BT709)));
   }
 
   // swscale converts a source only into the colour it is told to, and the filters then describe

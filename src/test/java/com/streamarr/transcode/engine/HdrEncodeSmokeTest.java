@@ -72,6 +72,7 @@ class HdrEncodeSmokeTest {
   private static Path sdr10;
   private static Path fullRangeHdr10;
   private static Path bt709MatrixHdr10;
+  private static Path sdr10WithoutMatrix;
 
   @BeforeAll
   static void writeTheSources() throws Exception {
@@ -93,6 +94,11 @@ class HdrEncodeSmokeTest {
             "bt709-matrix-hdr10",
             List.of("-vf", "drawbox=c=0xC02060:t=fill,format=yuv420p10le"),
             "colorprim=bt2020:transfer=smpte2084:colormatrix=bt709");
+    sdr10WithoutMatrix =
+        encoded(
+            "sdr10-without-matrix",
+            List.of("-vf", "drawbox=c=0xC02060:t=fill,format=yuv420p10le"),
+            "range=limited");
   }
 
   @Test
@@ -259,6 +265,47 @@ class HdrEncodeSmokeTest {
     assertCloseSamples(delivered, source);
   }
 
+  // swscale reads a frame that names no matrix as BT.601. Converted from BT.601 to BT.709, this
+  // magenta's luma falls by about 57 code values (out of 1023).
+  @Test
+  @DisplayName(
+      "Should deliver the source's samples as BT.709 when an SDR source that names no matrix"
+          + " encodes with BT.709 assumed")
+  void
+      shouldDeliverTheSourcesSamplesAsBt709WhenAnSdrSourceThatNamesNoMatrixEncodesWithBt709Assumed()
+          throws Exception {
+    var source = Files.readAllBytes(sdr10WithoutMatrix);
+    assertThat(probed(source)).contains("color_space=unknown");
+
+    var delivered =
+        encoded(sdr10WithoutMatrix, sdrEncodeAssuming(AssumedSourceMatrix.BT709), 0)
+            .acceptedBytes();
+
+    assertThat(probed(delivered)).contains("color_space=bt709");
+    assertCloseSamples(
+        centreSamples(delivered, "yuv444p10le"), centreSamples(source, "yuv444p10le"));
+  }
+
+  // FFmpeg decodes a stream that names no matrix as BT.601, so centreRgb reads the source's
+  // colours as the job assumes them.
+  @Test
+  @DisplayName(
+      "Should deliver the source's BT.601 colours as BT.709 when an SDR source that names no matrix"
+          + " encodes with BT.601 assumed")
+  void
+      shouldDeliverTheSourcesBt601ColoursAsBt709WhenAnSdrSourceThatNamesNoMatrixEncodesWithBt601Assumed()
+          throws Exception {
+    var source = Files.readAllBytes(sdr10WithoutMatrix);
+    assertThat(probed(source)).contains("color_space=unknown");
+
+    var delivered =
+        encoded(sdr10WithoutMatrix, sdrEncodeAssuming(AssumedSourceMatrix.BT601), 0)
+            .acceptedBytes();
+
+    assertThat(probed(delivered)).contains("color_space=bt709");
+    assertCloseSamples(centreRgb(delivered), centreRgb(source));
+  }
+
   @Test
   @DisplayName(
       "Should list every encode feature of the software HEVC and AV1 encoders when the worker"
@@ -299,6 +346,13 @@ class HdrEncodeSmokeTest {
     for (var sample = 0; sample < source.length; sample++) {
       assertThat(delivered[sample]).as("sample %d", sample).isCloseTo(source[sample], within(4));
     }
+  }
+
+  private static VideoDecision.Encode sdrEncodeAssuming(AssumedSourceMatrix matrix) {
+    return hevcEncode(VideoDynamicRange.sdr())
+        .staticHdrMetadata(Optional.empty())
+        .assumedSourceMatrix(Optional.of(matrix))
+        .build();
   }
 
   private static VideoDecision.Encode profile5Encode() {
