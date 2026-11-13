@@ -8,32 +8,32 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReportMetadata;
 import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptRequest;
 import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import com.google.protobuf.ByteString;
-import java.time.Duration;
+import io.grpc.Context;
+import io.grpc.StatusException;
+import io.grpc.stub.BlockingClientCall;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
 
 /**
  * One probe attempt's report call (ADR 0062). The first message names the worker session, the
  * worker and the probe attempt, and states the length of the encoded probe report. Every later
  * message holds consecutive bytes of that encoding. The server then answers once with the length it
- * accepted. The worker waits the readiness timeout for each message and the acknowledgement timeout
- * for the answer, and no bound covers the whole call.
+ * accepted. The upload deadline covers the whole call, from its opening to the server's answer.
  */
 final class ProbeReportCall {
 
+  /** The most bytes of the encoded report that one message carries. */
+  private static final int MESSAGE_BYTES = 64 * 1024;
+
   private final UUID probeAttemptId;
   private final ByteString encoded;
-  private final FlowControlledCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call;
+  // Cancelling the context ends the open call from any thread without touching the call, which
+  // only the report thread uses.
+  private final Context.CancellableContext cancellation = Context.ROOT.withCancellation();
 
-  ProbeReportCall(
-      ProbeAttemptReport report, Duration readinessTimeout, Duration acknowledgementTimeout) {
+  ProbeReportCall(ProbeAttemptReport report) {
     probeAttemptId = fromProto(report.getResult().getProbeAttemptId());
     encoded = report.toByteString();
-    call =
-        FlowControlledCall.acknowledgedAfterItsLastMessage(
-            readinessTimeout, acknowledgementTimeout);
   }
 
   /** Opens a report call for the worker session that produced the report. */
@@ -41,12 +41,12 @@ final class ProbeReportCall {
   interface Opener {
 
     /**
-     * Opens the call and returns its first message with the worker session and the worker named, or
-     * returns nothing, and opens no call, when that worker session has ended or the call was
-     * canceled before it opened.
+     * Names the worker session and the worker in the first message's metadata and opens the call in
+     * the context, whose cancellation ends it, or returns nothing, and opens no call, when that
+     * worker session has ended. A call that opens in a cancelled context never reaches the server.
      */
-    Optional<ProbeAttemptReportMetadata.Builder> open(
-        FlowControlledCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call);
+    Optional<BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse>> open(
+        ProbeAttemptReportMetadata.Builder metadata, Context context);
   }
 
   UUID probeAttemptId() {
@@ -56,55 +56,54 @@ final class ProbeReportCall {
   /**
    * Sends the report and waits for the server's answer.
    *
-   * @return whether the call opened; the report of a worker session that has ended is never sent,
-   *     and neither is a report whose call was canceled before it opened
+   * @return whether the call opened; the report of a worker session that has ended is never sent
+   * @throws StatusException when the call ended without the server's answer
    * @throws WorkerJobException when the server accepted another length than the report's
    */
-  boolean send(Opener opener) throws InterruptedException, ExecutionException, TimeoutException {
-    var metadata = opener.open(call);
-    if (metadata.isEmpty()) {
-      return false;
+  boolean send(Opener opener) throws InterruptedException, StatusException {
+    var metadata =
+        ProbeAttemptReportMetadata.newBuilder()
+            .setProbeAttemptId(toProto(probeAttemptId))
+            .setReportLengthBytes(encoded.size());
+    try (cancellation) {
+      var call = opener.open(metadata, cancellation);
+      if (call.isEmpty()) {
+        return false;
+      }
+
+      sendOn(call.get(), metadata);
+      return true;
+    }
+  }
+
+  // A write after the server has closed the call sends nothing, and the answer then decides. The
+  // answer stands once the call closes after it, as a unary answer does.
+  private void sendOn(
+      BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call,
+      ProbeAttemptReportMetadata.Builder metadata)
+      throws InterruptedException, StatusException {
+    call.write(ReportProbeAttemptRequest.newBuilder().setMetadata(metadata).build());
+    for (var sent = 0; sent < encoded.size(); sent += MESSAGE_BYTES) {
+      var end = Math.min(sent + MESSAGE_BYTES, encoded.size());
+      call.write(
+          ReportProbeAttemptRequest.newBuilder().setData(encoded.substring(sent, end)).build());
     }
 
-    ReportProbeAttemptResponse answer;
-    try {
-      call.send(
-          ReportProbeAttemptRequest.newBuilder()
-              .setMetadata(
-                  metadata
-                      .get()
-                      .setProbeAttemptId(toProto(probeAttemptId))
-                      .setReportLengthBytes(encoded.size()))
-              .build());
-      sendBytes();
-      call.finish();
-      answer = call.awaitAcknowledgement();
-    } catch (InterruptedException | ExecutionException | TimeoutException | RuntimeException e) {
-      call.cancel(e);
-      throw e;
-    }
-
-    if (answer.getAcceptedLengthBytes() != encoded.size()) {
+    call.halfClose();
+    var accepted =
+        Optional.ofNullable(call.read()).map(ReportProbeAttemptResponse::getAcceptedLengthBytes);
+    call.read();
+    if (accepted.filter(length -> length == encoded.size()).isEmpty()) {
       throw new WorkerJobException(
           "Server accepted "
-              + answer.getAcceptedLengthBytes()
+              + accepted.map(String::valueOf).orElse("no")
               + " bytes of a probe report of "
               + encoded.size());
     }
-
-    return true;
   }
 
-  private void sendBytes() throws InterruptedException, TimeoutException {
-    for (var sent = 0; sent < encoded.size(); sent += FlowControlledCall.MESSAGE_BYTES) {
-      var end = Math.min(sent + FlowControlledCall.MESSAGE_BYTES, encoded.size());
-      call.send(
-          ReportProbeAttemptRequest.newBuilder().setData(encoded.substring(sent, end)).build());
-    }
-  }
-
-  /** Cancels the call, or keeps it from sending when it has not opened yet. */
+  /** Ends the open call, or keeps the call from reaching the server when it has not opened yet. */
   void cancel(Throwable reason) {
-    call.cancel(reason);
+    cancellation.cancel(reason);
   }
 }

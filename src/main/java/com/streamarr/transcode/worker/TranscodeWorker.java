@@ -28,6 +28,7 @@ import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
+import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc.TranscodeWorkerServiceBlockingV2Stub;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
@@ -63,7 +64,10 @@ import com.streamarr.transcode.engine.UnadvertisedCodecFamilyException;
 import com.streamarr.transcode.probe.DownmixLevels;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
+import io.grpc.Context;
 import io.grpc.ManagedChannel;
+import io.grpc.StatusException;
+import io.grpc.stub.BlockingClientCall;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -85,6 +89,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.Builder;
@@ -95,6 +100,8 @@ import lombok.extern.slf4j.Slf4j;
 public final class TranscodeWorker implements AutoCloseable {
 
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
+  // The most bytes of a segment that one upload message carries.
+  private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
   private static final Duration PROBE_SUMMARY_INTERVAL = Duration.ofMinutes(1);
   private static final Duration PROBE_CAPACITY_REFRESH_INTERVAL = Duration.ofSeconds(1);
   private static final Duration JOB_ATTEMPT_PROGRESS_INTERVAL = Duration.ofSeconds(1);
@@ -239,11 +246,11 @@ public final class TranscodeWorker implements AutoCloseable {
             .endedWithoutReport(endedWithoutReport)
             .reports(
                 ProbeReportSender.builder()
-                    .opener(call -> openProbeReport(sessionRequests.get(), call))
+                    .opener(
+                        (metadata, context) ->
+                            openProbeReport(sessionRequests.get(), metadata, context))
                     .endedWithoutReport(endedWithoutReport)
                     .executor(runtime.newProbeReportScope())
-                    .readinessTimeout(configuration.uploadReadinessTimeout())
-                    .acknowledgementTimeout(configuration.uploadAcknowledgementTimeout())
                     .build())
             .executor(runtime.newProbeScope())
             .capacities(probeCapacities)
@@ -393,24 +400,39 @@ public final class TranscodeWorker implements AutoCloseable {
         .build();
   }
 
-  // Opens the report call while the session that produced the report is still the accepted one,
-  // unless the call was canceled before it opened.
-  private synchronized Optional<ProbeAttemptReportMetadata.Builder> openProbeReport(
-      StreamObserver<EstablishWorkerSessionRequest> sessionRequests,
-      FlowControlledCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call) {
+  // Opens the report call while the session that produced the report is still the accepted one.
+  private synchronized Optional<
+          BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse>>
+      openProbeReport(
+          StreamObserver<EstablishWorkerSessionRequest> sessionRequests,
+          ProbeAttemptReportMetadata.Builder metadata,
+          Context context) {
     if (requests == null || requests != sessionRequests || workerSession == null) {
       return Optional.empty();
     }
 
-    var stub = TranscodeWorkerServiceGrpc.newStub(channel);
-    if (!call.startUnlessCancelled(stub::reportProbeAttempt)) {
-      return Optional.empty();
-    }
-
+    metadata.setWorkerSessionId(workerSession.getWorkerSessionId()).setWorker(identity());
     return Optional.of(
-        ProbeAttemptReportMetadata.newBuilder()
-            .setWorkerSessionId(workerSession.getWorkerSessionId())
-            .setWorker(identity()));
+        openWithTheUploadDeadline(
+            context, TranscodeWorkerServiceBlockingV2Stub::reportProbeAttempt));
+  }
+
+  // Holds this monitor. The deadline covers the call from its opening to the server's answer. The
+  // call starts in the context, so cancelling the context ends the call from any thread without
+  // touching it: only the thread that opened the call uses it, as BlockingClientCall allows one
+  // thread to write and one to read.
+  private <Q, R> BlockingClientCall<Q, R> openWithTheUploadDeadline(
+      Context context,
+      Function<TranscodeWorkerServiceBlockingV2Stub, BlockingClientCall<Q, R>> open) {
+    var stub =
+        TranscodeWorkerServiceGrpc.newBlockingV2Stub(channel)
+            .withDeadlineAfter(configuration.uploadDeadline());
+    var previous = context.attach();
+    try {
+      return open.apply(stub);
+    } finally {
+      context.detach(previous);
+    }
   }
 
   // Sends the event only on the session that started the probe attempt: a later session never
@@ -797,50 +819,46 @@ public final class TranscodeWorker implements AutoCloseable {
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new WorkerJobException("Interrupted while uploading " + segment, e);
-    } catch (ExecutionException | TimeoutException e) {
+    } catch (StatusException | TimeoutException e) {
       throw new WorkerJobException("Upload of " + segment + " failed", e);
     }
   }
 
+  // Every call of the segment opens in one context, so a stop ends the open call and keeps any
+  // later call from reaching the server. Closing the context ends a call that an interrupt or a
+  // failure of the worker's own left open.
   private void uploadSegment(
       VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation)
-      throws InterruptedException, ExecutionException, TimeoutException {
-    var upload = new AtomicReference<>(newSegmentUpload());
+      throws InterruptedException, StatusException, TimeoutException {
     var turn = uploadLimit.get().turn();
-    cancellation.onCancel(
-        () -> {
-          turn.cancel();
-          upload.get().cancel(new CancellationException("The job attempt stopped"));
-        });
-    // A segment that waits for its turn stays the producer's delivery in flight, so its bytes stay
-    // charged to the memory budgets.
-    try (var _ = turn.await(configuration.uploadAcknowledgementTimeout())) {
-      var refusal = sendSegmentUnlessRefusedAtTheLimit(job, upload.get(), segment);
-      while (refusal.isPresent()) {
-        // The next call is in place before the wait, so a stop during the wait also cancels it.
-        upload.set(newSegmentUpload());
-        awaitAgainInItsPlace(turn, refusal.get());
-        refusal = sendSegmentUnlessRefusedAtTheLimit(job, upload.get(), segment);
+    try (var stop = Context.ROOT.withCancellation()) {
+      cancellation.onCancel(
+          () -> {
+            turn.cancel();
+            stop.cancel(new CancellationException("The job attempt stopped"));
+          });
+      // A segment that waits for its turn stays the producer's delivery in flight, so its bytes
+      // stay charged to the memory budgets. The upload deadline bounds that wait apart from the
+      // deadline of the call.
+      try (var _ = turn.await(configuration.uploadDeadline())) {
+        var refusal = sendSegmentUnlessRefusedAtTheLimit(job, segment, stop);
+        while (refusal.isPresent()) {
+          awaitAgainInItsPlace(turn, refusal.get());
+          refusal = sendSegmentUnlessRefusedAtTheLimit(job, segment, stop);
+        }
       }
     }
   }
 
-  private FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> newSegmentUpload() {
-    return FlowControlledCall.acknowledgedFromItsFirstMessage(
-        configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
-  }
-
   // Returns the server's refusal when it refused the call because the worker holds its limit.
-  private Optional<ExecutionException> sendSegmentUnlessRefusedAtTheLimit(
-      VariantJob job,
-      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload,
-      ProducedSegment segment)
-      throws InterruptedException, ExecutionException, TimeoutException {
+  private Optional<StatusException> sendSegmentUnlessRefusedAtTheLimit(
+      VariantJob job, ProducedSegment segment, Context stop)
+      throws InterruptedException, StatusException {
     try {
-      sendSegment(openUpload(job, upload), upload, segment);
+      sendSegment(job, segment, stop);
       return Optional.empty();
-    } catch (ExecutionException e) {
-      if (!SegmentUploadLimit.isRefusalAtTheLimit(e.getCause())) {
+    } catch (StatusException e) {
+      if (!SegmentUploadLimit.isRefusalAtTheLimit(e)) {
         throw e;
       }
 
@@ -848,61 +866,56 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  private void awaitAgainInItsPlace(SegmentUploadLimit.Turn turn, ExecutionException refusal)
-      throws InterruptedException, ExecutionException, TimeoutException {
+  private void awaitAgainInItsPlace(SegmentUploadLimit.Turn turn, StatusException refusal)
+      throws InterruptedException, StatusException, TimeoutException {
     // A server that states no limit has none to refuse a call at.
-    if (!turn.tryAwaitAgainInItsPlace(configuration.uploadAcknowledgementTimeout())) {
+    if (!turn.tryAwaitAgainInItsPlace(configuration.uploadDeadline())) {
       throw refusal;
     }
   }
 
-  private static void sendSegment(
-      SegmentUploadMetadata.Builder metadataBuilder,
-      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload,
-      ProducedSegment segment)
-      throws InterruptedException, ExecutionException, TimeoutException {
-    metadataBuilder
-        .setSegmentName(segment.name())
-        .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
-        .setContentLengthBytes(segment.byteLength());
+  // A write after the server has closed the call sends nothing, and the answer then decides. The
+  // answer stands once the call closes after it, as a unary answer does.
+  private void sendSegment(VariantJob job, ProducedSegment segment, Context stop)
+      throws InterruptedException, StatusException {
+    var metadata =
+        SegmentUploadMetadata.newBuilder()
+            .setStreamSessionId(job.getStreamSessionId())
+            .setJobId(job.getJobId())
+            .setJobAttemptId(job.getJobAttemptId())
+            .setVariantLabel(job.getVariant().getVariantLabel())
+            .setSegmentName(segment.name())
+            .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
+            .setContentLengthBytes(segment.byteLength());
     if (segment instanceof ProducedSegment.Media media) {
-      metadataBuilder
+      metadata
           .setMediaDuration(protoDuration(media.timing().mediaDuration()))
           .setProductionTime(protoDuration(media.timing().productionTime()));
     }
 
-    var metadata = metadataBuilder.build();
-    UploadSegmentResponse accepted;
-    try {
-      upload.send(UploadSegmentRequest.newBuilder().setMetadata(metadata).build());
-      sendContent(upload, segment);
-      upload.finish();
-      accepted = upload.awaitAcknowledgement();
-    } catch (InterruptedException | ExecutionException | TimeoutException | RuntimeException e) {
-      upload.cancel(e);
-      throw e;
-    }
-
-    if (accepted.getAcceptedLengthBytes() != segment.byteLength()) {
-      throw new WorkerJobException("Server accepted an incomplete segment");
+    var upload = openUpload(metadata, stop);
+    upload.write(UploadSegmentRequest.newBuilder().setMetadata(metadata).build());
+    sendContent(upload, segment);
+    upload.halfClose();
+    var accepted = Optional.ofNullable(upload.read());
+    upload.read();
+    if (accepted
+        .filter(answer -> answer.getAcceptedLengthBytes() == segment.byteLength())
+        .isEmpty()) {
+      throw new WorkerJobException("Server did not accept the whole segment");
     }
   }
 
-  // Opens the upload call while the attempt is still active in this session.
-  private synchronized SegmentUploadMetadata.Builder openUpload(
-      VariantJob job, FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload) {
-    if (!activeAttempts.containsKey(fromProto(job.getJobAttemptId()))) {
+  // Opens the upload call, with the worker session and the worker named in the metadata, while
+  // the metadata's attempt is still active in this session.
+  private synchronized BlockingClientCall<UploadSegmentRequest, UploadSegmentResponse> openUpload(
+      SegmentUploadMetadata.Builder metadata, Context stop) {
+    if (!activeAttempts.containsKey(fromProto(metadata.getJobAttemptId()))) {
       throw new WorkerJobException("Job attempt is no longer active");
     }
 
-    TranscodeWorkerServiceGrpc.newStub(channel).uploadSegment(upload);
-    return SegmentUploadMetadata.newBuilder()
-        .setWorkerSessionId(workerSession.getWorkerSessionId())
-        .setWorker(identity())
-        .setStreamSessionId(job.getStreamSessionId())
-        .setJobId(job.getJobId())
-        .setJobAttemptId(job.getJobAttemptId())
-        .setVariantLabel(job.getVariant().getVariantLabel());
+    metadata.setWorkerSessionId(workerSession.getWorkerSessionId()).setWorker(identity());
+    return openWithTheUploadDeadline(stop, TranscodeWorkerServiceBlockingV2Stub::uploadSegment);
   }
 
   // The contract's Duration shares its simple name with java.time.Duration.
@@ -915,9 +928,9 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private static void sendContent(
-      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload,
+      BlockingClientCall<UploadSegmentRequest, UploadSegmentResponse> upload,
       ProducedSegment segment)
-      throws InterruptedException, TimeoutException {
+      throws InterruptedException, StatusException {
     var pending = ByteString.EMPTY;
     for (var part : segment.content()) {
       // The producer never changes a segment's bytes after delivering it, so wrapping them copies
@@ -927,18 +940,18 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     if (!pending.isEmpty()) {
-      upload.send(dataMessage(pending));
+      upload.write(dataMessage(pending));
     }
   }
 
   // Sends every full-sized data message and returns the remainder.
   private static ByteString sendWholeDataMessages(
-      FlowControlledCall<UploadSegmentRequest, UploadSegmentResponse> upload, ByteString content)
-      throws InterruptedException, TimeoutException {
+      BlockingClientCall<UploadSegmentRequest, UploadSegmentResponse> upload, ByteString content)
+      throws InterruptedException, StatusException {
     var remaining = content;
-    while (remaining.size() >= FlowControlledCall.MESSAGE_BYTES) {
-      upload.send(dataMessage(remaining.substring(0, FlowControlledCall.MESSAGE_BYTES)));
-      remaining = remaining.substring(FlowControlledCall.MESSAGE_BYTES);
+    while (remaining.size() >= UPLOAD_MESSAGE_BYTES) {
+      upload.write(dataMessage(remaining.substring(0, UPLOAD_MESSAGE_BYTES)));
+      remaining = remaining.substring(UPLOAD_MESSAGE_BYTES);
     }
 
     return remaining;

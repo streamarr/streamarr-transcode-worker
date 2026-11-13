@@ -333,12 +333,12 @@ class TranscodeWorkerProbeAttemptEndedWithoutReportTest {
           call.awaitSentWhole();
           call.failTransport();
         }),
-    IS_NOT_READY_WITHIN_THE_UPLOAD_READINESS_TIMEOUT(
-        configuration -> configuration.uploadReadinessTimeout(Duration.ofMillis(200)),
+    IS_NOT_READ_WITHIN_THE_UPLOAD_DEADLINE(
+        configuration -> configuration.uploadDeadline(Duration.ofMillis(200)),
         Connection::withholdReportReadiness,
         _ -> {}),
-    IS_NOT_ANSWERED_WITHIN_THE_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT(
-        configuration -> configuration.uploadAcknowledgementTimeout(Duration.ofMillis(200)),
+    IS_NOT_ANSWERED_WITHIN_THE_UPLOAD_DEADLINE(
+        configuration -> configuration.uploadDeadline(Duration.ofMillis(200)),
         Connection::withholdReportAnswers,
         _ -> {}),
     IS_ANSWERED_WITH_ANOTHER_LENGTH(
@@ -370,7 +370,7 @@ class TranscodeWorkerProbeAttemptEndedWithoutReportTest {
   }
 
   // What the scripted server does to the open report call so that it ends without an answer;
-  // nothing when a refusal or one of the worker's bounds ends the call.
+  // nothing when a refusal or the upload deadline ends the call.
   @FunctionalInterface
   private interface Ending {
     void end(ReportCall call) throws Exception;
@@ -404,10 +404,10 @@ class TranscodeWorkerProbeAttemptEndedWithoutReportTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       var call = openReportCallThatAwaits("answer", request);
-      // The worker cancels the call that failed before it frees the call's place, and the cancel
+      // The worker learns that the call failed before it frees the call's place, and the cancel
       // command arrives in between.
       var canceledInBetween = new CompletableFuture<Void>();
-      call.whenTheWorkerCancels(
+      call.whenTheWorkerLearnsTheCallEnded(
           () -> {
             cancel(connection, request);
             canceledInBetween.complete(null);

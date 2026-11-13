@@ -1,7 +1,7 @@
 package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
-import java.time.Duration;
+import io.grpc.StatusException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -9,9 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -38,8 +36,6 @@ final class ProbeReportSender implements AutoCloseable {
   private final ProbeReportCall.Opener opener;
   private final Consumer<UUID> endedWithoutReport;
   private final ExecutorService executor;
-  private final Duration readinessTimeout;
-  private final Duration acknowledgementTimeout;
   private final ProbeReportQueue waiting = new ProbeReportQueue();
   // Each open call with the order in which its report waited.
   private final Map<ProbeReportCall, ProbeReportQueue.Order> open = new HashMap<>();
@@ -54,14 +50,10 @@ final class ProbeReportSender implements AutoCloseable {
   private ProbeReportSender(
       @NonNull ProbeReportCall.Opener opener,
       @NonNull Consumer<UUID> endedWithoutReport,
-      @NonNull ExecutorService executor,
-      @NonNull Duration readinessTimeout,
-      @NonNull Duration acknowledgementTimeout) {
+      @NonNull ExecutorService executor) {
     this.opener = opener;
     this.endedWithoutReport = endedWithoutReport;
     this.executor = executor;
-    this.readinessTimeout = readinessTimeout;
-    this.acknowledgementTimeout = acknowledgementTimeout;
   }
 
   /**
@@ -119,7 +111,7 @@ final class ProbeReportSender implements AutoCloseable {
         return;
       }
 
-      var call = new ProbeReportCall(next.get(), readinessTimeout, acknowledgementTimeout);
+      var call = new ProbeReportCall(next.get());
       open.put(call, order);
       executor.execute(() -> send(call));
     }
@@ -155,8 +147,7 @@ final class ProbeReportSender implements AutoCloseable {
     try {
       if (!call.send(opener)) {
         log.debug(
-            "Discarding the report of probe attempt {}: its worker session has ended, or the"
-                + " server canceled the attempt before the report call opened",
+            "Discarding the report of probe attempt {}: its worker session has ended",
             call.probeAttemptId());
       }
 
@@ -165,7 +156,7 @@ final class ProbeReportSender implements AutoCloseable {
       Thread.currentThread().interrupt();
       logDiscarded(call, e);
       return true;
-    } catch (ExecutionException | TimeoutException | RuntimeException e) {
+    } catch (StatusException | RuntimeException e) {
       logDiscarded(call, e);
       return true;
     }

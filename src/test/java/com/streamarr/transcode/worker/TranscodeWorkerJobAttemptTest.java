@@ -3035,14 +3035,13 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt within the readiness bound when the receiver never reports"
-          + " readiness")
-  void shouldFailTheAttemptWithinTheReadinessBoundWhenTheReceiverNeverReportsReadiness()
+      "Should fail the attempt as a transcode failure when the server reads none of the segment"
+          + " upload within the upload deadline")
+  void shouldFailTheAttemptWhenTheServerReadsNoneOfTheSegmentUploadWithinTheUploadDeadline()
       throws Exception {
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder().build();
-    var configuration =
-        configurationBuilder().uploadReadinessTimeout(Duration.ofMillis(200)).build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMillis(200)).build();
 
     try (var worker =
         workerBuilder(tempDir)
@@ -3067,14 +3066,13 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt within the acknowledgement deadline when the receiver never"
-          + " acknowledges")
-  void shouldFailTheAttemptWithinTheAcknowledgementDeadlineWhenTheReceiverNeverAcknowledges()
+      "Should fail the attempt as a transcode failure when the server does not answer the segment"
+          + " upload within the upload deadline")
+  void shouldFailTheAttemptWhenTheServerDoesNotAnswerTheSegmentUploadWithinTheUploadDeadline()
       throws Exception {
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder().build();
-    var configuration =
-        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(200)).build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMillis(200)).build();
 
     try (var worker =
         workerBuilder(tempDir)
@@ -3094,17 +3092,23 @@ class TranscodeWorkerJobAttemptTest {
                   assertThat(eventsOf(connection))
                       .containsExactly(
                           EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED));
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertThat(connection.uploads())
           .singleElement()
-          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+          .satisfies(
+              upload -> {
+                assertThat(upload.wasSentWhole()).isTrue();
+                assertThat(upload.wasCancelled()).isTrue();
+              });
     }
   }
 
   @Test
   @DisplayName(
-      "Should count the acknowledgement deadline from the first message when readiness comes"
-          + " slowly")
-  void shouldCountTheAcknowledgementDeadlineFromTheFirstMessageWhenReadinessComesSlowly()
+      "Should fail the attempt when its segment upload keeps advancing for longer than the upload"
+          + " deadline")
+  void shouldFailTheAttemptWhenItsSegmentUploadKeepsAdvancingForLongerThanTheUploadDeadline()
       throws Exception {
     var output =
         withBytesAfterTheFirstVideoSample(
@@ -3112,8 +3116,7 @@ class TranscodeWorkerJobAttemptTest {
     var launcher =
         new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
     var job = variantJobBuilder().build();
-    var configuration =
-        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(300)).build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMillis(300)).build();
 
     try (var worker =
             workerBuilder(tempDir)
@@ -3128,7 +3131,7 @@ class TranscodeWorkerJobAttemptTest {
       startVariant(connection, job);
 
       // Each message waits 100 ms for readiness; the first media segment's messages need longer
-      // than the deadline in all.
+      // than the upload deadline in all.
       receiver.scheduleAtFixedRate(connection::grantUploadMessage, 0, 100, TimeUnit.MILLISECONDS);
 
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);

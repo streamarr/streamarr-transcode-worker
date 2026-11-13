@@ -297,10 +297,7 @@ class TranscodeWorkerSettingsTest {
     var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment());
 
     assertThat(settings.encoderStallTimeout()).isEqualTo(Duration.ofSeconds(30));
-    assertThat(settings.workerConfiguration().uploadReadinessTimeout())
-        .isEqualTo(Duration.ofSeconds(30));
-    assertThat(settings.workerConfiguration().uploadAcknowledgementTimeout())
-        .isEqualTo(Duration.ofSeconds(60));
+    assertThat(settings.workerConfiguration().uploadDeadline()).isEqualTo(Duration.ofSeconds(60));
     assertThat(settings.workerConfiguration().audioStreamReadTimeout())
         .isEqualTo(Duration.ofSeconds(30));
   }
@@ -310,17 +307,13 @@ class TranscodeWorkerSettingsTest {
   void shouldUseTheConfiguredBoundOfEachWaitWhenLoadingSettings() {
     var environment = new HashMap<>(requiredEnvironment());
     environment.put("TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT", "45s");
-    environment.put("TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT", "2m");
-    environment.put("TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT", "1500ms");
+    environment.put("TRANSCODE_WORKER_UPLOAD_DEADLINE", "1500ms");
     environment.put("TRANSCODE_WORKER_AUDIO_STREAM_READ_TIMEOUT", "10s");
 
     var settings = TranscodeWorkerSettings.fromEnvironment(environment);
 
     assertThat(settings.encoderStallTimeout()).isEqualTo(Duration.ofSeconds(45));
-    assertThat(settings.workerConfiguration().uploadReadinessTimeout())
-        .isEqualTo(Duration.ofMinutes(2));
-    assertThat(settings.workerConfiguration().uploadAcknowledgementTimeout())
-        .isEqualTo(Duration.ofMillis(1500));
+    assertThat(settings.workerConfiguration().uploadDeadline()).isEqualTo(Duration.ofMillis(1500));
     assertThat(settings.workerConfiguration().audioStreamReadTimeout())
         .isEqualTo(Duration.ofSeconds(10));
   }
@@ -352,11 +345,10 @@ class TranscodeWorkerSettingsTest {
   @CsvSource({
     "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT, 0s",
     "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT, -1s",
-    "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, 0ms",
+    "TRANSCODE_WORKER_UPLOAD_DEADLINE, 0ms",
     "TRANSCODE_WORKER_AUDIO_STREAM_READ_TIMEOUT, 0s",
-    "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, -5m",
-    "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, 0ns",
-    "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, -1h",
+    "TRANSCODE_WORKER_UPLOAD_DEADLINE, -5m",
+    "TRANSCODE_WORKER_UPLOAD_DEADLINE, 0ns",
     "TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT, 0s",
     "TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT, -1m"
   })
@@ -369,8 +361,7 @@ class TranscodeWorkerSettingsTest {
   @ValueSource(
       strings = {
         "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT",
-        "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT",
-        "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT",
+        "TRANSCODE_WORKER_UPLOAD_DEADLINE",
         "TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT"
       })
   @DisplayName("Should explain a wait bound that is not a duration when loading settings")

@@ -79,24 +79,24 @@ class TranscodeWorkerUploadProtocolIT {
       UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
   // Short enough that the cancellation test outlives it.
-  private static final Duration ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
+  private static final Duration UPLOAD_DEADLINE = Duration.ofSeconds(5);
 
-  // Longer than the class timeout, so a failure that a test sees cannot come from this timeout.
-  private static final Duration ACKNOWLEDGEMENT_TIMEOUT_BEYOND_TEST = Duration.ofMinutes(10);
+  // Longer than the class timeout, so a failure that a test sees cannot come from this deadline.
+  private static final Duration UPLOAD_DEADLINE_BEYOND_TEST = Duration.ofMinutes(10);
 
   @TempDir Path tempDir;
 
   @Test
-  @DisplayName("Should cancel the upload RPC when the acknowledgement times out")
-  void shouldCancelUploadRpcWhenAcknowledgementTimesOut() throws Exception {
+  @DisplayName("Should cancel the upload RPC when the upload deadline passes before its answer")
+  void shouldCancelUploadRpcWhenTheUploadDeadlinePassesBeforeItsAnswer() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var service = ControllableUploadService.leavesUploadRpcOpen();
     var job = variantJob();
 
-    // The worker cancels the upload before it reports the failure, and both calls share one
-    // connection. The cancellation's frame therefore arrives first, and this server handles it
+    // The upload's deadline cancels it before the worker reports the failure, and both calls share
+    // one connection. The cancellation's frame therefore arrives first, and this server handles it
     // before the failure.
     try (var server = ControlPlaneServer.withCallbacksInFrameOrder(service);
         var worker = worker(engine(launcher), mediaRoot)) {
@@ -108,7 +108,7 @@ class TranscodeWorkerUploadProtocolIT {
       service.awaitFailure();
       assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
       assertThat(service.uploadCancelled)
-          .as("abandoned upload must be cancelled once the acknowledgement times out")
+          .as("abandoned upload must be cancelled once the upload deadline passes")
           .isCompleted();
     }
   }
@@ -147,9 +147,7 @@ class TranscodeWorkerUploadProtocolIT {
     var service = ControllableUploadService.closesWithoutResponse();
     var job = variantJob();
     var configuration =
-        configurationBuilder(mediaRoot)
-            .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT_BEYOND_TEST)
-            .build();
+        configurationBuilder(mediaRoot).uploadDeadline(UPLOAD_DEADLINE_BEYOND_TEST).build();
 
     try (var server = new ControlPlaneServer(service);
         var worker =
@@ -246,7 +244,7 @@ class TranscodeWorkerUploadProtocolIT {
         .availableSlots(1)
         .backgroundProbeCapacity(new BackgroundProbeCapacity.Fixed(1))
         .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
-        .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT);
+        .uploadDeadline(UPLOAD_DEADLINE);
   }
 
   private FfmpegTranscodeEngine unavailableEngine() {

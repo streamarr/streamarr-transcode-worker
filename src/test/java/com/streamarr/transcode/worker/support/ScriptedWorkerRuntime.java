@@ -31,7 +31,9 @@ import io.grpc.ClientInterceptor;
 import io.grpc.ConnectivityState;
 import io.grpc.Context;
 import io.grpc.Contexts;
+import io.grpc.Deadline;
 import io.grpc.ForwardingClientCall;
+import io.grpc.ForwardingClientCallListener;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
@@ -573,7 +575,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     // Names each of the worker's calls in its headers, counts the messages that the worker sends
     // while its call is not ready for them, and runs a call's hooks on the worker's thread when the
-    // worker cancels the call.
+    // worker learns that the call ended.
     private final class WorkerCallInstrumentation implements ClientInterceptor {
 
       @Override
@@ -587,7 +589,18 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
           @Override
           public void start(Listener<R> responseListener, Metadata headers) {
             headers.put(CALL_ID_HEADER, id);
-            super.start(responseListener, headers);
+            super.start(
+                new ForwardingClientCallListener.SimpleForwardingClientCallListener<>(
+                    responseListener) {
+
+                  @Override
+                  public void onClose(Status status, Metadata trailers) {
+                    super.onClose(status, trailers);
+                    Optional.ofNullable(callsById.get(id))
+                        .ifPresent(ScriptedUpload::endKnownToTheWorker);
+                  }
+                },
+                headers);
           }
 
           @Override
@@ -597,12 +610,6 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
             }
 
             super.sendMessage(message);
-          }
-
-          @Override
-          public void cancel(String message, Throwable cause) {
-            Optional.ofNullable(callsById.get(id)).ifPresent(ScriptedUpload::cancelledByTheWorker);
-            super.cancel(message, cause);
           }
         };
       }
@@ -930,8 +937,9 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final BooleanSupplier acknowledgementsWithheld;
     private final List<Q> messages = new CopyOnWriteArrayList<>();
     private final CompletableFuture<Void> sentWhole = new CompletableFuture<>();
-    private final CompletableFuture<Void> cancelledByTheWorker = new CompletableFuture<>();
+    private final CompletableFuture<Void> endKnownToTheWorker = new CompletableFuture<>();
     private ServerCallStreamObserver<R> responses;
+    private Optional<Deadline> deadline = Optional.empty();
     private Optional<StatusRuntimeException> refusal = Optional.empty();
     private boolean requestedUnread;
     private boolean closed;
@@ -953,12 +961,14 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** The server's answer to an upload of this many bytes. */
     abstract R acknowledgementOf(long acceptedLengthBytes);
 
-    // Runs inside the server's method, which alone may turn gRPC's own reads off.
+    // Runs inside the server's method, which alone may turn gRPC's own reads off, and in the call's
+    // context, which holds the deadline that the worker stated.
     private void start(ServerCallStreamObserver<R> calls) {
       calls.disableAutoRequest();
-      calls.setOnCancelHandler(this::endedByTheWorker);
+      calls.setOnCancelHandler(this::cancelled);
       synchronized (this) {
         responses = calls;
+        deadline = Optional.ofNullable(Context.current().getDeadline());
       }
 
       openUploads.opened();
@@ -998,6 +1008,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       }
 
       responses().onError(status.asRuntimeException());
+    }
+
+    /** The deadline that the worker stated for the call; empty when it stated none. */
+    public synchronized Optional<Deadline> deadline() {
+      return deadline;
     }
 
     /** Whether the server refused the upload. */
@@ -1079,9 +1094,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     // handler.
     @Override
     public void onError(Throwable failure) {
-      endedByTheWorker();
+      cancelled();
     }
 
+    /**
+     * Whether the worker cancelled the call, or its deadline passed, before the server closed it.
+     */
     public synchronized boolean wasCancelled() {
       return cancelled;
     }
@@ -1140,18 +1158,18 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     /**
-     * Runs this action on the worker's thread when the worker first cancels the call, before the
-     * cancel returns, also when the call has already ended without an answer.
+     * Runs this action on the worker's thread when the worker learns that the call ended, before
+     * the worker acts on that end.
      */
-    public void whenTheWorkerCancels(Runnable action) {
-      cancelledByTheWorker.thenRun(action);
+    public void whenTheWorkerLearnsTheCallEnded(Runnable action) {
+      endKnownToTheWorker.thenRun(action);
     }
 
-    private void cancelledByTheWorker() {
-      cancelledByTheWorker.complete(null);
+    private void endKnownToTheWorker() {
+      endKnownToTheWorker.complete(null);
     }
 
-    private void endedByTheWorker() {
+    private void cancelled() {
       if (!tryClose()) {
         return;
       }

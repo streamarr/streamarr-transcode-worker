@@ -253,15 +253,14 @@ class TranscodeWorkerProbeReportTest {
 
   @Test
   @DisplayName(
-      "Should cancel the report call and keep the session when the call is not ready for a message"
-          + " within the upload readiness timeout")
-  void shouldCancelTheReportCallAndKeepTheSessionWhenTheCallIsNotReadyWithinTheReadinessTimeout()
+      "Should end the report call and keep the session when the server reads none of the report"
+          + " within the upload deadline")
+  void shouldEndTheReportCallAndKeepTheSessionWhenTheServerReadsNoneOfItWithinTheUploadDeadline()
       throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
     var unready = requestBuilder().build();
     var later = requestBuilder().build();
-    var configuration =
-        configurationBuilder().uploadReadinessTimeout(Duration.ofMillis(200)).build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMillis(200)).build();
 
     try (var worker =
         workerBuilder(tempDir).configuration(configuration).runtime(runtime).build()) {
@@ -296,15 +295,14 @@ class TranscodeWorkerProbeReportTest {
 
   @Test
   @DisplayName(
-      "Should cancel the report call and keep the session when the server does not answer within"
-          + " the upload acknowledgement timeout of the last message")
-  void shouldCancelTheReportCallAndKeepTheSessionWhenTheServerDoesNotAnswerWithinTheTimeout()
+      "Should end the report call and keep the session when the server does not answer it within"
+          + " the upload deadline")
+  void shouldEndTheReportCallAndKeepTheSessionWhenTheServerDoesNotAnswerWithinTheUploadDeadline()
       throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
     var unanswered = requestBuilder().build();
     var later = requestBuilder().build();
-    var configuration =
-        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(200)).build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMillis(200)).build();
 
     try (var worker =
         workerBuilder(tempDir).configuration(configuration).runtime(runtime).build()) {
@@ -339,16 +337,13 @@ class TranscodeWorkerProbeReportTest {
 
   @Test
   @DisplayName(
-      "Should send the whole report when it keeps advancing for longer than either upload timeout")
-  void shouldSendTheWholeReportWhenItKeepsAdvancingForLongerThanEitherUploadTimeout()
+      "Should end the report call at the upload deadline when the report keeps advancing for longer"
+          + " than the deadline")
+  void shouldEndTheReportCallAtTheUploadDeadlineWhenTheReportKeepsAdvancingForLonger()
       throws Exception {
     var request = requestBuilder().build();
-    var expected = writeSourceWhoseReportTakes(request, 15 * MESSAGE_BYTES);
-    var configuration =
-        configurationBuilder()
-            .uploadReadinessTimeout(Duration.ofSeconds(1))
-            .uploadAcknowledgementTimeout(Duration.ofSeconds(1))
-            .build();
+    writeSourceWhoseReportTakes(request, 5 * MESSAGE_BYTES);
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMillis(300)).build();
 
     try (var worker = workerBuilder(tempDir).configuration(configuration).runtime(runtime).build();
         var receiver = Executors.newSingleThreadScheduledExecutor()) {
@@ -359,15 +354,48 @@ class TranscodeWorkerProbeReportTest {
       runtime.probes().drain();
       connection.awaitReportCalls(1);
 
-      // Each of the sixteen messages waits about 100 ms for readiness, so the report takes about
-      // 1.5 s in all: a call whose readiness bound or acknowledgement bound covered the whole
-      // report, as a segment upload's acknowledgement bound does, fails.
+      // Each of the six messages waits about 100 ms for the server to read it, so the report
+      // takes about 500 ms in all: only a deadline that covers the whole call ends it.
       receiver.scheduleAtFixedRate(connection::grantReportMessage, 0, 100, TimeUnit.MILLISECONDS);
+      connection.awaitReportThreads();
 
-      assertThat(connection.reports()).containsExactly(expected);
       assertThat(connection.reportCalls())
           .singleElement()
-          .satisfies(call -> assertThat(call.wasCancelled()).isFalse());
+          .satisfies(
+              call -> {
+                assertThat(call.messages()).isNotEmpty();
+                assertThat(call.wasCancelled()).isTrue();
+              });
+      assertThat(connection.reports()).isEmpty();
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId());
+    }
+  }
+
+  @Test
+  @DisplayName("Should open the report call with the upload deadline when the report is sent")
+  void shouldOpenTheReportCallWithTheUploadDeadlineWhenTheReportIsSent() throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
+    var request = requestBuilder().build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMinutes(5)).build();
+
+    try (var worker =
+        workerBuilder(tempDir).configuration(configuration).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      start(connection, request);
+      runtime.probes().drain();
+      connection.awaitReportThreads();
+
+      assertThat(connection.reportCalls())
+          .singleElement()
+          .satisfies(
+              call ->
+                  assertThat(call.deadline())
+                      .hasValueSatisfying(
+                          deadline ->
+                              assertThat(deadline.timeRemaining(TimeUnit.SECONDS))
+                                  .isBetween(4 * 60L, 5 * 60L)));
     }
   }
 
