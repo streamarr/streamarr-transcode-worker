@@ -131,19 +131,7 @@ class HdrEncodeSmokeTest {
           + " metadata when an HDR10 source encodes to AV1 HDR10")
   void shouldDeliverTenBitAv1WithThePqColourDescriptionAndTheJobsMetadataWhenEncodingAv1Hdr10()
       throws Exception {
-    var encode =
-        VideoDecision.Encode.builder()
-            .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
-            .sourceDynamicRange(range(VideoDynamicRange.CompatibleBase.PQ))
-            .outputDynamicRange(range(VideoDynamicRange.CompatibleBase.PQ))
-            .codecProfile(VideoCodecProfile.AV1_MAIN)
-            .tier(Optional.of(VideoCodecTier.MAIN))
-            .level(AV1_LEVEL)
-            .codecString(AV1_TEN_BIT_CODEC_STRING)
-            .softwareEncoder(true)
-            .outputPictureFormat(tenBit())
-            .staticHdrMetadata(Optional.of(SOURCE_METADATA))
-            .build();
+    var encode = av1Encode(range(VideoDynamicRange.CompatibleBase.PQ)).build();
 
     var probed = probed(encoded(hdr10, encode, 0).acceptedBytes());
 
@@ -328,6 +316,20 @@ class HdrEncodeSmokeTest {
         .staticHdrMetadata(Optional.of(SOURCE_METADATA));
   }
 
+  private static VideoDecision.Encode.EncodeBuilder av1Encode(VideoDynamicRange output) {
+    return VideoDecision.Encode.builder()
+        .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
+        .sourceDynamicRange(output)
+        .outputDynamicRange(output)
+        .codecProfile(VideoCodecProfile.AV1_MAIN)
+        .tier(Optional.of(VideoCodecTier.MAIN))
+        .level(AV1_LEVEL)
+        .codecString(AV1_TEN_BIT_CODEC_STRING)
+        .softwareEncoder(true)
+        .outputPictureFormat(tenBit())
+        .staticHdrMetadata(Optional.of(SOURCE_METADATA));
+  }
+
   private static PictureFormat tenBit() {
     return new PictureFormat(10, ChromaSubsampling.CHROMA_420);
   }
@@ -366,13 +368,18 @@ class HdrEncodeSmokeTest {
             .toURI());
   }
 
-  // The attempt's deliveries, after the producer accepted its output against the job.
   private static RecordingSegmentSink encoded(
       Path source, VideoDecision.Encode encode, int firstSegment) {
-    var sink = new RecordingSegmentSink();
-    var request = request(source, encode, firstSegment);
+    return deliveriesOf(
+        engine(new ProcessBuilderLauncher()), request(source, encode, firstSegment));
+  }
 
-    var producer = engine().startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
+  // The attempt's deliveries, after the producer accepted its output against the job.
+  private static RecordingSegmentSink deliveriesOf(
+      FfmpegTranscodeEngine engine, TranscodeRequest request) {
+    var sink = new RecordingSegmentSink();
+
+    var producer = engine.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
     return sink;
@@ -408,11 +415,11 @@ class HdrEncodeSmokeTest {
         .build();
   }
 
-  private static FfmpegTranscodeEngine engine() {
+  private static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
         .capabilityService(DetectedCapabilities.realCapabilities())
-        .launcher(new ProcessBuilderLauncher())
+        .launcher(launcher)
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
   }
