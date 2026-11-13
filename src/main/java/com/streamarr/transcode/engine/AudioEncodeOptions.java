@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -34,12 +35,20 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     outputOptions = List.copyOf(outputOptions);
   }
 
-  static AudioEncodeOptions of(AudioDecision audio, SourceAudio source) {
+  /**
+   * The options of the encode, whose gap fill writes silence from {@code fillStart}, in whole
+   * seconds, to the first frame.
+   */
+  static AudioEncodeOptions of(AudioDecision audio, SourceAudio source, Duration fillStart) {
     var output = audio.channelLayout().orElseThrow();
     var encoder = Encoder.of(audio.codec());
     var channels = ChannelStage.of(source, output);
     var rate = targetSampleRate(encoder, audio, source);
-    var filters = filters(encoder, audio, source, rate, channels);
+    var stages = filters(encoder, audio, source, rate, channels);
+    var filters =
+        encoder == Encoder.LOSSLESS
+            ? filledAroundTheDither(stages, holdsSamples(rate, source, channels), fillStart)
+            : filledFirst(stages.filters(), fillStart);
 
     var outputOptions = new ArrayList<>(List.of("-c:a", encoder.ffmpegName(audio.codec())));
     outputOptions.addAll(List.of("-af", String.join(",", filters)));
@@ -85,6 +94,46 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return OptionalInt.of(Integer.parseInt(outputOptions.get(option + 1)));
   }
 
+  // A lossy encode dithers nothing, so the gap fill runs before every stage, each of which then
+  // meets no gap longer than 2 ms.
+  private static List<String> filledFirst(List<String> stages, Duration start) {
+    var filters = new ArrayList<>(List.of(GapFillFilter.from(start)));
+    filters.addAll(stages);
+    return filters;
+  }
+
+  // A FLAC or ALAC encode's format stage can dither, and dither would turn the fill's silence into
+  // noise, so a fill after the format stage writes the silence before the first frame. A resampler
+  // or a downmix's limiter would join the audio on both sides of a gap, so a fill before it fills
+  // the gaps, even where the format stage then dithers their silence. When FFmpeg rebuilds the
+  // graph for a new source rate, the format stage resamples too, so a fill before it also fills
+  // the gaps wherever that stage adds no dither. Only a format stage that dithers, with nothing
+  // before it that holds samples, leaves the gaps to the fill after it.
+  private static List<String> filledAroundTheDither(
+      Stages stages, boolean holdsSamples, Duration start) {
+    var filters = new ArrayList<String>();
+    if (holdsSamples || !stages.dithers()) {
+      filters.add(GapFillFilter.inGaps());
+    }
+
+    filters.addAll(stages.filters());
+    filters.add(GapFillFilter.from(start));
+    return filters;
+  }
+
+  // Whether a stage before the format stage holds samples: a resampler that changes the rate, or a
+  // downmix that sums channels, whose limiter looks ahead. A FLAC or ALAC encode's downmix runs at
+  // the rate that the encode writes.
+  private static boolean holdsSamples(
+      Optional<Integer> rate, SourceAudio source, ChannelStage channels) {
+    if (rate.isPresent()) {
+      return true;
+    }
+
+    return channels instanceof ChannelStage.Downmix downmix
+        && DownmixFilter.sumsChannels(downmix.matrix(source.loRoLevels()));
+  }
+
   // ADR 0043: no dynamic range compression, and the dialogue normalization that a hardware
   // decoder applies to the copy.
   private static List<String> decoderOptions(AudioDecision audio, SourceAudio source) {
@@ -121,9 +170,13 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return List.of("-frame_size:a", String.valueOf(written.getAsInt() / FLAC_FRAMES_PER_SECOND));
   }
 
+  // The filters of an encode before its gap fill, and whether the FLAC or ALAC format stage among
+  // them dithers.
+  private record Stages(List<String> filters, boolean dithers) {}
+
   // A downmix mixes in floating point, so the format stage follows it. Otherwise the format stage
   // runs first, so its dither never reaches the silent channels that a pad adds.
-  private static List<String> filters(
+  private static Stages filters(
       Encoder encoder,
       AudioDecision audio,
       SourceAudio source,
@@ -135,7 +188,8 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
 
     var filters = new ArrayList<>(List.of(formatStage(encoder, audio, source, rate, false)));
     channels.filter().ifPresent(filters::add);
-    return filters;
+    return new Stages(
+        filters, encoder == Encoder.LOSSLESS && dithers(audio, source, rate.isPresent(), false));
   }
 
   // No resampler may follow the limiter, so the downmix runs at the output rate. When only the
@@ -143,7 +197,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   // quantized with TPDF dither before join, so the channels that pass through keep their integer
   // values; otherwise the format stage dithers every channel. Decoded lossy audio is floating point
   // in every channel, so every channel needs dither.
-  private static List<String> downmixFilters(
+  private static Stages downmixFilters(
       Encoder encoder,
       AudioDecision audio,
       SourceAudio source,
@@ -173,7 +227,9 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
             limiterFor(encoder, writtenRate),
             quantizesSummedChannels ? Optional.of(quantizer(depth)) : Optional.empty()));
     filters.add(formatStage(encoder, audio, source, Optional.empty(), !quantizesSummedChannels));
-    return filters;
+    return new Stages(
+        filters,
+        encoder == Encoder.LOSSLESS && dithers(audio, source, false, !quantizesSummedChannels));
   }
 
   // The limiter's copies need the rate that the downmix runs at. A lossy encode that sums channels
@@ -275,11 +331,18 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
 
     var format = integerFormat(depth);
     options.add("osf=" + ("alac".equals(audio.codec()) ? format + "p" : format));
-    if (resamples || mixed || losesPrecision(source, depth)) {
+    if (dithers(audio, source, resamples, mixed)) {
       options.addAll(ditherAt(depth));
     }
 
     return options;
+  }
+
+  // Whether a FLAC or ALAC format stage dithers: when it resamples, when it writes samples that a
+  // downmix mixed, or when it loses precision.
+  private static boolean dithers(
+      AudioDecision audio, SourceAudio source, boolean resamples, boolean mixed) {
+    return resamples || mixed || losesPrecision(source, writtenDepth(audio, source));
   }
 
   private static int writtenDepth(AudioDecision audio, SourceAudio source) {

@@ -64,6 +64,10 @@ public final class RemoteWorkerFixtures {
       return FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
     }
 
+    if (arguments.contains("filter=agapfill")) {
+      return FfmpegFilterHelpFixtures.GAP_FILL_FILTER_HELP;
+    }
+
     if (arguments.contains("-encoders")) {
       return encodersOutput;
     }

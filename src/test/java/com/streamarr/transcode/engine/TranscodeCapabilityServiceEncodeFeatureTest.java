@@ -5,6 +5,7 @@ import static com.streamarr.transcode.engine.EncodeFeature.HLG;
 import static com.streamarr.transcode.engine.EncodeFeature.PQ;
 import static com.streamarr.transcode.engine.EncodeFeature.TEN_BIT;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
+import static com.streamarr.transcode.fixtures.FfmpegFilterHelpFixtures.GAP_FILL_FILTER_HELP;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -298,6 +299,10 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     var arguments = command.command();
     if (arguments.contains("muxer=mp4")) {
       return new FakeProcess(FRAGMENTED_MP4_MUXER_HELP, 0);
+    }
+
+    if (arguments.contains("filter=agapfill")) {
+      return new FakeProcess(GAP_FILL_FILTER_HELP, 0);
     }
 
     // The version check, and an encoder list and accelerator list that name no hardware.

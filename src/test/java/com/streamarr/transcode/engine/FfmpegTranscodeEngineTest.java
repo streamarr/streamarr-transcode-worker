@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.FfmpegFilterHelpFixtures.GAP_FILL_FILTER_HELP;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
@@ -365,6 +366,10 @@ class FfmpegTranscodeEngineTest {
 
               if (cmdStr.contains("muxer=mp4")) {
                 return outputs.get("mp4");
+              }
+
+              if (cmdStr.contains("filter=agapfill")) {
+                return new FakeProcess(GAP_FILL_FILTER_HELP, 0);
               }
 
               if (cmdStr.contains("-hwaccels")) {

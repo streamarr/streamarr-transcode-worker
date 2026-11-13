@@ -27,6 +27,10 @@ class FfmpegCommandBuilderAudioLayoutTest {
   private static final String TUNED_RESAMPLER =
       "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14";
 
+  // An attempt from zero fills the audio's gaps, and the time from zero to its first frame.
+  private static final String FILL_FROM_ZERO = "agapfill=start=0";
+  private static final String FILL_IN_GAPS = "agapfill";
+
   private final FfmpegCommandBuilder builder =
       new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
 
@@ -40,7 +44,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("aac", "quad"), source("aac", "quad"));
 
       assertThat(cmd).containsSubsequence("-ch_layout", "quad").doesNotContain("-ac");
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd)).isEqualTo(FILL_FROM_ZERO + ",aresample=" + TUNED_RESAMPLER);
     }
 
     @Test
@@ -56,7 +60,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(audio, Optional.empty());
 
-      assertThat(cmd).containsSubsequence("-ac", "4").doesNotContain("-ch_layout", "-af");
+      assertThat(cmd).containsSubsequence("-ac", "4").doesNotContain("-ch_layout");
+      assertThat(audioFilter(cmd)).isEqualTo(FILL_FROM_ZERO);
     }
 
     @Test
@@ -76,7 +81,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
       assertThat(audioFilter(cmd))
           .endsWith(
               ",channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR|BC-BC"
-                  + ":channel_layout=6.1(back)");
+                  + ":channel_layout=6.1(back),"
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -85,7 +91,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "6.1"), source("pcm_s16le", "4.0"));
 
       assertThat(audioFilter(cmd))
-          .endsWith(",pan=6.1|FL=FL|FR=FR|FC=FC|LFE=0*FL|BC=BC|SL=0*FL|SR=0*FL");
+          .endsWith(",pan=6.1|FL=FL|FR=FR|FC=FC|LFE=0*FL|BC=BC|SL=0*FL|SR=0*FL," + FILL_FROM_ZERO);
       assertThat(cmd).containsSubsequence("-ch_layout", "6.1");
     }
 
@@ -95,7 +101,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("alac", "6.1(back)"), source("flac", "6.0"));
 
       assertThat(audioFilter(cmd))
-          .endsWith(",pan=6.1(back)|FL=FL|FR=FR|FC=FC|LFE=0*FL|BL=SL|BR=SR|BC=BC");
+          .endsWith(
+              ",pan=6.1(back)|FL=FL|FR=FR|FC=FC|LFE=0*FL|BL=SL|BR=SR|BC=BC," + FILL_FROM_ZERO);
     }
 
     @Test
@@ -114,9 +121,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(
-              "aresample=osr=48000:osf=s32:output_sample_bits=24:dither_method=triangular:"
+              FILL_IN_GAPS
+                  + ",aresample=osr=48000:osf=s32:output_sample_bits=24:dither_method=triangular:"
                   + TUNED_RESAMPLER
-                  + ",pan=6.1|FL=FL|FR=FR|FC=FC|LFE=0*FL|BC=BC|SL=0*FL|SR=0*FL");
+                  + ",pan=6.1|FL=FL|FR=FR|FC=FC|LFE=0*FL|BC=BC|SL=0*FL|SR=0*FL,"
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -126,7 +135,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("flac", "5.1"), Optional.of(pcm.build()));
 
-      assertThat(audioFilter(cmd)).startsWith("aresample=");
+      assertThat(audioFilter(cmd)).startsWith(FILL_IN_GAPS + ",aresample=");
     }
   }
 
@@ -135,15 +144,16 @@ class FfmpegCommandBuilderAudioLayoutTest {
   class DownmixTests {
 
     private static final String FLOAT_PAN = "aformat=sample_fmts=fltp,pan=";
-    private static final String LIMIT_TIMING = ":attack=5:release=50:level=0:latency=1";
+    private static final String LIMIT_TIMING = ":attack=5:release=50:level=0:latency=0";
     private static final String MINUS_3_DBFS = "alimiter=limit=0.707946" + LIMIT_TIMING;
     private static final String MINUS_1_DBFS = "alimiter=limit=0.891251" + LIMIT_TIMING;
+    // At 48 kHz, alimiter's 5 ms lookahead delays its output by 239 samples.
     private static final String MINUS_1_DBTP_STAGE =
-        Pattern.quote("amerge=inputs=") + "\\d+," + Pattern.quote(MINUS_1_DBFS);
+        Pattern.quote("amerge=inputs=") + "\\d+,apad=pad_len=239," + Pattern.quote(MINUS_1_DBFS);
     private static final String MINUS_3_DBTP_STAGE =
-        Pattern.quote("amerge=inputs=") + "\\d+," + Pattern.quote(MINUS_3_DBFS);
+        Pattern.quote("amerge=inputs=") + "\\d+,apad=pad_len=239," + Pattern.quote(MINUS_3_DBFS);
     private static final String TRIMMED_SECOND_STAGE =
-        "atrim=start_sample=6,asetpts=round(PTS-6/(SR*TB))";
+        "atrim=start_sample=245,asetpts=round(PTS-245/(SR*TB))";
     private static final String DITHERED_16_BITS =
         "aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER;
     private static final String DITHERED_24_BITS =
@@ -159,7 +169,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var filter = audioFilter(cmd);
       assertThat(filter)
           .startsWith(
-              FLOAT_PAN
+              FILL_FROM_ZERO
+                  + ","
+                  + FLOAT_PAN
                   + "stereo|FL=FL+0.7071068*FC+0.7071068*SL|FR=FR+0.7071068*FC+0.7071068*SR"
                   + "[mix];aevalsrc=")
           .endsWith(TRIMMED_SECOND_STAGE + "[l0];[l0]anull,aresample=" + TUNED_RESAMPLER);
@@ -174,7 +186,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .startsWith(
-              FLOAT_PAN
+              FILL_FROM_ZERO
+                  + ","
+                  + FLOAT_PAN
                   + "stereo|FL=FL+0.7071068*FC+0.5000000*BL+0.5000000*SL"
                   + "|FR=FR+0.7071068*FC+0.5000000*BR+0.5000000*SR[mix];");
     }
@@ -186,7 +200,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("aac", "stereo"), source("flac", "2.1"));
 
       assertThat(audioFilter(cmd))
-          .startsWith(FLOAT_PAN + "stereo|FL=FL+0.7071068*LFE|FR=FR+0.7071068*LFE[mix];aevalsrc=")
+          .startsWith(
+              FILL_FROM_ZERO
+                  + ","
+                  + FLOAT_PAN
+                  + "stereo|FL=FL+0.7071068*LFE|FR=FR+0.7071068*LFE[mix];aevalsrc=")
           .contains(MINUS_3_DBFS);
     }
 
@@ -202,7 +220,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .startsWith(
-              FLOAT_PAN
+              FILL_FROM_ZERO
+                  + ","
+                  + FLOAT_PAN
                   + "mono|FC=0.7071068*FL+0.7071068*FR+0.8408970*FC"
                   + "+0.3535534*SL+0.3535534*SR[mix];aevalsrc=")
           .contains(MINUS_3_DBFS);
@@ -220,7 +240,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode(codec, "5.0"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .startsWith(FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR")
+          .contains(FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR")
           .doesNotContain("alimiter", "aresample=osr");
     }
 
@@ -234,7 +254,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("aac", "stereo"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .startsWith(FILL_FROM_ZERO + ",aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
           .contains(":s=48000,atrim=end_sample=128")
           .doesNotContain(":s=44100");
     }
@@ -253,7 +273,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var filter = audioFilter(cmd);
       assertThat(filter)
           .startsWith(
-              FLOAT_PAN
+              FILL_IN_GAPS
+                  + ","
+                  + FLOAT_PAN
                   + "5.1|FL=FL|FR=FR|FC=FC|LFE=LFE"
                   + "|BL=0.7071068*BL+0.7071068*SL|BR=0.7071068*BR+0.7071068*SR,"
                   + "channelsplit=channel_layout=5.1[c0][c1][c2][c3][c4][c5];aevalsrc=")
@@ -264,7 +286,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
               TRIMMED_SECOND_STAGE
                   + "[g0];[c0][c1][c2][c3][g0]join=inputs=5:channel_layout=5.1"
                   + ":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR,"
-                  + DITHERED_16_BITS);
+                  + DITHERED_16_BITS
+                  + ","
+                  + FILL_FROM_ZERO);
       assertThat(filter.split(MINUS_1_DBTP_STAGE, -1)).hasSize(3);
     }
 
@@ -279,7 +303,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var filter = audioFilter(cmd);
       assertThat(filter)
           .startsWith(
-              FLOAT_PAN
+              FILL_FROM_ZERO
+                  + ","
+                  + FLOAT_PAN
                   + "5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL=0.7071068*BC+SL|BR=0.7071068*BC+SR,"
                   + "channelsplit=channel_layout=5.1[c0][c1][c2][c3][c4][c5];aevalsrc=")
           .contains(
@@ -309,7 +335,13 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(
-              FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s16:" + TUNED_RESAMPLER);
+              FILL_IN_GAPS
+                  + ","
+                  + FLOAT_PAN
+                  + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s16:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -325,7 +357,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
                   + "[l0];[l0]"
                   + DITHERED_16_BITS
                   + ",aresample=osf=s16:"
-                  + TUNED_RESAMPLER);
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -337,7 +371,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "stereo"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo(FLOAT_PAN + "stereo|FL=0.7071068*FC|FR=0.7071068*FC," + DITHERED_16_BITS);
+          .isEqualTo(
+              FLOAT_PAN
+                  + "stereo|FL=0.7071068*FC|FR=0.7071068*FC,"
+                  + DITHERED_16_BITS
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -354,7 +393,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
                   + "[g0];[c0][c1][c2][c3][g0]join=inputs=5:channel_layout=5.1"
                   + ":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR,"
                   + "aresample=osf=s32:"
-                  + TUNED_RESAMPLER);
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -364,7 +405,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "stereo"), Optional.of(hiResSource("mono", 48_000)));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo(FLOAT_PAN + "stereo|FL=0.7071068*FC|FR=0.7071068*FC," + DITHERED_24_BITS);
+          .isEqualTo(
+              FLOAT_PAN
+                  + "stereo|FL=0.7071068*FC|FR=0.7071068*FC,"
+                  + DITHERED_24_BITS
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -374,7 +420,13 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(
-              FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s32:" + TUNED_RESAMPLER);
+              FILL_IN_GAPS
+                  + ","
+                  + FLOAT_PAN
+                  + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s32:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -386,10 +438,14 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(audio, Optional.of(hiResSource("7.1", 96_000)));
 
       assertThat(audioFilter(cmd))
-          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .startsWith(FILL_IN_GAPS + ",aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
           .contains(":s=48000,atrim=end_sample=128")
           .doesNotContain("osr=192000", ":s=96000")
-          .endsWith(":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR," + DITHERED_24_BITS);
+          .endsWith(
+              ":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR,"
+                  + DITHERED_24_BITS
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -398,7 +454,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "5.0"), source("ac3", "5.1(side)"));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo(FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR," + DITHERED_16_BITS);
+          .isEqualTo(
+              FLOAT_PAN
+                  + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,"
+                  + DITHERED_16_BITS
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -412,7 +473,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("aac", "stereo"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo(FLOAT_PAN + "stereo|FL=FL|FR=FR,aresample=" + TUNED_RESAMPLER);
+          .isEqualTo(
+              FILL_FROM_ZERO + "," + FLOAT_PAN + "stereo|FL=FL|FR=FR,aresample=" + TUNED_RESAMPLER);
     }
 
     @Test
@@ -423,7 +485,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("aac", "stereo"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .startsWith(FILL_FROM_ZERO + ",aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
           .contains(":s=48000,atrim=end_sample=128")
           .endsWith(TRIMMED_SECOND_STAGE + "[l0];[l0]anull,aresample=" + TUNED_RESAMPLER);
     }
@@ -440,7 +502,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("aac", "stereo"), Optional.of(source));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd)).isEqualTo(FILL_FROM_ZERO + ",aresample=" + TUNED_RESAMPLER);
       assertThat(cmd).containsSubsequence("-ch_layout", "stereo");
     }
   }
@@ -509,7 +571,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("ac3", "stereo"), Optional.of(source));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=" + rate + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FILL_FROM_ZERO + ",aresample=" + rate + TUNED_RESAMPLER);
     }
 
     @Test
@@ -524,7 +587,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("flac", "stereo"), Optional.of(source));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=osf=s32:" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FILL_IN_GAPS + ",aresample=osf=s32:" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @Test
@@ -533,17 +597,21 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "stereo"), source("eac3", "stereo"));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo("aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER);
+          .isEqualTo(
+              "aresample=osf=s16:dither_method=triangular:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @ParameterizedTest(name = "{0}, {1}, {2} bits")
     @CsvSource({
-      "pcm_s24le, s32, 24, s32p",
-      "pcm_s16le, s16, 16, s16p",
-      "pcm_f32le, flt, 32, s32p:output_sample_bits=24:dither_method=triangular",
-      "pcm_s32le, s32, 32, s32p:output_sample_bits=24:dither_method=triangular",
-      "truehd, s32, 24, s32p",
-      "flac, s16, 16, s16p"
+      "pcm_s24le, s32, 24, 'agapfill,aresample=osf=s32p'",
+      "pcm_s16le, s16, 16, 'agapfill,aresample=osf=s16p'",
+      "pcm_f32le, flt, 32, aresample=osf=s32p:output_sample_bits=24:dither_method=triangular",
+      "pcm_s32le, s32, 32, aresample=osf=s32p:output_sample_bits=24:dither_method=triangular",
+      "truehd, s32, 24, 'agapfill,aresample=osf=s32p'",
+      "flac, s16, 16, 'agapfill,aresample=osf=s16p'"
     })
     @DisplayName("Should keep a lossless track's depth up to 24 bits when ALAC encodes it")
     void shouldKeepALosslessTracksDepthUpTo24BitsWhenAlacEncodesIt(
@@ -556,11 +624,15 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("alac", "stereo"), Optional.of(source));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=osf=" + written + ":" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(written + ":" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @ParameterizedTest(name = "{0}")
-    @CsvSource({"DTS-HD MA, s32", "DTS, s16:dither_method=triangular"})
+    @CsvSource({
+      "DTS-HD MA, 'agapfill,aresample=osf=s32'",
+      "DTS, aresample=osf=s16:dither_method=triangular"
+    })
     @DisplayName("Should count only DTS-HD MA as lossless when FLAC encodes DTS")
     void shouldCountOnlyDtsHdMaAsLosslessWhenFlacEncodesDts(String profile, String written) {
       var source =
@@ -572,7 +644,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("flac", "5.1(side)"), Optional.of(source));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=osf=" + written + ":" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(written + ":" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -582,7 +655,15 @@ class FfmpegCommandBuilderAudioLayoutTest {
         String codec, String written) {
       var cmd = command(encode("flac", "stereo"), source(codec, "stereo"));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=osf=" + written + ":" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              FILL_IN_GAPS
+                  + ",aresample=osf="
+                  + written
+                  + ":"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -595,8 +676,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(
-              "aresample=osr=48000:osf=s32:output_sample_bits=24:dither_method=triangular:"
-                  + TUNED_RESAMPLER);
+              FILL_IN_GAPS
+                  + ",aresample=osr=48000:osf=s32:output_sample_bits=24:dither_method=triangular:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -610,7 +694,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(audio, Optional.of(hiResFlac(96_000, 24)));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=osf=s32p:" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              FILL_IN_GAPS + ",aresample=osf=s32p:" + TUNED_RESAMPLER + "," + FILL_FROM_ZERO);
     }
 
     @Test
@@ -621,7 +707,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(audio, Optional.of(hiResFlac(48_000, 24)));
 
       assertThat(audioFilter(cmd))
-          .isEqualTo("aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER);
+          .isEqualTo(
+              "aresample=osf=s16:dither_method=triangular:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -634,8 +724,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(
-              "aresample=osr=48000:internal_sample_fmt=fltp:osf=s16:dither_method=triangular:"
-                  + TUNED_RESAMPLER);
+              FILL_IN_GAPS
+                  + ",aresample=osr=48000:internal_sample_fmt=fltp:osf=s16:dither_method=triangular:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + FILL_FROM_ZERO);
     }
 
     @Test
@@ -645,7 +738,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(audio, Optional.of(hiResFlac(88_200, 24)));
 
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=osr=44100:" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FILL_FROM_ZERO + ",aresample=osr=44100:" + TUNED_RESAMPLER);
     }
 
     @ParameterizedTest(name = "{0} Hz to {1} Hz")
@@ -705,7 +799,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
           .containsSubsequence("-vbr", "constrained")
           .containsSubsequence("-mapping_family", "1")
           .containsSubsequence("-b:a", "448k");
-      assertThat(audioFilter(cmd)).isEqualTo("aresample=osr=48000:" + TUNED_RESAMPLER);
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FILL_FROM_ZERO + ",aresample=osr=48000:" + TUNED_RESAMPLER);
     }
 
     @Test
@@ -748,7 +843,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
 
     // A replacement from segment 10 starts at 60 s and seeks one 6 s period earlier, so the
-    // encoder's input starts its lead plus the whole frames that fit with it in 6 s before 60 s.
+    // encoder's input starts its lead plus the whole frames that fit with it in 6 s before 60 s,
+    // and its gap fill starts at 53 s, the last whole second at least 1 s before that seek.
     @ParameterizedTest(name = "{0} {1}")
     @CsvSource(
         delimiter = ';',
@@ -775,9 +871,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
       }
 
       var shift = "round((" + lead + "+" + wholeFrames + "*(" + samplesPerFrame + "))/SR/TB)";
+      var filledFrom53Seconds =
+          audioFilter(command(audio, source("dts", "5.1(side)")))
+              .replace(FILL_FROM_ZERO, "agapfill=start=53");
       assertThat(heldAudioFilter(cmd))
           .isEqualTo(
-              audioFilter(command(audio, source("dts", "5.1(side)")))
+              filledFrom53Seconds
                   + ",asetpts='PTS+"
                   + shift
                   + "',atrim=start=60,asetpts='PTS-"
@@ -878,6 +977,96 @@ class FfmpegCommandBuilderAudioLayoutTest {
         .containsSequence("-map", map)
         .containsSubsequence("-c:a", "libopus", "-af")
         .containsSubsequence("-ch_layout", "5.1");
+  }
+
+  // FFmpeg cuts an encoder's frames by sample count, so a gap in the audio's timestamps moves the
+  // samples after it into the frame before it, and a resampler or a downmix's limiter joins the
+  // audio on both sides of it. The gap fill writes digital silence for every gap and from the
+  // attempt's start to the first frame. Its silence stays digital only where no dither follows it.
+  // A FLAC or ALAC format stage resamples when FFmpeg rebuilds the graph for a new source rate, so
+  // the gaps are filled before it wherever it adds no dither.
+  @Nested
+  @DisplayName("Gap Fill")
+  class GapFillTests {
+
+    @ParameterizedTest(name = "{0} {1} from {2} {3}")
+    @CsvSource({
+      "aac, stereo, dts, 5.1(side)",
+      "ac3, 5.1, truehd, 5.1(side)",
+      "eac3, 5.1, flac, 7.1",
+      "libopus, stereo, flac, stereo"
+    })
+    @DisplayName(
+        "Should fill the gaps before every filter of the encode when a lossy encode names its"
+            + " layout")
+    void shouldFillTheGapsBeforeEveryFilterWhenALossyEncodeNamesItsLayout(
+        String codec, String layout, String sourceCodec, String sourceLayout) {
+      var cmd = command(encode(codec, layout), source(sourceCodec, sourceLayout));
+
+      assertThat(audioFilter(cmd)).startsWith(FILL_FROM_ZERO + ",a").containsOnlyOnce(FILL_IN_GAPS);
+    }
+
+    @Test
+    @DisplayName(
+        "Should fill the gaps before the format stage and the silence before the audio after the"
+            + " channels that a pad adds when ALAC pads a layout without dither")
+    void shouldFillTheGapsBeforeTheFormatStageWhenAlacPadsALayoutWithoutDither() {
+      var cmd = command(encode("alac", "6.1(back)"), Optional.of(hiResSource("6.0", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .startsWith(FILL_IN_GAPS + ",aresample=osf=s32p:" + TUNED_RESAMPLER + ",pan=6.1(back)|")
+          .endsWith("," + FILL_FROM_ZERO);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"flac", "alac"})
+    @DisplayName(
+        "Should fill the gaps and the silence before the audio after the format stage alone when a"
+            + " lossless encode dithers without resampling")
+    void shouldFillTheGapsAfterTheFormatStageAloneWhenALosslessEncodeDithersWithoutResampling(
+        String codec) {
+      var audio = encodeBuilder(codec, "stereo").outputBitDepth(OptionalInt.of(16)).build();
+
+      var cmd = command(audio, Optional.of(hiResFlac(48_000, 24)));
+
+      assertThat(audioFilter(cmd))
+          .startsWith("aresample=osf=s16")
+          .contains(":dither_method=triangular:")
+          .endsWith("," + FILL_FROM_ZERO)
+          .containsOnlyOnce(FILL_IN_GAPS);
+    }
+
+    @Test
+    @DisplayName(
+        "Should fill the gaps before the limiter and the silence before the audio after the dither"
+            + " when a FLAC downmix sums channels")
+    void shouldFillTheGapsBeforeTheLimiterAndTheLeadingSilenceAfterTheDitherWhenFlacSumsChannels() {
+      var cmd = command(encode("flac", "stereo"), Optional.of(hiResSource("5.1(side)", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .startsWith(FILL_IN_GAPS + ",aformat=sample_fmts=fltp,pan=stereo|")
+          .contains("alimiter=")
+          .endsWith("," + FILL_FROM_ZERO);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"aac", "flac"})
+    @DisplayName(
+        "Should fill the gaps before the padding in the named layout's one filter chain when an"
+            + " encode pads its audio")
+    void shouldFillTheGapsBeforeThePaddingWhenANamedLayoutEncodePadsItsAudio(String codec) {
+      var padded =
+          command(
+              encodeBuilder(codec, "stereo").padsWithSilenceToAdvertisedEnd(true).build(),
+              Optional.of(hiResFlac(48_000, 24)),
+              Optional.of(Duration.ofSeconds(66)));
+
+      var filter = audioFilter(padded);
+      assertThat(filter)
+          .contains(FILL_FROM_ZERO + ",")
+          .endsWith(",apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67");
+      assertThat(filter.substring(filter.indexOf(",apad,"))).doesNotContain(FILL_IN_GAPS);
+    }
   }
 
   private List<String> command(AudioDecision audio, Optional<SourceAudio> source) {

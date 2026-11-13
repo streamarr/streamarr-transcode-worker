@@ -1,5 +1,6 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.fixtures.FfmpegFilterHelpFixtures.GAP_FILL_FILTER_HELP;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
@@ -468,10 +469,14 @@ class TranscodeWorkerApplicationIT {
         %s
         HELP
           ;;
+          *"filter=agapfill"*) cat <<'HELP'
+        %s
+        HELP
+          ;;
         esac
         exit 0
         """
-            .formatted(FRAGMENTED_MP4_MUXER_HELP));
+            .formatted(FRAGMENTED_MP4_MUXER_HELP, GAP_FILL_FILTER_HELP));
     Files.setPosixFilePermissions(ffmpeg, PosixFilePermissions.fromString("rwx------"));
     var command = new ArrayList<String>();
     command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());

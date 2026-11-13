@@ -185,7 +185,7 @@ class DownmixLimiterSmokeTest {
             .channelLayout(Optional.of(job.source.name()))
             .sampleRate(OptionalInt.of(placing.sampleRate()))
             .build();
-    var options = AudioEncodeOptions.of(audio, sourceAudio).outputOptions();
+    var options = AudioEncodeOptions.of(audio, sourceAudio, Duration.ZERO).outputOptions();
     var filter = options.get(options.indexOf("-af") + 1);
 
     var output = run(source, filtering(job, filter, placing.sampleRate()));
@@ -361,6 +361,52 @@ class DownmixLimiterSmokeTest {
       source[frame][1] = source[frame][0];
     }
 
+    // The source's timestamps start ten seconds in, as a seek's do under -copyts.
+    var packets = packets(source, "asetpts=PTS+10/TB," + stereoFilter(sampleRate));
+
+    assertThat(packets.getFirst()[0]).as("first timestamp").isEqualTo(10L * sampleRate);
+    assertThat(packets.stream().mapToLong(packet -> packet[1]).sum()).isEqualTo(sampleRate);
+  }
+
+  // Audio whose timestamps drift steps by about a millisecond at a time, and the gap fill passes
+  // each
+  // such step through. ADR 0050: the limiter keeps the audio's timing and its sample count, so its
+  // output takes the input's step, by the same 48 samples, and makes no other.
+  @Test
+  @DisplayName(
+      "Should take the input's timestamp step and keep the sample count when the limiter holds the"
+          + " summed pair of audio whose timestamps step forward")
+  void shouldTakeTheInputsTimestampStepWhenTheLimiterHoldsTheSummedPairOfAudioThatStepsForward()
+      throws Exception {
+    var sampleRate = 48_000;
+    var random = new Random(8);
+    var source = new double[sampleRate][6];
+    for (var frame = 0; frame < sampleRate; frame++) {
+      source[frame][0] = 2 * random.nextDouble() - 1;
+      source[frame][1] = source[frame][0];
+    }
+
+    // The timestamps step 48 samples forward at the first frame that starts half a second in.
+    var packets =
+        packets(source, "asetpts='PTS+gte(N,24000)*48/(SR*TB)'," + stereoFilter(sampleRate));
+
+    var steps = new ArrayList<Long>();
+    for (var packet = 1; packet < packets.size(); packet++) {
+      var previous = packets.get(packet - 1);
+      var step = packets.get(packet)[0] - (previous[0] + previous[1]);
+      if (step != 0) {
+        steps.add(step);
+      }
+    }
+
+    assertThat(packets.getFirst()[0]).as("first timestamp").isZero();
+    assertThat(steps).as("steps between one packet's end and the next packet").containsExactly(48L);
+    assertThat(packets.stream().mapToLong(packet -> packet[1]).sum()).isEqualTo(sampleRate);
+  }
+
+  // The timestamp and duration of each packet of FFmpeg's run of a 5.1 source through a filter
+  // under -copyts, in samples at the source's rate of 48 kHz.
+  private List<long[]> packets(double[][] source, String filter) throws Exception {
     var input = writeRaw(source);
     var command =
         List.of(
@@ -373,14 +419,13 @@ class DownmixLimiterSmokeTest {
             "-f",
             "f64le",
             "-ar",
-            String.valueOf(sampleRate),
+            "48000",
             "-ch_layout",
             "5.1",
             "-i",
             input.toString(),
             "-af",
-            // The source's timestamps start ten seconds in, as a seek's do under -copyts.
-            "asetpts=PTS+10/TB," + stereoFilter(sampleRate),
+            filter,
             "-c:a",
             "pcm_f64le",
             "-f",
@@ -394,8 +439,7 @@ class DownmixLimiterSmokeTest {
       }
     }
 
-    assertThat(packets.getFirst()[0]).as("first timestamp").isEqualTo(10L * sampleRate);
-    assertThat(packets.stream().mapToLong(packet -> packet[1]).sum()).isEqualTo(sampleRate);
+    return packets;
   }
 
   @Test

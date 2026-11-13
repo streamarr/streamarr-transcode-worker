@@ -121,7 +121,7 @@ class TranscodeWorkerAudioLayoutTest {
         .containsSubsequence("-drc_scale:a:0", "0", "-i")
         .containsSubsequence(
             "-af",
-            "aresample=filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14,"
+            "agapfill=start=0,aresample=filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14,"
                 + "channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR:channel_layout=5.1")
         .containsSubsequence("-ch_layout", "5.1")
         .doesNotContain("-ac");
@@ -247,7 +247,7 @@ class TranscodeWorkerAudioLayoutTest {
                 """)
             .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
             .outputChannels(2)
-            .audioFilter("aresample=osf=s16:" + tunedResampler)
+            .audioFilter("agapfill,aresample=osf=s16:" + tunedResampler + ",agapfill=start=0")
             .flacFrameSize("2205")
             .build(),
         ReadAudioStream.builder()
@@ -260,7 +260,7 @@ class TranscodeWorkerAudioLayoutTest {
                 """)
             .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
             .outputChannels(6)
-            .audioFilter("aresample=osf=s32:" + tunedResampler)
+            .audioFilter("agapfill,aresample=osf=s32:" + tunedResampler + ",agapfill=start=0")
             .flacFrameSize("2400")
             .build(),
         ReadAudioStream.builder()
@@ -274,10 +274,10 @@ class TranscodeWorkerAudioLayoutTest {
             .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
             .outputChannels(6)
             .audioFilter(
-                "aresample=osf=s32:"
+                "agapfill,aresample=osf=s32:"
                     + tunedResampler
                     + ",channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|BL-SL|BR-SR"
-                    + ":channel_layout=5.1(side)")
+                    + ":channel_layout=5.1(side),agapfill=start=0")
             .flacFrameSize("2400")
             .build());
   }
@@ -447,7 +447,7 @@ class TranscodeWorkerAudioLayoutTest {
             argument ->
                 assertThat(argument)
                     .startsWith(
-                        "aformat=sample_fmts=fltp,pan=stereo"
+                        "agapfill=start=0,aformat=sample_fmts=fltp,pan=stereo"
                             + "|FL=FL+0.5946040*FC+0.5000000*SL|FR=FR+0.5946040*FC+0.5000000*SR[mix];"));
   }
 
@@ -566,8 +566,8 @@ class TranscodeWorkerAudioLayoutTest {
     assertThat(launcher.command(fromProto(job.getJobAttemptId())))
         .containsSubsequence(
             "-af",
-            "aresample=osr=48000:internal_sample_fmt=fltp:osf=s16:dither_method=triangular:"
-                + "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14");
+            "agapfill,aresample=osr=48000:internal_sample_fmt=fltp:osf=s16:dither_method=triangular:"
+                + "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14,agapfill=start=0");
   }
 
   @ParameterizedTest(name = "{0}")

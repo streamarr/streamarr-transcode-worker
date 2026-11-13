@@ -1133,7 +1133,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .as("segment 3 starts at slot 10, 30 s")
         .containsSequence("-ss", "27", "-noaccurate_seek", "-i")
-        .containsSequence("-af", aacStereoFromTheFirstSegment("30", "3"));
+        .containsSequence("-af", aacStereoFromTheFirstSegment("26", "30", "3"));
     assertThat(videoFilter(cmd)).endsWith(FRAME_GRID + ",trim=start_pts=720");
   }
 
@@ -1677,7 +1677,8 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .containsSequence(
             "-af",
-            encoder.input()
+            "agapfill=start=23,"
+                + encoder.input()
                 + "asetpts='PTS+"
                 + shift
                 + "',atrim=start=30,asetpts='PTS-"
@@ -1720,7 +1721,8 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .containsSequence(
             "-af",
-            AAC_STEREO_INPUT
+            "agapfill=start=2,"
+                + AAC_STEREO_INPUT
                 + "asetpts='PTS+"
                 + shift
                 + "',atrim=start=10,asetpts='PTS-"
@@ -1804,7 +1806,8 @@ class FfmpegCommandBuilderTest {
   void shouldTrimTheEncodedAudioAtTheSeekWhenTheWorkerDoesNotKnowTheAudioEncodersFrames() {
     var cmd = command(encodedAudioFromSegment5("libmp3lame"), "libx264");
 
-    assertThat(cmd).containsSequence("-af", "atrim=start=24", "-c:a", "libmp3lame");
+    assertThat(cmd)
+        .containsSequence("-af", "agapfill=start=23,atrim=start=24", "-c:a", "libmp3lame");
   }
 
   @Test
@@ -1820,7 +1823,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("30", "0"));
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("28", "30", "0"));
   }
 
   @Test
@@ -1837,7 +1840,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("30", "3"));
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("25", "30", "3"));
   }
 
   // ADR 0043 decodes each encoded track from one segment period before the attempt's first
@@ -1856,7 +1859,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "6"));
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("0", "60", "6"));
   }
 
   private static TranscodeRequest encodedAudioFromSegment5(String codec) {
@@ -1875,10 +1878,15 @@ class FfmpegCommandBuilderTest {
   }
 
   // The AAC stereo audio of an encoded replacement attempt whose first segment starts at start:
-  // the encoder's input starts the whole frames that fit in framesAhead seconds before that start.
-  private static String aacStereoFromTheFirstSegment(String start, String framesAhead) {
+  // its gaps filled with silence from fillStart, and the encoder's input starting the whole frames
+  // that fit in framesAhead seconds before that start.
+  private static String aacStereoFromTheFirstSegment(
+      String fillStart, String start, String framesAhead) {
     var shift = aacShift(framesAhead);
-    return AAC_STEREO_INPUT
+    return "agapfill=start="
+        + fillStart
+        + ","
+        + AAC_STEREO_INPUT
         + "asetpts='PTS+"
         + shift
         + "',atrim=start="
@@ -2021,7 +2029,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(heldAudioFilter(cmd)).isEqualTo(aacStereoFromTheFirstSegment("60", "59"));
+    assertThat(heldAudioFilter(cmd)).isEqualTo(aacStereoFromTheFirstSegment("0", "60", "59"));
   }
 
   // The encode of a profile 5 copy reads the source's audio from its second input, seeked to the
@@ -3252,7 +3260,7 @@ class FfmpegCommandBuilderTest {
             "1:a:0")
         .containsSequence(
             "-af",
-            aacStereoFromTheFirstSegment("18", "6"),
+            aacStereoFromTheFirstSegment("11", "18", "6"),
             "-c:a",
             "aac",
             "-ac",
@@ -3281,7 +3289,7 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.copyCommand()).containsSequence("-ss", "15.5", "-noaccurate_seek", "-i");
     assertThat(pipe.encodeCommand())
         .containsSequence("pipe:0", "-ss", "15.5", "-noaccurate_seek", "-i")
-        .containsSequence("-af", aacStereoFromTheFirstSegment("18", "1.5"));
+        .containsSequence("-af", aacStereoFromTheFirstSegment("14", "18", "1.5"));
   }
 
   @Test
@@ -3511,7 +3519,8 @@ class FfmpegCommandBuilderTest {
 
     assertThat(heldAudioFilter(cmd))
         .isEqualTo(
-            AAC_STEREO_INPUT
+            "agapfill=start=0,"
+                + AAC_STEREO_INPUT
                 + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67");
     assertThat(cmd).containsSequence("-c:a", "aac");
   }
@@ -3527,7 +3536,8 @@ class FfmpegCommandBuilderTest {
 
     assertThat(heldAudioFilter(cmd))
         .isEqualTo(
-            AAC_STEREO_INPUT
+            "agapfill=start=53,"
+                + AAC_STEREO_INPUT
                 + "asetpts='PTS+"
                 + aacShift("6")
                 + "',apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
@@ -3595,7 +3605,12 @@ class FfmpegCommandBuilderTest {
     var cmd = command(paddedAudio(codec, channels), "copy");
 
     assertThat(cmd.get(cmd.indexOf("-af") + 1))
-        .startsWith("aformat=sample_fmts=" + sampleFormats + sampleRates + layout + ",apad,");
+        .startsWith(
+            "agapfill=start=0,aformat=sample_fmts="
+                + sampleFormats
+                + sampleRates
+                + layout
+                + ",apad,");
   }
 
   @Test
@@ -3605,7 +3620,60 @@ class FfmpegCommandBuilderTest {
   void shouldAppendTheSilenceToTheDecodedSamplesUnconvertedWhenFfmpegChoosesTheEncodersInput() {
     var cmd = command(paddedAudio("libmp3lame", 2), "copy");
 
-    assertThat(cmd.get(cmd.indexOf("-af") + 1)).startsWith("apad,");
+    assertThat(cmd.get(cmd.indexOf("-af") + 1)).startsWith("agapfill=start=0,apad,");
+  }
+
+  // FFmpeg cuts an encoder's frames by sample count and ignores their timestamps, so the samples
+  // after a gap would play early, and nothing would fill the gap or the time before audio that
+  // starts late. The fill comes before every other audio filter.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"AUDIO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should fill the audio's gaps, and the time from zero to its first sample, with silence when"
+          + " an attempt from zero encodes its audio without padding")
+  void shouldFillTheAudiosGapsFromZeroWhenAnAttemptFromZeroEncodesItsAudioWithoutPadding(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).build(), mode.encodesVideo() ? "libx264" : "copy");
+
+    assertThat(cmd).containsSequence("-af", "agapfill=start=0", "-c:a", "aac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fill the audio's gaps before converting it to the encoder's input and padding it"
+          + " when an encode pads its audio")
+  void shouldFillTheAudiosGapsBeforeConvertingAndPaddingItWhenAnEncodePadsItsAudio() {
+    var cmd = command(paddedAudio("aac", 2), "copy");
+
+    assertThat(cmd)
+        .containsSequence(
+            "-af",
+            "agapfill=start=0,"
+                + AAC_STEREO_INPUT
+                + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67");
+  }
+
+  // An encode from segment 5 seeks to the server's keyframe position. Its trim starts the
+  // encoder's first frame no more than one encoder's lead before that seek, so silence from the
+  // last whole second at least 1 s before the seek never moves where the first frame starts.
+  @ParameterizedTest(name = "seek to {0} ms")
+  @CsvSource({"23500, 22", "24000, 23", "1000, 0", "500, 0"})
+  @DisplayName(
+      "Should fill the audio with silence from the last whole second at least 1 s before the"
+          + " input's seek when an encoded replacement attempt encodes its audio")
+  void shouldFillFromTheLastWholeSecondAtLeastOneSecondBeforeTheSeekWhenAReplacementEncodesAudio(
+      long seekMillis, String fillStart) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(5)
+                .seekPosition(Optional.of(Duration.ofMillis(seekMillis)))
+                .build(),
+            "libx264");
+
+    assertThat(cmd.get(cmd.indexOf("-af") + 1)).startsWith("agapfill=start=" + fillStart + ",");
   }
 
   @Test
@@ -3625,7 +3693,8 @@ class FfmpegCommandBuilderTest {
         .containsSequence("-ss", "23.5", "-i")
         .containsSequence(
             "-af",
-            AAC_STEREO_INPUT
+            "agapfill=start=22,"
+                + AAC_STEREO_INPUT
                 + "asetpts='PTS+round((0+floor(5.5*SR/(1024))*(1024))/SR/TB)',apad,"
                 + "asetpts='if(isnan(PTS),30/TB+N/SR/TB,PTS)',atrim=start=30,"
                 + "asetpts='PTS-round((0+floor(5.5*SR/(1024))*(1024))/SR/TB)',atrim=end=67")
@@ -3650,7 +3719,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(heldAudioFilter(cmd)).isEqualTo(aacStereoFromTheFirstSegment("60", "6"));
+    assertThat(heldAudioFilter(cmd)).isEqualTo(aacStereoFromTheFirstSegment("53", "60", "6"));
     assertThat(cmd).containsSequence("-c:a", "aac");
   }
 
@@ -3959,16 +4028,16 @@ class FfmpegCommandBuilderTest {
     assertThat(heldAudioGraph(cmd)).startsWith("[1:2]");
   }
 
-  // An attempt from the start that neither pads nor names its layout filters no audio; the graphs
-  // still carry it, so that the audio paces the held pictures. The first graph's output keeps the
-  // format of its first frames, so it takes the encoder's input: a source that turns from mono to
-  // stereo must not stay mono.
+  // An attempt from the start that neither pads nor names its layout filters its audio with the
+  // gap fill alone, and the graphs carry the audio so that it paces the held pictures. The first
+  // graph's output keeps the format of its first frames, so it takes the encoder's input: a source
+  // that turns from mono to stereo must not stay mono.
   @Test
   @DisplayName(
       "Should keep the output's channel count as the audio enters the held video's graph when an"
           + " encode from the start holds the last frame and neither pads nor names the audio's"
           + " layout")
-  void shouldKeepTheOutputsChannelCountAsTheAudioEntersTheHeldVideosGraphWhenItFiltersNoAudio() {
+  void shouldKeepTheOutputsChannelCountAsTheAudioEntersTheHeldVideosGraphWhenItOnlyFillsGaps() {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
             .videoDecision(
@@ -3981,7 +4050,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(heldAudioGraph(cmd))
         .isEqualTo(
-            "[1:a:0]anull,aformat=sample_fmts=fltp:sample_rates="
+            "[1:a:0]agapfill=start=0,aformat=sample_fmts=fltp:sample_rates="
                 + AAC_SAMPLE_RATES
                 + ":channel_layouts=stereo[filtered_held_audio]");
   }
@@ -3994,15 +4063,16 @@ class FfmpegCommandBuilderTest {
   @CsvSource(
       delimiter = ';',
       value = {
-        "aac; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=AAC_RATES:channel_layouts=5.1"
-            + "[filtered_held_audio]",
-        "ac3; 4; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
-            + ":channel_layouts=quad(side)[filtered_held_audio]",
-        "eac3; 6; [1:a:0]anull,aformat=sample_fmts=fltp:sample_rates=48000|44100|32000"
-            + ":channel_layouts=5.1(side)[filtered_held_audio]",
-        "alac; 8; [1:a:0]anull,aformat=sample_fmts=s32p|s16p:channel_layouts=7.1(wide)"
-            + "[filtered_held_audio]",
-        "libmp3lame; 2; [1:a:0]anull,aformat=channel_layouts=2c[filtered_held_audio]"
+        "aac; 6; [1:a:0]agapfill=start=0,aformat=sample_fmts=fltp:sample_rates=AAC_RATES"
+            + ":channel_layouts=5.1[filtered_held_audio]",
+        "ac3; 4; [1:a:0]agapfill=start=0,aformat=sample_fmts=fltp"
+            + ":sample_rates=48000|44100|32000:channel_layouts=quad(side)[filtered_held_audio]",
+        "eac3; 6; [1:a:0]agapfill=start=0,aformat=sample_fmts=fltp"
+            + ":sample_rates=48000|44100|32000:channel_layouts=5.1(side)[filtered_held_audio]",
+        "alac; 8; [1:a:0]agapfill=start=0,aformat=sample_fmts=s32p|s16p"
+            + ":channel_layouts=7.1(wide)[filtered_held_audio]",
+        "libmp3lame; 2; [1:a:0]agapfill=start=0,aformat=channel_layouts=2c"
+            + "[filtered_held_audio]"
       })
   @DisplayName(
       "Should end the audio's graph in the encoder's input when an encode holds the last frame and"
@@ -4102,7 +4172,8 @@ class FfmpegCommandBuilderTest {
         .containsSequence("pipe:0", "-ss", "54", "-noaccurate_seek", "-i")
         .containsSequence(
             "-af",
-            AAC_STEREO_INPUT
+            "agapfill=start=53,"
+                + AAC_STEREO_INPUT
                 + "asetpts='PTS+"
                 + aacShift("6")
                 + "',apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
@@ -4158,7 +4229,7 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.encodeCommand())
         .containsSequence(
             "-af",
-            "aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
+            "agapfill=start=0,aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
                 + ":channel_layouts=stereo,apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
             "-c:a",
             "libopus");

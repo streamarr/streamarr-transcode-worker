@@ -26,6 +26,7 @@ import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.FfmpegFilterHelpFixtures;
 import com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayInputStream;
@@ -265,6 +266,10 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   private static String stdoutOf(List<String> arguments) {
     if (arguments.contains("muxer=mp4")) {
       return FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
+    }
+
+    if (arguments.contains("filter=agapfill")) {
+      return FfmpegFilterHelpFixtures.GAP_FILL_FILTER_HELP;
     }
 
     if (arguments.contains("-encoders")) {
