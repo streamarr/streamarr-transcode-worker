@@ -339,6 +339,16 @@ final class SegmentAssembler {
       return;
     }
 
+    // The audio dropped after the output's last segment's interval starts after this segment, so
+    // when no copied audio reached the segment before that, the segment comes before the copied
+    // audio's first sample.
+    var copiedTail = copiedAudioTail.or(audio::prerollTail);
+    if (copiedTail.isEmpty() && audio.discardedTail().isPresent()) {
+      throw new FragmentedMp4Exception(
+          Reason.COPIED_AUDIO_RAN_SHORT,
+          "a media segment comes before the copied audio's first sample");
+    }
+
     var videoSamples = segment.videoSamples();
     var timescale = videoSamples.getFirst().fragment().tracks().video().orElseThrow().timescale();
     var lastPictureEnd =
@@ -360,7 +370,7 @@ final class SegmentAssembler {
     // The audio after the output's last segment's interval was dropped, because no keyframe opened
     // the interval it belongs to; it still shows how far the copied audio reaches beside the
     // segment's pictures past its interval.
-    var audioTail = audio.discardedTail().or(() -> copiedAudioTail.or(audio::prerollTail));
+    var audioTail = audio.discardedTail().or(() -> copiedTail);
     if (audioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
       return;
     }

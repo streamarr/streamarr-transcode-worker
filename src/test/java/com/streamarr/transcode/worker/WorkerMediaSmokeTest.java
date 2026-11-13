@@ -7049,6 +7049,82 @@ class WorkerMediaSmokeTest {
     return Long.parseLong(last[0]) + Long.parseLong(last[1]);
   }
 
+  // The source's audio starts after its video has ended at 24 s. An attempt from segment 3, the
+  // last, reads no copied audio before or inside that segment, and drops the audio after the
+  // advertised end when the output ends (ADR 0037). So segment 3 comes before the copied audio's
+  // first sample, which ADR 0060 refuses whether the video is copied or encoded.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_VIDEO_TRANSCODE"})
+  @DisplayName(
+      "Should report copied audio that ran short and upload no media segment when an attempt's last"
+          + " segment comes before the copied audio's first sample")
+  void shouldReportCopiedAudioThatRanShortWhenTheLastSegmentComesBeforeTheCopiedAudiosFirstSample(
+      TranscodeMode mode) throws Exception {
+    var source = aacAfterTheVideoSource();
+    var job = seekableSourceJob(source, mode);
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(1);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(6)
+        .setMediaSegmentCount(RISING_TONE_SOURCE_SEGMENT_COUNT)
+        .addAllSegmentStartTicks(List.of(0L, 6L, 12L, 18L))
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
+        .setStartSequenceNumber(3)
+        .setSeekPositionSeconds(18)
+        .getAdvertisedEndBuilder()
+        .setSeconds(24);
+
+    var failed =
+        executeExpectingFailure(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(firstAudioPacketStartInMillis(source))
+        .as("where the source's first audio packet starts, in milliseconds")
+        .isGreaterThan(24_000L);
+    assertThat(failed.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPIED_AUDIO_RAN_SHORT);
+    assertThat(failed.uploads().names()).containsExactly("init.mp4");
+  }
+
+  // The rising-tone sources' video in Matroska, beside 5 s of the rising tone as AAC from 25 s.
+  private static synchronized Path aacAfterTheVideoSource() throws Exception {
+    var source = seekableSources.resolve("aac-after-the-video.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE_SOURCE_VIDEO,
+              "-itsoffset",
+              "25",
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE + "5",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // Where the source's first audio packet starts, in Matroska's ticks of one millisecond.
+  private static long firstAudioPacketStartInMillis(Path source) throws Exception {
+    return Long.parseLong(
+        ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=pts"), source)
+            .lines()
+            .findFirst()
+            .orElseThrow()
+            .split(",")[0]);
+  }
+
   // The recovery of ADR 0060 encodes the audio and pads it. The encode must move no sample: a
   // rising tone repeats no value pattern, so a sample at another time would not compare equal.
   @Test

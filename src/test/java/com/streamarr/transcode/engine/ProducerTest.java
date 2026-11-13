@@ -1366,6 +1366,45 @@ class ProducerTest {
         Arguments.of("encoded video", VideoDecisionFixtures.encodeBuilder().build()));
   }
 
+  // The output's only segment, segment 0, holds video from 0 s that fills its 1 s interval or ends
+  // halfway through it. All of the copied audio starts at 1 s, in an interval that no keyframe
+  // opened, so the assembler drops it when the output ends (ADR 0037). No copied audio plays beside
+  // the segment's video, so ADR 0060 refuses it, also as a copy's short final interval.
+  @ParameterizedTest(name = "{0}, {2} pictures of 1/24 s")
+  @MethodSource("copiedAndEncodedVideoThatFillsOrEndsInsideItsInterval")
+  @DisplayName(
+      "Should refuse the output's only segment when all of the copied audio starts after its"
+          + " interval")
+  void shouldRefuseTheOutputsOnlySegmentWhenAllOfTheCopiedAudioStartsAfterItsInterval(
+      String video, VideoDecision videoDecision, int pictures) {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(pictures)
+                .audioFrom(48_000, oneSecondOfAudioSamples())
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .videoDecision(videoDecision)
+            .copiesAudio(true)
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  static Stream<Arguments> copiedAndEncodedVideoThatFillsOrEndsInsideItsInterval() {
+    return copiedAndEncodedVideo()
+        .flatMap(
+            video ->
+                Stream.of(24, 12)
+                    .map(pictures -> Arguments.of(video.get()[0], video.get()[1], pictures)));
+  }
+
   @ParameterizedTest
   @CsvSource({"false,false", "false,true", "true,false", "true,true"})
   @DisplayName("Should refuse a segment without copied audio when the audio ends before its video")
