@@ -17,6 +17,19 @@ import org.yaml.snakeyaml.Yaml;
 class ReleaseConfigurationTest {
 
   @Test
+  @DisplayName("Should create a tagged draft when a stable release PR is merged")
+  void shouldCreateTaggedDraftWhenStableReleasePrIsMerged() throws Exception {
+    Map<String, Object> config =
+        new Yaml().load(Files.readString(Path.of("release-please-config.json")));
+    var worker = (Map<?, ?>) ((Map<?, ?>) config.get("packages")).get(".");
+
+    assertThat(worker)
+        .asInstanceOf(MAP)
+        .containsEntry("draft", true)
+        .containsEntry("force-tag-creation", true);
+  }
+
+  @Test
   @DisplayName("Should configure Maven releases when worker versions advance")
   void shouldConfigureMavenReleasesWhenWorkerVersionsAdvance() throws Exception {
     Map<String, Object> config =
