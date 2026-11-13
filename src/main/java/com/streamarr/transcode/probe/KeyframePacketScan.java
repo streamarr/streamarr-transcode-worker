@@ -138,19 +138,20 @@ final class KeyframePacketScan {
             .isPresent();
   }
 
-  // -copyts keeps each packet's time from the source; the report subtracts the start time.
+  // -copyts keeps each packet's time from the source; the report subtracts the start time. FFmpeg
+  // reads the source as far as ffprobe did, so that it knows the parameters of each stream that the
+  // scan maps. With its smaller default limits, FFmpeg would not know the sample rate of audio that
+  // starts late, and it refuses to write such a stream. FFmpeg, unlike ffprobe, refuses an option
+  // that the source's demuxer lacks.
   private static List<String> arguments(ProbedSource probed, List<ScannedStream> scanned) {
     var arguments =
-        new ArrayList<>(
-            List.of(
-                "-nostdin",
-                "-hide_banner",
-                "-nostats",
-                "-v",
-                "error",
-                "-copyts",
-                "-i",
-                probed.source().toString()));
+        new ArrayList<>(List.of("-nostdin", "-hide_banner", "-nostats", "-v", "error", "-copyts"));
+    arguments.addAll(FfprobeExecutor.STREAM_READ_LIMITS);
+    if (ProbedSource.MPEG_TS_FORMAT.equals(probed.formatName())) {
+      arguments.addAll(FfprobeExecutor.MPEG_TS_READ_LIMITS);
+    }
+
+    arguments.addAll(List.of("-i", probed.source().toString()));
     for (var stream : scanned) {
       arguments.add("-map");
       arguments.add("0:" + stream.index());

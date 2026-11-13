@@ -136,6 +136,9 @@ class FfprobeExecutorKeyframeTest {
                    "time_base":"1/24","has_b_frames":0}]}
       """;
   private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
+  private static final String MPEG_TS_OPTION = "-scan_all_pmts";
+  private static final List<String> READ_LIMIT_OPTIONS =
+      List.of("-analyzeduration", "-probesize", MPEG_TS_OPTION);
   private static final String NO_PACKETS =
       """
       {"packets":[]}
@@ -934,6 +937,48 @@ class FfprobeExecutorKeyframeTest {
 
     assertThat(scannedEnds(report)).containsOnlyKeys(0);
     assertThat(ffprobe.packetScanArguments()).containsOnlyOnce("-map");
+  }
+
+  // The scan maps the streams that ffprobe described. With its smaller default limits, FFmpeg can
+  // stop reading before the first packet of a late stream, and then not know that stream's
+  // parameters.
+  @Test
+  @DisplayName(
+      "Should open the source with the read limits of ffprobe when a packet scan reads an MPEG-TS"
+          + " source")
+  void shouldOpenTheSourceWithTheReadLimitsOfFfprobeWhenAPacketScanReadsAnMpegTsSource() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(TWO_AUDIO_STREAMS)
+            .packetScan("0, 0, 0, 3750, 100, 0x00000000\n")
+            .build();
+
+    ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(readLimits(inputOptions(ffprobe.packetScanArguments())))
+        .containsOnlyKeys(READ_LIMIT_OPTIONS)
+        .isEqualTo(readLimits(ffprobe.streamProbeArguments()));
+  }
+
+  // FFmpeg, unlike ffprobe, refuses an option that the source's demuxer does not have, and
+  // -scan_all_pmts is an option of the MPEG-TS demuxer alone.
+  @Test
+  @DisplayName(
+      "Should open the source with the read limits of ffprobe less the MPEG-TS option when a packet"
+          + " scan reads a Matroska source")
+  void shouldOpenTheSourceWithTheReadLimitsOfFfprobeLessTheMpegTsOptionWhenAScanReadsMatroska() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan("0, 0, 0, 42, 100, 0x00000000\n")
+            .build();
+
+    ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    var probeLimits = readLimits(ffprobe.streamProbeArguments());
+    assertThat(probeLimits).containsOnlyKeys(READ_LIMIT_OPTIONS);
+    probeLimits.remove(MPEG_TS_OPTION);
+    assertThat(readLimits(inputOptions(ffprobe.packetScanArguments()))).isEqualTo(probeLimits);
   }
 
   // The packets come in decode order. The second packet presents last, at 144,750 ticks for 3,750
@@ -2103,6 +2148,25 @@ class FfprobeExecutorKeyframeTest {
     return ends;
   }
 
+  // The value of each read limit option among the arguments, by option.
+  private static Map<String, String> readLimits(List<String> arguments) {
+    var limits = new LinkedHashMap<String, String>();
+    for (var option : READ_LIMIT_OPTIONS) {
+      var at = arguments.indexOf(option);
+      if (at >= 0 && at + 1 < arguments.size()) {
+        limits.put(option, arguments.get(at + 1));
+      }
+    }
+
+    return limits;
+  }
+
+  // FFmpeg applies only the options before -i to the source.
+  private static List<String> inputOptions(List<String> ffmpegArguments) {
+    assertThat(ffmpegArguments).as("FFmpeg's arguments").contains("-i");
+    return ffmpegArguments.subList(0, ffmpegArguments.indexOf("-i"));
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"mp4-h264-aac-ac3.mp4", "mov-hevc-aac.mov"})
   @DisplayName(
@@ -2230,11 +2294,14 @@ class FfprobeExecutorKeyframeTest {
       String packetScanDiagnostics,
       int packetScanExitCode,
       boolean cancelAfterStreams,
-      List<String> packetScanArguments) {
+      List<String> packetScanArguments,
+      List<String> streamProbeArguments) {
 
-    // The arguments of the packet scan that the executor ran, which this fake collects.
+    // The arguments of the packet scan and of the ffprobe run that describes the streams, which
+    // this fake collects.
     ScriptedFfprobe {
       packetScanArguments = new ArrayList<>();
+      streamProbeArguments = new ArrayList<>();
     }
 
     FfprobeExecutor executor() {
@@ -2257,6 +2324,10 @@ class FfprobeExecutorKeyframeTest {
         packetScanArguments.addAll(arguments);
         return new CompletedProcess(packetScan, packetScanExitCode, false)
             .withDiagnostics(packetScanDiagnostics == null ? "" : packetScanDiagnostics);
+      }
+
+      if (arguments.contains("-show_format")) {
+        streamProbeArguments.addAll(arguments);
       }
 
       return new CompletedProcess(streams, 0, cancelAfterStreams);

@@ -326,6 +326,7 @@ class WorkerMediaSmokeTest {
   private static final String NEGATIVE_OFFSETS_SOURCE = "mp4-negative-offsets.mp4";
   private static final String NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE =
       "mp4-negative-offsets-empty-edit.mp4";
+  private static final String LATE_AUDIO_SOURCE = "mpegts-late-audio.ts";
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
@@ -1056,7 +1057,8 @@ class WorkerMediaSmokeTest {
         "mkv-pipe.mkv",
         "mp4-fragmented.mp4",
         "mp4-truncated.mp4",
-        "mkv-truncated-cues-front.mkv"
+        "mkv-truncated-cues-front.mkv",
+        LATE_AUDIO_SOURCE
       })
   @DisplayName(
       "Should report the keyframes that FFmpeg passes to a muxer when a packet scan reads a source"
@@ -1067,6 +1069,9 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
+    assertThat(report.result().getMedia().getKeyframes().hasPositions())
+        .as("whether the scan reports keyframe positions")
+        .isTrue();
     var positions = report.result().getMedia().getKeyframes().getPositions();
     var packetKeyframes = packetKeyframes(source, positions);
     assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size()).isPositive();
@@ -1084,7 +1089,8 @@ class WorkerMediaSmokeTest {
         "mp4-fragmented.mp4",
         "mp4-truncated.mp4",
         "mkv-truncated-cues-front.mkv",
-        "mp4-h264-aac-ac3.mp4"
+        "mp4-h264-aac-ac3.mp4",
+        LATE_AUDIO_SOURCE
       })
   @DisplayName(
       "Should end the video stream and each audio stream where ffprobe lists the stream's last"
@@ -9838,6 +9844,38 @@ class WorkerMediaSmokeTest {
         runFfmpeg(List.of("-ss", "1", "-i", basePath, "-c", "copy"), output);
         yield output;
       }
+      // The audio starts 25 s in. ffprobe reads a source for up to 200 s or 1 GB to find each
+      // stream's parameters. FFmpeg reads for 5 s or 5 MB unless it is told otherwise. With its
+      // defaults, FFmpeg does not know the audio's sample rate, and it refuses to write the audio.
+      case LATE_AUDIO_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x36:rate=24:duration=30",
+                "-itsoffset",
+                "25",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=r=48000:d=5",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                "-f",
+                "mpegts"),
+            output);
+        yield output;
+      }
       default -> {
         assertThat(resource).as("fixture %s", fixture).isNotNull();
         yield Path.of(resource.toURI());
@@ -9948,10 +9986,13 @@ class WorkerMediaSmokeTest {
   private static Map<Integer, Duration> listedStreamEnds(
       Path source, OptionalInt firstStreamPacketAtItsDecodeTime) throws Exception {
     var containerStart =
-        new BigDecimal(ffprobe(List.of("-show_entries", "format=start_time"), source));
+        new BigDecimal(
+            ffprobeWithTheProbesReadLimits(List.of("-show_entries", "format=start_time"), source));
     var ends = new LinkedHashMap<Integer, Duration>();
     var streams =
-        ffprobe(List.of("-show_entries", "stream=index,codec_type,time_base"), source).lines();
+        ffprobeWithTheProbesReadLimits(
+                List.of("-show_entries", "stream=index,codec_type,time_base"), source)
+            .lines();
     for (var stream : streams.map(line -> line.split(",")).toList()) {
       if (stream.length < 3 || !Set.of("video", "audio").contains(stream[1])) {
         continue;
@@ -9979,7 +10020,7 @@ class WorkerMediaSmokeTest {
   private static long latestListedPacketEnd(
       Path source, int streamIndex, OptionalInt packetAtItsDecodeTime) throws Exception {
     var packets =
-        ffprobe(
+        ffprobeWithTheProbesReadLimits(
                 List.of(
                     "-select_streams",
                     Integer.toString(streamIndex),
@@ -10000,6 +10041,18 @@ class WorkerMediaSmokeTest {
     }
 
     return latestEnd;
+  }
+
+  // ffprobe's output when it reads the source as far as the probe's own ffprobe run does. With
+  // ffprobe's default limits, a stream whose first packet comes late can list packets without
+  // times or durations.
+  private static String ffprobeWithTheProbesReadLimits(List<String> arguments, Path media)
+      throws Exception {
+    var limited =
+        new ArrayList<>(
+            List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0"));
+    limited.addAll(arguments);
+    return ffprobe(limited, media);
   }
 
   // The MPEG-TS bytes with the presentation and decode times removed from the PES header of one

@@ -13,6 +13,7 @@ record ProbedSource(
 
   static final String MATROSKA_FORMAT = "matroska,webm";
   static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
+  static final String MPEG_TS_FORMAT = "mpegts";
 
   /** The demuxer names that ffprobe reports as the container's format_name. */
   String formatName() {
