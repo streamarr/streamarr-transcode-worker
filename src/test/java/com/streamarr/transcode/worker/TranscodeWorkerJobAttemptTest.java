@@ -755,6 +755,15 @@ class TranscodeWorkerJobAttemptTest {
                 job -> {
                   job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(0).setNanos(0);
                   return job;
+                }),
+        Arguments.of(
+            "a stream copy's advertised end is zero",
+            (UnaryOperator<VariantJob.Builder>)
+                job -> {
+                  var copy = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX);
+                  copy.setExecution(job.getExecution());
+                  copy.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(0).setNanos(0);
+                  return copy;
                 }));
   }
 
