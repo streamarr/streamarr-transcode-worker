@@ -6900,6 +6900,105 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // A FLAC or ALAC encode that sums channels runs them through the downmix's limiters (ADR 0050),
+  // which keep the audio's timing. The drifting sources' timestamps step 1 ms at 2.5 s or 2.6 s,
+  // and again at 7.5 s or 7.6 s. Each step is 2 ms or less, so the gap fills pass it through. A
+  // tone that never stops leaves no millisecond of digital silence in any channel.
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("summedDriftingAudio")
+  @DisplayName(
+      "Should write no digital silence inside the sound when a lossless encode sums the channels of"
+          + " 5.1 audio whose timestamps drift by 0.02 %")
+  void shouldWriteNoSilenceInsideTheSoundWhenALosslessEncodeSumsTheChannelsOfDriftingAudio(
+      String codec, StampError error) throws Exception {
+    var source = drifting51ToneSource(error);
+    var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec(codec)
+        .setChannels(2)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var left = leftChannelOf(playable(uploads.contentOf(uploads.names())));
+    var tone = SampleRange.ofMillis(100, 9_900);
+    assertThat(longestSilentRun(left, tone.from(), tone.until()))
+        .as(
+            "the longest run of digital silence in the left channel from 0.1 s to 9.9 s, in samples")
+        .isLessThan(COUNTED_AUDIO_SAMPLE_RATE / 1_000);
+  }
+
+  static Stream<Arguments> summedDriftingAudio() {
+    return Stream.of("flac", "alac")
+        .flatMap(
+            codec ->
+                Stream.of(StampError.FAST_BY_0_02_PERCENT, StampError.SLOW_BY_0_02_PERCENT)
+                    .map(error -> Arguments.of(codec, error)));
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 12 s, beside 10 s of 24-bit 5.1 FLAC at
+  // 48 kHz in frames of 4,800 samples that holds a 1 kHz tone at -20 dBFS in every channel, whose
+  // timestamps carry the error.
+  private static synchronized Path drifting51ToneSource(StampError error) throws Exception {
+    var source =
+        seekableSources.resolve(
+            "tone-in-5.1-" + error.name().toLowerCase(Locale.ROOT).replace('_', '-') + ".mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=12",
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc='0.1*sin(2*PI*1000*t)':s=48000:d=10:c=5.1",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s32",
+              "-frame_size",
+              "4800",
+              "-bsf:a",
+              "setts=ts='" + error.timestamp + "'"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The left channel's decoded samples of the delivered stereo audio, in the order they play.
+  private static int[] leftChannelOf(Path media) throws Exception {
+    var decoded = media.resolveSibling(media.getFileName() + ".left.s32le");
+    runFfmpeg(
+        List.of("-i", media.toString(), "-map", "0:a:0", "-af", "pan=mono|c0=FL", "-f", "s32le"),
+        decoded);
+    var samples =
+        ByteBuffer.wrap(Files.readAllBytes(decoded)).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+    var left = new int[samples.remaining()];
+    samples.get(left);
+    return left;
+  }
+
+  // The longest run of digital silence among the samples from one index up to another.
+  private static int longestSilentRun(int[] samples, int from, int until) {
+    var longest = 0;
+    var run = 0;
+    for (var index = from; index < Math.min(until, samples.length); index++) {
+      run = samples[index] == 0 ? run + 1 : 0;
+      longest = Math.max(longest, run);
+    }
+
+    return longest;
+  }
+
   @Test
   @DisplayName(
       "Should upload only the audio of its own interval in the segment that holds the video's end"

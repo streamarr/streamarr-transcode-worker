@@ -11,12 +11,16 @@ import lombok.NonNull;
 /**
  * The true-peak ceiling that ADR 0050's limiter keeps a downmix's summed channels below: −1 dBTP
  * for FLAC and ALAC, and −3 dBTP for every lossy downmix, whose coding can raise the decoded peaks.
- * Each limiter uses 5 ms attack and 50 ms release settings, adds no make-up gain and removes its
- * own delay.
+ * Each limiter uses 5 ms attack and 50 ms release settings and adds no make-up gain. The worker
+ * removes each limiter's delay itself, so the limiter keeps its input's timestamps.
  */
 sealed interface DownmixLimiter {
 
-  String LIMITER_TIMING = ":attack=5:release=50:level=0:latency=1";
+  int ATTACK_MILLISECONDS = 5;
+  // With latency=1, alimiter stamps the first frame after a timestamp step with that frame's own
+  // timestamp, though the frame starts with the lookahead's samples from before the step. Every
+  // sample after the step then plays up to 5 ms late, and the jump reads as a gap.
+  String LIMITER_TIMING = ":attack=" + ATTACK_MILLISECONDS + ":release=50:level=0:latency=0";
   String MINUS_1_DBFS = "0.891251";
   String MINUS_3_DBFS = "0.707946";
 
@@ -111,8 +115,9 @@ sealed interface DownmixLimiter {
     }
 
     // The group is delayed by the filters' integer delay, so that each copy lines up with it. Each
-    // copy's input is padded by that delay, so that its filter reaches the group's last samples,
-    // and the delay is trimmed after the limiter, so that the group keeps its sample count and its
+    // copy's input is padded by that delay, so that its filter reaches the group's last samples.
+    // The limiter's input is padded by its lookahead, so that the limiter passes its last samples.
+    // Both delays are trimmed after the limiter, so that the group keeps its sample count and its
     // timestamps.
     private String stage(Stage stage, int channels, String input, String output) {
       var copies = stage.responses().size();
@@ -141,11 +146,20 @@ sealed interface DownmixLimiter {
       graph.append(';');
       IntStream.rangeClosed(1, copies).forEach(copy -> graph.append(stage.label("x", copy)));
       graph.append(stage.label("x", 0));
-      graph.append("amerge=inputs=").append(copies + 1).append(',').append(alimiter(limit));
+      var lookahead = lookahead();
+      graph.append("amerge=inputs=").append(copies + 1);
+      graph.append(",apad=pad_len=").append(lookahead).append(',').append(alimiter(limit));
       graph.append(',').append(channels == 1 ? "pan=mono|c0=FL" : "pan=stereo|c0=FL|c1=FR");
-      graph.append(",atrim=start_sample=").append(stage.delay());
-      graph.append(",asetpts=round(PTS-").append(stage.delay()).append("/(SR*TB))");
+      var delay = stage.delay() + lookahead;
+      graph.append(",atrim=start_sample=").append(delay);
+      graph.append(",asetpts=round(PTS-").append(delay).append("/(SR*TB))");
       return graph.append('[').append(output).append(']').toString();
+    }
+
+    // alimiter's lookahead holds its attack of samples, rounded down, and delays its output by one
+    // sample fewer.
+    private int lookahead() {
+      return rate() * ATTACK_MILLISECONDS / 1000 - 1;
     }
 
     private static String channelmap(int channels, int copy) {

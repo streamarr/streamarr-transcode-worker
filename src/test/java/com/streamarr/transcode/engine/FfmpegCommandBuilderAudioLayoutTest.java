@@ -144,15 +144,16 @@ class FfmpegCommandBuilderAudioLayoutTest {
   class DownmixTests {
 
     private static final String FLOAT_PAN = "aformat=sample_fmts=fltp,pan=";
-    private static final String LIMIT_TIMING = ":attack=5:release=50:level=0:latency=1";
+    private static final String LIMIT_TIMING = ":attack=5:release=50:level=0:latency=0";
     private static final String MINUS_3_DBFS = "alimiter=limit=0.707946" + LIMIT_TIMING;
     private static final String MINUS_1_DBFS = "alimiter=limit=0.891251" + LIMIT_TIMING;
+    // At 48 kHz, alimiter's 5 ms lookahead delays its output by 239 samples.
     private static final String MINUS_1_DBTP_STAGE =
-        Pattern.quote("amerge=inputs=") + "\\d+," + Pattern.quote(MINUS_1_DBFS);
+        Pattern.quote("amerge=inputs=") + "\\d+,apad=pad_len=239," + Pattern.quote(MINUS_1_DBFS);
     private static final String MINUS_3_DBTP_STAGE =
-        Pattern.quote("amerge=inputs=") + "\\d+," + Pattern.quote(MINUS_3_DBFS);
+        Pattern.quote("amerge=inputs=") + "\\d+,apad=pad_len=239," + Pattern.quote(MINUS_3_DBFS);
     private static final String TRIMMED_SECOND_STAGE =
-        "atrim=start_sample=6,asetpts=round(PTS-6/(SR*TB))";
+        "atrim=start_sample=245,asetpts=round(PTS-245/(SR*TB))";
     private static final String DITHERED_16_BITS =
         "aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER;
     private static final String DITHERED_24_BITS =
