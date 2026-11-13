@@ -155,6 +155,25 @@ class TranscodeWorkerHdrEncodeTest {
     assertThat(valueOf(command, "-color_trc")).isEqualTo("arib-std-b67");
   }
 
+  // SVT-AV1 takes transfer characteristics 18 only as "hlg" or as its number (SVT-AV1's
+  // Docs/Parameters.md), while FFmpeg's own options name it arib-std-b67.
+  @Test
+  @DisplayName(
+      "Should name the HLG transfer as SVT-AV1 names it in SVT-AV1's parameters when an HLG source"
+          + " encodes to AV1 HLG")
+  void shouldNameTheHlgTransferAsSvtAv1NamesItWhenAnHlgSourceEncodesToAv1Hlg() throws Exception {
+    var command = commandOf(tenBitEncode(av1Main(), CompatibleBase.COMPATIBLE_BASE_HLG));
+
+    assertThat(List.of(valueOf(command, "-svtav1-params").split(":")))
+        .containsExactly(
+            "mbr-overshoot-pct=0",
+            "color-primaries=bt2020",
+            "transfer-characteristics=hlg",
+            "matrix-coefficients=bt2020-ncl",
+            "color-range=studio");
+    assertThat(valueOf(command, "-color_trc")).isEqualTo("arib-std-b67");
+  }
+
   @Test
   @DisplayName(
       "Should reshape Dolby Vision into PQ with tonemapx from planar 10-bit video when a profile 5"

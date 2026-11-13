@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -148,6 +149,29 @@ class HdrEncodeSmokeTest {
             "side_data_type=Content light level metadata",
             "max_content=1000",
             "max_average=400");
+  }
+
+  @Test
+  @DisplayName("Should encode AV1 HDR10 when FFmpeg fails on a parameter that SVT-AV1 rejects")
+  void shouldEncodeAv1Hdr10WhenFfmpegFailsOnAParameterThatSvtAv1Rejects() throws Exception {
+    var encode = av1Encode(range(VideoDynamicRange.CompatibleBase.PQ)).build();
+
+    var delivered = deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(hdr10, encode);
+
+    assertThat(probed(delivered)).contains("color_transfer=smpte2084");
+  }
+
+  @Test
+  @DisplayName("Should encode AV1 HLG when FFmpeg fails on a parameter that SVT-AV1 rejects")
+  void shouldEncodeAv1HlgWhenFfmpegFailsOnAParameterThatSvtAv1Rejects() throws Exception {
+    var encode =
+        av1Encode(range(VideoDynamicRange.CompatibleBase.HLG))
+            .staticHdrMetadata(Optional.empty())
+            .build();
+
+    var delivered = deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(hlg, encode);
+
+    assertThat(probed(delivered)).contains("color_transfer=arib-std-b67");
   }
 
   @Test
@@ -372,6 +396,34 @@ class HdrEncodeSmokeTest {
       Path source, VideoDecision.Encode encode, int firstSegment) {
     return deliveriesOf(
         engine(new ProcessBuilderLauncher()), request(source, encode, firstSegment));
+  }
+
+  // FFmpeg's libsvtav1 wrapper logs a parameter that SVT-AV1 rejects and encodes without it. With
+  // err_detect explode on the video encoder, the wrapper fails instead, so the attempt completes
+  // only when SVT-AV1 takes every parameter that the job gives it.
+  private static byte[] deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(
+      Path source, VideoDecision.Encode encode) {
+    var launcher = new ProcessBuilderLauncher();
+    var encodes = new AtomicInteger();
+    ProcessLauncher failingOnARejectedParameter =
+        (command, jobAttemptId) -> {
+          var parameters = command.indexOf("-svtav1-params");
+          if (parameters < 0) {
+            return launcher.launch(command, jobAttemptId);
+          }
+
+          encodes.incrementAndGet();
+          var failing = new ArrayList<>(command);
+          failing.addAll(parameters + 2, List.of("-err_detect:v", "explode"));
+          return launcher.launch(failing, jobAttemptId);
+        };
+
+    var delivered =
+        deliveriesOf(engine(failingOnARejectedParameter), request(source, encode, 0))
+            .acceptedBytes();
+
+    assertThat(encodes).as("the FFmpeg processes that SVT-AV1 encoded in").hasValue(1);
+    return delivered;
   }
 
   // The attempt's deliveries, after the producer accepted its output against the job.

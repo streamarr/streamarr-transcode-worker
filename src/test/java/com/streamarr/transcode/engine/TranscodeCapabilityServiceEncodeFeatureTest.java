@@ -180,7 +180,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         .extracting(command -> parametersAfter("-svtav1-params", command))
         .satisfiesOnlyOnce(parameters -> assertThat(parameters).isEmpty())
         .satisfiesOnlyOnce(
-            parameters -> assertThat(parameters).contains("transfer-characteristics=arib-std-b67"))
+            parameters -> assertThat(parameters).contains("transfer-characteristics=hlg"))
         .filteredOn(parameters -> parameters.contains("transfer-characteristics=smpte2084"))
         .hasSize(2);
   }
