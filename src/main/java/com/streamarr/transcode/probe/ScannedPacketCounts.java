@@ -28,7 +28,9 @@ import lombok.NonNull;
  * <p>The counts stop, and give no measurement, at a packet with neither time, at an E-AC-3 packet
  * that does not hold six blocks, at an interval count beyond an unsigned 32-bit value, at a time or
  * a span beyond the long range, and when more audio packets wait than {@link
- * #MAXIMUM_WAITING_AUDIO_PACKETS}.
+ * #MAXIMUM_WAITING_AUDIO_PACKETS}. The counts also stop when the intervals of every stream together
+ * exceed the {@link KeyframePositionsReport#MAXIMUM_INTERVALS_PER_PROBE} entries that the contract
+ * carries.
  */
 final class ScannedPacketCounts {
 
@@ -115,6 +117,14 @@ final class ScannedPacketCounts {
 
   private void openInterval(TimeBase videoTimeBase, long keyframeTime) {
     keyframeCount++;
+    // Each stream keeps a count for every interval. The report carries no measurement beyond the
+    // contract's bound, so the counts stop there instead of growing with every later keyframe.
+    if ((long) keyframeCount * streams.size()
+        > KeyframePositionsReport.MAXIMUM_INTERVALS_PER_PROBE) {
+      isStopped = true;
+      return;
+    }
+
     for (var audio : audioStreams()) {
       var start = videoTimeBase.rescaleUp(keyframeTime, audio.timeBase);
       if (audio.latestPlacedTime.isPresent() && audio.latestPlacedTime.getAsLong() >= start) {
