@@ -351,9 +351,30 @@ class FfprobeExecutorPacketScanMeasurementTest {
                 .build());
   }
 
+  // FFmpeg's MPEG-TS demuxer warns about a PES packet whose length field disagrees with its data,
+  // but FFmpeg passes the packet on with the times that ffprobe lists, so the scan measures it.
+  @Test
+  @DisplayName(
+      "Should measure the streams when FFmpeg warns about something other than a change to a"
+          + " packet's times")
+  void shouldMeasureStreamsWhenFfmpegWarnsAboutSomethingOtherThanChangeToPacketsTimes() {
+    var scan =
+        ScriptedScan.builder()
+            .streams(MPEG2_AC3_MP2)
+            .packetScan(KEYFRAMES_AND_THREE_STREAMS)
+            .packetScanDiagnostics("[mpegts @ 0x1] PES packet size mismatch\n")
+            .build();
+
+    var report = scan.executor().probe(source, request());
+
+    assertThat(report.result().getMedia().getStreamMeasurements().getSource())
+        .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN);
+  }
+
   /** One source whose keyframe packet scan must report its keyframes but no measurement. */
   @Builder
-  private record Unmeasured(String streams, String packetScan, String firstAacPacket) {}
+  private record Unmeasured(
+      String streams, String packetScan, String packetScanDiagnostics, String firstAacPacket) {}
 
   private static final String KEYFRAMES_AND_THREE_STREAMS =
       """
@@ -519,7 +540,21 @@ class FfprobeExecutorPacketScanMeasurementTest {
                     """)),
         unmeasured(
             "more audio packets waiting for their keyframe interval than the scan holds",
-            Unmeasured.builder().packetScan(waiting.toString())));
+            Unmeasured.builder().packetScan(waiting.toString())),
+        // FFmpeg's stream copy changes these times before framecrc prints them, so the printed
+        // times are not the source's. FFmpeg 8.1 words the warnings so in fftools/ffmpeg_mux.c.
+        unmeasured(
+            "a packet whose decode time FFmpeg raised to the decode time before it",
+            Unmeasured.builder()
+                .packetScanDiagnostics(
+                    "[aost#0:1/copy @ 0x1] Non-monotonic DTS; previous: 2880, current: 0;"
+                        + " changing to 2880. This may result in incorrect timestamps in the"
+                        + " output file.\n")),
+        unmeasured(
+            "a packet whose times FFmpeg replaced because it decoded after it presented",
+            Unmeasured.builder()
+                .packetScanDiagnostics(
+                    "[vost#0:0/copy @ 0x1] Invalid DTS: 7500 PTS: 3750, replacing by guess\n")));
   }
 
   private static final String FAILED_READ = "the read fails";
@@ -562,6 +597,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
                 unmeasured.packetScan() == null
                     ? KEYFRAMES_AND_THREE_STREAMS
                     : unmeasured.packetScan())
+            .packetScanDiagnostics(unmeasured.packetScanDiagnostics())
             .firstAacPacket(unmeasured.firstAacPacket())
             .build();
 
@@ -601,11 +637,15 @@ class FfprobeExecutorPacketScanMeasurementTest {
   /**
    * Answers the probe's ffprobe runs with the stream descriptions, a read of an AAC stream's first
    * packet with {@code firstAacPacket}, or a failure for {@link #FAILED_READ}, every other read of
-   * packets with nothing, and FFmpeg's packet scan with the framecrc lines.
+   * packets with nothing, and FFmpeg's packet scan with the framecrc lines and its diagnostics.
    */
   @Builder
   private record ScriptedScan(
-      String streams, String packetScan, String firstAacPacket, List<String> packetScanArguments) {
+      String streams,
+      String packetScan,
+      String packetScanDiagnostics,
+      String firstAacPacket,
+      List<String> packetScanArguments) {
 
     ScriptedScan {
       packetScanArguments = new ArrayList<>();
@@ -619,7 +659,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
       var arguments = command.arguments();
       if (command.tool() == ProbeCommand.ProbeTool.FFMPEG) {
         packetScanArguments.addAll(arguments);
-        return printing(packetScan, 0);
+        return ScriptedProcess.builder()
+            .output(packetScan.getBytes(StandardCharsets.UTF_8))
+            .stderr(packetScanDiagnostics)
+            .build();
       }
 
       if (arguments.contains("packet=data")) {

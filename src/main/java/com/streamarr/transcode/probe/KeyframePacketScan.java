@@ -27,7 +27,8 @@ import tools.jackson.databind.JsonNode;
  * and the scan keeps only the keyframes, so its memory grows with the keyframe count rather than
  * the packet count. The scan copies each audio stream's packets beside the video's, and reports
  * where the chosen video stream and each audio stream ends (ADR 0037, early ends). When a copy
- * keeps the packets of every one of those streams, the scan also measures them (ADR 0054).
+ * keeps the packets of every one of those streams and FFmpeg keeps their times, the scan also
+ * measures them (ADR 0054).
  */
 @RequiredArgsConstructor
 final class KeyframePacketScan {
@@ -43,6 +44,15 @@ final class KeyframePacketScan {
    * packets printed before the failure are an incomplete list.
    */
   private static final String DEMUXING_ERROR = "Error during demuxing";
+
+  /**
+   * FFmpeg logs one of these warnings when its stream copy changes a packet's times before framecrc
+   * prints them, and then exits with code 0. The printed times are then not the source's. FFmpeg
+   * logs a rise of at most 2 ticks in an audio packet's decode time only at its debug level, so the
+   * scan does not see that change.
+   */
+  private static final List<String> CHANGED_PACKET_TIMES =
+      List.of("Non-monotonic DTS", "Invalid DTS");
 
   @NonNull private final PacketScanRunner ffmpeg;
   @NonNull private final CopiedPacketCheck copies;
@@ -77,7 +87,9 @@ final class KeyframePacketScan {
     var counts = new ScannedPacketCounts(measuredStreams(probed, scanned));
     var keyframes = new PacketKeyframes(timeRule(probed, stream), scanned.size(), counts);
     var diagnostics = new DemuxingDiagnostics();
-    var exitCode = ffmpeg.run(arguments(probed, scanned), keyframes, diagnostics);
+    var changedTimes = new ChangedPacketTimes();
+    var exitCode =
+        ffmpeg.run(arguments(probed, scanned), keyframes, diagnostics.andThen(changedTimes));
     if (keyframes.isMissingTime()) {
       return unavailable(
           probed,
@@ -108,10 +120,21 @@ final class KeyframePacketScan {
         .timeBase(timeBase)
         .source(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN)
         .keyframes(keyframes.times())
-        .measured(counts.measurement().orElse(List.of()))
+        .measured(measurement(counts, changedTimes))
         .streamEnds(streamEnds(scanned, keyframes))
         .build()
         .report();
+  }
+
+  // ADR 0054: a measurement counts the source's packets, so a packet time that FFmpeg changed
+  // leaves the file unmeasured.
+  private static List<StreamMeasurement> measurement(
+      ScannedPacketCounts counts, ChangedPacketTimes changedTimes) {
+    if (changedTimes.isChanged()) {
+      return List.of();
+    }
+
+    return counts.measurement().orElse(List.of());
   }
 
   /** One stream that the scan copies: its index in the source, its time base and description. */
@@ -198,6 +221,7 @@ final class KeyframePacketScan {
             .isPresent();
   }
 
+  // -v warning prints the warnings that FFmpeg logs when it changes a packet's times.
   // -copyts keeps each packet's time from the source; the report subtracts the start time.
   // -copyinkf keeps the packets before each stream's first keyframe. A stream copy drops them, but
   // ADR 0054 counts them in the first keyframe interval, as a bitrate scan does.
@@ -209,7 +233,7 @@ final class KeyframePacketScan {
                 "-hide_banner",
                 "-nostats",
                 "-v",
-                "error",
+                "warning",
                 "-copyts",
                 "-i",
                 probed.source().toString()));
@@ -490,6 +514,23 @@ final class KeyframePacketScan {
 
     boolean isDemuxingFailed() {
       return demuxingFailed;
+    }
+  }
+
+  /** Watches FFmpeg's diagnostics for a packet whose times its stream copy changed. */
+  private static final class ChangedPacketTimes implements Consumer<String> {
+
+    private volatile boolean changed;
+
+    @Override
+    public void accept(String line) {
+      if (CHANGED_PACKET_TIMES.stream().anyMatch(line::contains)) {
+        changed = true;
+      }
+    }
+
+    boolean isChanged() {
+      return changed;
     }
   }
 }
