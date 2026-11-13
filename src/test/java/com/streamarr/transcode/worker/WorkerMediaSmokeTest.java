@@ -7072,12 +7072,15 @@ class WorkerMediaSmokeTest {
   }
 
   /**
-   * Feeds FFmpeg each of its inputs through a named pipe of its own, in place of the path that its
-   * command reads, at a steady number of bytes a second, as a slow mount would serve it.
+   * Feeds FFmpeg each of its inputs that names a file through a named pipe of its own, in place of
+   * the path that its command reads, at a steady number of bytes a second, as a slow mount would
+   * serve it. An input on FFmpeg's standard input, such as the copy that the encode of a profile 5
+   * source's copy reads, stays as the worker feeds it.
    */
   private static final class PacedSourcePipes implements AutoCloseable {
 
     private static final int WRITES_PER_SECOND = 20;
+    private static final String STANDARD_INPUT = "pipe:0";
 
     private final Path directory;
     private final int bytesPerWrite;
@@ -7105,9 +7108,10 @@ class WorkerMediaSmokeTest {
         var inputs =
             IntStream.range(1, command.size())
                 .filter(argument -> command.get(argument - 1).equals("-i"))
+                .filter(argument -> !command.get(argument).equals(STANDARD_INPUT))
                 .boxed()
                 .toList();
-        assertThat(inputs).as("the command reads an input").isNotEmpty();
+        assertThat(inputs).as("the command reads a file").isNotEmpty();
         var adjusted = new ArrayList<>(command);
         for (var input : inputs) {
           adjusted.set(input, pipeFeeding(readSource(Path.of(command.get(input)))).toString());
