@@ -874,8 +874,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  // A write after the server has closed the call sends nothing, and the answer then decides. The
-  // answer stands once the call closes after it, as a unary answer does.
+  // A write after the server has closed the call sends nothing, and the answer then decides.
   private void sendSegment(VariantJob job, ProducedSegment segment, Context stop)
       throws InterruptedException, StatusException {
     var metadata =
@@ -896,9 +895,7 @@ public final class TranscodeWorker implements AutoCloseable {
     var upload = openUpload(metadata, stop);
     upload.write(UploadSegmentRequest.newBuilder().setMetadata(metadata).build());
     sendContent(upload, segment);
-    upload.halfClose();
-    var accepted = Optional.ofNullable(upload.read());
-    upload.read();
+    var accepted = CallAnswers.answerOf(upload);
     if (accepted
         .filter(answer -> answer.getAcceptedLengthBytes() == segment.byteLength())
         .isEmpty()) {

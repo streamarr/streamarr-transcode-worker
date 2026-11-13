@@ -182,6 +182,8 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private volatile boolean acknowledgementsWithheld;
     private volatile boolean reportAnswersWithheld;
     private volatile boolean refusingNextReport;
+    private volatile boolean uploadsFailAfterTheirAnswers;
+    private volatile boolean reportCallsFailAfterTheirAnswers;
     private boolean shutdown;
 
     // The worker's upload calls and report calls run on gRPC's in-process transport, against a
@@ -311,6 +313,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     /** Stops withholding acknowledgements and acknowledges every upload that awaits one. */
+    /** Fails each later upload as a broken transport does once the server has answered it. */
+    public void failUploadsAfterTheirAnswers() {
+      uploadsFailAfterTheirAnswers = true;
+    }
+
     public void releaseAcknowledgements() {
       acknowledgementsWithheld = false;
       acknowledgeAwaitingUploads();
@@ -477,6 +484,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     /** The next report call that the worker opens is refused once its first message arrives. */
+    /** Fails each later report call as a broken transport does once the server has answered it. */
+    public void failReportCallsAfterTheirAnswers() {
+      reportCallsFailAfterTheirAnswers = true;
+    }
+
     public void refuseNextReport() {
       refusingNextReport = true;
     }
@@ -530,12 +542,20 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private UploadCall newUploadCall() {
       var upload = new UploadCall(readiness, openUploads, () -> acknowledgementsWithheld);
       nextRefusal().ifPresent(upload::refuseOnTheFirstMessage);
+      if (uploadsFailAfterTheirAnswers) {
+        upload.failAfterItsAnswer();
+      }
+
       return upload;
     }
 
     private ReportCall newReportCall() {
       var report = new ReportCall(reportReadiness, openReportCalls, () -> reportAnswersWithheld);
       report.whenSentWhole(reportThreads::signal);
+      if (reportCallsFailAfterTheirAnswers) {
+        report.failAfterItsAnswer();
+      }
+
       if (refusingNextReport) {
         refusingNextReport = false;
         report.refuseOnTheFirstMessage(reportRefusal());
@@ -969,6 +989,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private boolean closed;
     private boolean cancelled;
     private boolean halfClosed;
+    private boolean failsAfterItsAnswer;
 
     private ScriptedUpload(
         UploadReadiness readiness,
@@ -1013,6 +1034,14 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       }
 
       calls.request(1);
+    }
+
+    synchronized void failAfterItsAnswer() {
+      failsAfterItsAnswer = true;
+    }
+
+    private synchronized boolean failsAfterItsAnswer() {
+      return failsAfterItsAnswer;
     }
 
     synchronized void refuseOnTheFirstMessage(StatusRuntimeException refusal) {
@@ -1185,6 +1214,14 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
       var calls = responses();
       calls.onNext(answer);
+      if (failsAfterItsAnswer()) {
+        calls.onError(
+            Status.UNAVAILABLE
+                .withDescription("The transport failed after the answer")
+                .asRuntimeException());
+        return;
+      }
+
       calls.onCompleted();
     }
 

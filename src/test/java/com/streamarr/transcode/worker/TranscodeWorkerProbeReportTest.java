@@ -402,6 +402,31 @@ class TranscodeWorkerProbeReportTest {
   }
 
   @Test
+  @DisplayName(
+      "Should count the report as sent and send no event when its report call fails after the"
+          + " server's answer")
+  void shouldCountTheReportAsSentAndSendNoEventWhenItsReportCallFailsAfterTheServersAnswer()
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.failReportCallsAfterTheirAnswers();
+      start(connection, request);
+      runtime.probes().drain();
+      connection.awaitReportThreads();
+
+      assertThat(connection.reports())
+          .extracting(report -> report.getResult().getProbeAttemptId())
+          .containsExactly(request.getProbeAttemptId());
+      assertThat(connection.attemptsEndedWithoutReport()).isEmpty();
+      assertThat(connection.pendingCallDeadlines()).isZero();
+    }
+  }
+
+  @Test
   @DisplayName("Should open the report call with the upload deadline when the report is sent")
   void shouldOpenTheReportCallWithTheUploadDeadlineWhenTheReportIsSent() throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);

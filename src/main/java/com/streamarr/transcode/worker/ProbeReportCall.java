@@ -90,10 +90,9 @@ final class ProbeReportCall {
     }
   }
 
-  // A write after the server has closed the call sends nothing, and the answer then decides. The
-  // answer stands once the call closes after it, as a unary answer does. A cancelled context ends
-  // the call's stream but leaves the end of its deadline timer to the call's close, which only this
-  // thread reads, so this thread cancels a call that it leaves open.
+  // A write after the server has closed the call sends nothing, and the answer then decides. A
+  // cancelled context ends the call's stream but leaves the end of its deadline timer to the call's
+  // close, which only this thread reads, so this thread cancels a call that it leaves open.
   private Optional<Long> acceptedLength(
       BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call,
       ProbeAttemptReportMetadata.Builder metadata)
@@ -106,11 +105,7 @@ final class ProbeReportCall {
             ReportProbeAttemptRequest.newBuilder().setData(encoded.substring(sent, end)).build());
       }
 
-      call.halfClose();
-      var accepted =
-          Optional.ofNullable(call.read()).map(ReportProbeAttemptResponse::getAcceptedLengthBytes);
-      call.read();
-      return accepted;
+      return CallAnswers.answerOf(call).map(ReportProbeAttemptResponse::getAcceptedLengthBytes);
     } catch (InterruptedException | RuntimeException e) {
       call.cancel("The worker left the report call", e);
       throw e;

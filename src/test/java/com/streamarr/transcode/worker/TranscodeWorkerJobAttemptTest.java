@@ -3066,6 +3066,26 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should complete the attempt when each segment upload fails after the server's answer")
+  void shouldCompleteTheAttemptWhenEachSegmentUploadFailsAfterTheServersAnswer() throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.failUploadsAfterTheirAnswers();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording(ENCODED_RECORDING)));
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt as a transcode failure when the server does not answer the segment"
           + " upload within the upload deadline")
   void shouldFailTheAttemptWhenTheServerDoesNotAnswerTheSegmentUploadWithinTheUploadDeadline()
