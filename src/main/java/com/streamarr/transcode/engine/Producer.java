@@ -657,9 +657,13 @@ public final class Producer {
       return;
     }
 
-    var atExit = ffmpeg.outcomeAtExit(outcomeOnCleanExit.get());
-    if (tryDecide(atExit)) {
-      settle(atExit);
+    var failureAtExit = ffmpeg.failureAtExit().<AttemptOutcome>map(failure -> failure);
+    settleUnlessDecided(failureAtExit.orElseGet(outcomeOnCleanExit));
+  }
+
+  private void settleUnlessDecided(AttemptOutcome outcome) {
+    if (tryDecide(outcome)) {
+      settle(outcome);
     }
   }
 

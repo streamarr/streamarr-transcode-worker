@@ -284,13 +284,11 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
    * rest of the source.
    */
   @Override
-  public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
+  public Optional<Failed> failureAtExit() {
     var encodeExitCode = encode.onExit().join().exitValue();
     return failureOfTheCopyThatEndedTheEncodingFfmpeg()
         .or(() -> failureOfTheEncodingFfmpeg(encodeExitCode))
-        .or(this::failureOfTheCopyAfterACleanEncode)
-        .<AttemptOutcome>map(failure -> failure)
-        .orElse(outcomeOnCleanExit);
+        .or(this::failureOfTheCopyAfterACleanEncode);
   }
 
   private Optional<Failed> failureOfTheCopyThatEndedTheEncodingFfmpeg() {

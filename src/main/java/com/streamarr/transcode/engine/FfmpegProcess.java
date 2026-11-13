@@ -1,9 +1,11 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.Builder;
 import lombok.NonNull;
@@ -84,10 +86,11 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses
   void endForcibly();
 
   /**
-   * The outcome that the exited FFmpeg's exit status decides. A non-zero exit explains whatever the
-   * output lacks, so it takes precedence over the outcome of a clean exit.
+   * The failure that the exited FFmpeg's exit decides; empty after a clean exit. A non-zero exit
+   * explains whatever the output lacks, so the failure takes precedence over the outcome of a clean
+   * exit.
    */
-  AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit);
+  Optional<Failed> failureAtExit();
 
   /** Reads FFmpeg's output to the end, which lets FFmpeg flush its last fragment and exit. */
   void discardRemainingOutput();
