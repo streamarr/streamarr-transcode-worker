@@ -595,7 +595,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         .isEqualTo(
             "scale_cuda=-2:240,"
                 + "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,"
-                + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=p010le,"
+                + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:tradeoff=disabled:format=p010le,"
                 + frameColour("smpte2084")
                 + STATIC_METADATA_DELETION);
     assertThat(afterFilters(gpuTest)).isEqualTo(afterFilters(cpuReshape));

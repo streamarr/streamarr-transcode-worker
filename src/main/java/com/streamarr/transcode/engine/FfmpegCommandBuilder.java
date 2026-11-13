@@ -66,10 +66,12 @@ public class FfmpegCommandBuilder {
   // stream declares no transfer, and some streams declare the IPT-C2 matrix. The filters therefore
   // declare every frame BT.2020 PQ first. A frame without an RPU then comes out unreshaped, and the
   // attempt keeps every picture (ADR 0013). tonemap_cuda ignores the declaration of a frame that
-  // carries an RPU.
+  // carries an RPU. On a GPU with few multiprocessors from before Ampere, tonemap_cuda would look
+  // the conversion up in a 3D table by default. That table misses ADR 0013's bound against the
+  // exact value, so tradeoff=disabled makes tonemap_cuda compute the conversion for each pixel.
   private static final String GPU_DOLBY_VISION_TO_PQ_RESHAPE_FILTER =
       "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,"
-          + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=";
+          + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:tradeoff=disabled:format=";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP =
       traits().fixedGop(true).tenBitPixelFormat(P010).build();

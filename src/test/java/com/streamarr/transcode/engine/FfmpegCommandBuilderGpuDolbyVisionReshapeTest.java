@@ -8,6 +8,7 @@ import com.streamarr.transcode.engine.VideoDynamicRange.Presence;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -33,7 +34,7 @@ class FfmpegCommandBuilderGpuDolbyVisionReshapeTest {
   // it reads. A profile 5 stream declares no transfer, so the filters declare BT.2020 PQ first.
   private static final String GPU_FILTERS =
       "scale_cuda=-2:1080,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,"
-          + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=p010le,"
+          + "tonemap_cuda=t=smpte2084:p=bt2020:m=bt2020:r=tv:tradeoff=disabled:format=p010le,"
           + "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv,"
           + "sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,"
           + "sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL,fps=24/1:eof_action=pass";
@@ -79,6 +80,27 @@ class FfmpegCommandBuilderGpuDolbyVisionReshapeTest {
             "-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", "/media/movie.mkv");
     assertThat(filtersOf(command)).isEqualTo(GPU_FILTERS);
     assertThat(withoutFiltersAndGpuDecode(command)).isEqualTo(withoutFiltersAndGpuDecode(pq));
+  }
+
+  // ADR 0013, as amended in streamarr/streamarr-adr#132: tonemap_cuda can look the conversion up
+  // in a 3D table instead of computing it for each pixel, and it chooses the table by itself on a
+  // GPU with few multiprocessors from before Ampere. The table misses the bound against the exact
+  // value, so the worker lets tonemap_cuda use the table only after a measurement passes.
+  @Test
+  @DisplayName(
+      "Should make tonemap_cuda compute the reshape for each pixel when hevc_nvenc reshapes a"
+          + " profile 5 source on the GPU")
+  void shouldMakeTonemapCudaComputeTheReshapeForEachPixelWhenHevcNvencReshapesOnTheGpu() {
+    var command =
+        singleCommand(verifiedJob(request(profile5Encode().build(), COPIED_AUDIO).build()));
+
+    assertThat(Arrays.stream(filtersOf(command).split(",")))
+        .filteredOn(filter -> filter.startsWith("tonemap_cuda="))
+        .singleElement()
+        .satisfies(
+            tonemap ->
+                assertThat(tonemap.substring("tonemap_cuda=".length()).split(":"))
+                    .contains("tradeoff=disabled"));
   }
 
   @ParameterizedTest(name = "{0}")
