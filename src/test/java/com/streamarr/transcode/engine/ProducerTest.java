@@ -59,6 +59,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -1114,33 +1115,41 @@ class ProducerTest {
   }
 
   /**
-   * Where the interval of a copy's last segment, from 1 s, ends: at 2 s on the plain grid of 1 s
-   * and on a list of starts at 0 s and 1 s whose job advertises its end at 2 s; nowhere on that
-   * list without an advertised end, which measures the segment's video against its shortest
-   * interval, 1 s.
+   * Where the interval of a copy's last segment, segment 1, ends when each interval lasts 1 s, or
+   * as many seconds as given: two intervals from 0 s on the plain grid, and on a list of starts at
+   * 0 s and one interval whose job advertises its end there; nowhere on that list without an
+   * advertised end, which measures the segment's video against its shortest interval, segment 0's.
    */
   private enum CopyLayout {
-    PLAIN_GRID(SegmentIntervals.onPlainGrid(1)),
+    PLAIN_GRID(SegmentIntervals::onPlainGrid),
     LIST_WITH_ADVERTISED_END(
-        startsAtZeroAndOneSecond().withLastListedSegmentEndingAt(Duration.ofSeconds(2))),
-    LIST_WITHOUT_ADVERTISED_END(startsAtZeroAndOneSecond());
+        seconds ->
+            startsAtZeroAndAfter(seconds)
+                .withLastListedSegmentEndingAt(Duration.ofSeconds(2L * seconds))),
+    LIST_WITHOUT_ADVERTISED_END(CopyLayout::startsAtZeroAndAfter);
 
-    private final SegmentIntervals intervals;
+    private final IntFunction<SegmentIntervals> intervalsLasting;
 
-    CopyLayout(SegmentIntervals intervals) {
-      this.intervals = intervals;
+    CopyLayout(IntFunction<SegmentIntervals> intervalsLasting) {
+      this.intervalsLasting = intervalsLasting;
     }
 
     Producer.ProducerBuilder producerOf(Producer.ProducerBuilder producer) {
+      return producerOf(producer, 1);
+    }
+
+    Producer.ProducerBuilder producerOf(Producer.ProducerBuilder producer, int intervalSeconds) {
       return producer
-          .intervals(intervals)
+          .intervals(intervalsLasting.apply(intervalSeconds))
           .mediaSegmentCount(2)
           .copiesAudio(true)
           .requiresSoundTrack(true);
     }
 
-    private static SegmentIntervals startsAtZeroAndOneSecond() {
-      return SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L, 24L), 1, 24));
+    // Starts at 0 s and after one interval of this many seconds, in ticks of 1/24 s.
+    private static SegmentIntervals startsAtZeroAndAfter(int intervalSeconds) {
+      return SegmentIntervals.onExactStarts(
+          intervalSeconds, new ExactSegmentStarts(List.of(0L, 24L * intervalSeconds), 1, 24));
     }
   }
 
