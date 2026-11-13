@@ -6978,17 +6978,7 @@ class WorkerMediaSmokeTest {
       assertThat(delivered.silentSamples(COUNTED_AUDIO_SAMPLES, advertisedEndSamples))
           .as("the samples from the audio's end at 10 s to the advertised end at 51 s")
           .isEqualTo(new SilentSamples(advertisedEndSamples - COUNTED_AUDIO_SAMPLES, 0, 0));
-      assertThat(completion.longestTimeWithoutOutput())
-          .as("the longest time in which the attempt's output did not advance")
-          .isGreaterThan(PACED_STALL_TIMEOUT);
-      assertThat(completion.longestSilence())
-          .as("the longest time without a progress report before the attempt completed")
-          .isLessThan(SERVER_STALL_THRESHOLD);
-      assertThat(completion.progress().stream().flatMapToLong(TimedProgress::ffmpegBytesRead))
-          .as("the bytes read that the reports carry, each only once it has grown")
-          .isNotEmpty()
-          .doesNotHaveDuplicates()
-          .isSorted();
+      assertProgressThroughAPauseLongerThanTheStallTimeout(completion);
     }
   }
 
@@ -7021,21 +7011,7 @@ class WorkerMediaSmokeTest {
 
       var failed = executeProbedJobExpectingFailure(engine, source.getParent(), job.build());
 
-      assertThat(failed.failure().getFailure())
-          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      var stoppedAt = pipes.firstStoppedAtNanos();
-      assertThat(stoppedAt).as("when a pipe served its last byte").isPresent();
-      assertThat(failed.timeWithoutOutputBefore(stoppedAt.getAsLong()))
-          .as("how long the attempt's output had not advanced when the source stopped")
-          .isGreaterThan(PACED_STALL_TIMEOUT);
-      assertThat(failed.lastProgressAfter(stoppedAt.getAsLong()))
-          .as("the last progress report, counted from the source's last byte")
-          .isLessThan(Duration.ofSeconds(3));
-      assertThat(Duration.ofNanos(failed.failedAtNanos() - stoppedAt.getAsLong()))
-          .as("the failure report, counted from the source's last byte")
-          .isBetween(
-              PACED_STALL_TIMEOUT.minusSeconds(1),
-              PACED_STALL_TIMEOUT.plus(FFMPEG_GRACE_PERIOD).plusSeconds(3));
+      assertFailureWithinTheStallTimeoutOfTheSourcesLastByte(failed, pipes);
     }
   }
 
@@ -7071,17 +7047,7 @@ class WorkerMediaSmokeTest {
       assertThat(commands).as("the copying FFmpeg and the encoding FFmpeg").hasSize(2);
       assertThat(completion.uploads().names())
           .containsExactlyElementsOf(uploadNames(VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT));
-      assertThat(completion.longestTimeWithoutOutput())
-          .as("the longest time in which the attempt's output did not advance")
-          .isGreaterThan(PACED_STALL_TIMEOUT);
-      assertThat(completion.longestSilence())
-          .as("the longest time without a progress report before the attempt completed")
-          .isLessThan(SERVER_STALL_THRESHOLD);
-      assertThat(completion.progress().stream().flatMapToLong(TimedProgress::ffmpegBytesRead))
-          .as("the bytes read that the reports carry, each only once it has grown")
-          .isNotEmpty()
-          .doesNotHaveDuplicates()
-          .isSorted();
+      assertProgressThroughAPauseLongerThanTheStallTimeout(completion);
     }
   }
 
@@ -7153,6 +7119,45 @@ class WorkerMediaSmokeTest {
                   .toList();
           runFfmpeg(arguments, output);
         });
+  }
+
+  // The attempt's output did not advance for longer than the stall timeout, and the reports never
+  // stopped for the server's stall threshold and carried the bytes read as they grew.
+  private static void assertProgressThroughAPauseLongerThanTheStallTimeout(
+      CompletedExecution completion) {
+    assertThat(completion.longestTimeWithoutOutput())
+        .as("the longest time in which the attempt's output did not advance")
+        .isGreaterThan(PACED_STALL_TIMEOUT);
+    assertThat(completion.longestSilence())
+        .as("the longest time without a progress report before the attempt completed")
+        .isLessThan(SERVER_STALL_THRESHOLD);
+    assertThat(completion.progress().stream().flatMapToLong(TimedProgress::ffmpegBytesRead))
+        .as("the bytes read that the reports carry, each only once it has grown")
+        .isNotEmpty()
+        .doesNotHaveDuplicates()
+        .isSorted();
+  }
+
+  // The attempt's output had not advanced for longer than the stall timeout when the source served
+  // its last byte. The reports stopped soon after that byte, and the worker reported a failure
+  // within the stall timeout and the grace period.
+  private static void assertFailureWithinTheStallTimeoutOfTheSourcesLastByte(
+      FailedExecution failed, PacedSourcePipes pipes) {
+    assertThat(failed.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+    var stoppedAt = pipes.firstStoppedAtNanos();
+    assertThat(stoppedAt).as("when a pipe served its last byte").isPresent();
+    assertThat(failed.timeWithoutOutputBefore(stoppedAt.getAsLong()))
+        .as("how long the attempt's output had not advanced when the source stopped")
+        .isGreaterThan(PACED_STALL_TIMEOUT);
+    assertThat(failed.lastProgressAfter(stoppedAt.getAsLong()))
+        .as("the last progress report, counted from the source's last byte")
+        .isLessThan(Duration.ofSeconds(3));
+    assertThat(Duration.ofNanos(failed.failedAtNanos() - stoppedAt.getAsLong()))
+        .as("the failure report, counted from the source's last byte")
+        .isBetween(
+            PACED_STALL_TIMEOUT.minusSeconds(1),
+            PACED_STALL_TIMEOUT.plus(FFMPEG_GRACE_PERIOD).plusSeconds(3));
   }
 
   private static long lastAudioPacketOffset(Path source) throws Exception {
