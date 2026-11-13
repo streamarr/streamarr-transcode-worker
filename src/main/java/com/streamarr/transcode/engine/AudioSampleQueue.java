@@ -4,12 +4,10 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.stream.Stream;
@@ -219,15 +217,9 @@ final class AudioSampleQueue {
   private AudioTail tailOf(Sample sample, long timescale) {
     var duration = sample.duration();
     return AudioTail.of(
-        sample, timescale, Math.max(duration, mostCommonEarlierSampleDuration().orElse(duration)));
-  }
-
-  private Optional<Long> mostCommonEarlierSampleDuration() {
-    return earlierSampleDurationCounts.entrySet().stream()
-        .max(
-            Entry.<Long, Long>comparingByValue()
-                .thenComparing(Entry.comparingByKey(Comparator.reverseOrder())))
-        .map(Entry::getKey);
+        sample,
+        timescale,
+        Math.max(duration, MostCommonDuration.of(earlierSampleDurationCounts).orElse(duration)));
   }
 
   private record Queued(long number, CarriedSample sample) {}
