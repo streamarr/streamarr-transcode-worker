@@ -435,7 +435,7 @@ final class SegmentAssembler {
   private boolean comesBeforeTheCopiedAudiosFirstSample(
       List<CarriedSample> samples, MediaTime videoEnd) {
     if (samples.isEmpty()) {
-      return audio.discardedTail().isPresent();
+      return audio.discardedStart().isPresent();
     }
 
     return samples.getFirst().audioStart().compareTo(videoEnd) >= 0;

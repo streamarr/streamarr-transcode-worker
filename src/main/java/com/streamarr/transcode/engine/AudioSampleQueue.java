@@ -47,8 +47,8 @@ final class AudioSampleQueue {
   private final Map<Long, Long> earlierSampleDurationCounts = new HashMap<>();
   private OptionalLong latestSampleDuration = OptionalLong.empty();
   private Optional<AudioTail> prerollTail = Optional.empty();
-  private Optional<AudioTail> discardedTail = Optional.empty();
-  private Optional<MediaTime> discardedStart = Optional.empty();
+  // The samples that discardAfter dropped, in presentation order.
+  private final Deque<DroppedSample> dropped = new ArrayDeque<>();
 
   /**
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence; empty
@@ -113,9 +113,8 @@ final class AudioSampleQueue {
   /** Drops the samples held for segments after this one. */
   void discardAfter(long number) {
     while (!held.isEmpty() && held.peekLast().number() > number) {
-      var dropped = held.removeLast().sample();
-      discardedTail = discardedTail.or(() -> Optional.of(tailOf(dropped)));
-      discardedStart = Optional.of(dropped.audioStart());
+      var sample = held.removeLast().sample();
+      dropped.addFirst(new DroppedSample(sample.audioStart(), tailOf(sample)));
     }
   }
 
@@ -123,7 +122,7 @@ final class AudioSampleQueue {
    * Where the latest sample that {@link #discardAfter} dropped ends; empty when it dropped none.
    */
   Optional<AudioTail> discardedTail() {
-    return discardedTail;
+    return Optional.ofNullable(dropped.peekLast()).map(DroppedSample::tail);
   }
 
   /**
@@ -131,7 +130,7 @@ final class AudioSampleQueue {
    * none.
    */
   Optional<MediaTime> discardedStart() {
-    return discardedStart;
+    return Optional.ofNullable(dropped.peekFirst()).map(DroppedSample::start);
   }
 
   /** The audio samples dropped because they arrived after their segment closed. */
@@ -233,4 +232,6 @@ final class AudioSampleQueue {
   }
 
   private record Queued(long number, CarriedSample sample) {}
+
+  private record DroppedSample(MediaTime start, AudioTail tail) {}
 }
