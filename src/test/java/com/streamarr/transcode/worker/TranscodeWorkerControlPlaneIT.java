@@ -766,7 +766,7 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should ask FFmpeg to quit gracefully when the worker closes during an upload")
   void shouldAskFfmpegToQuitGracefullyWhenTheWorkerClosesDuringAnUpload() throws Exception {
     var service = new ControllableWorkerService();
-    service.acknowledgeUploads = false;
+    service.stopAcknowledgingUploads();
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -817,7 +817,7 @@ class TranscodeWorkerControlPlaneIT {
       "Should read no further output when the control plane has not acknowledged a segment")
   void shouldReadNoFurtherOutputWhenTheControlPlaneHasNotAcknowledgedASegment() throws Exception {
     var service = new ControllableWorkerService();
-    service.acknowledgeUploads = false;
+    service.stopAcknowledgingUploads();
     var recording = recording(ENCODED_RECORDING);
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJob();
@@ -835,8 +835,7 @@ class TranscodeWorkerControlPlaneIT {
           .containsExactly("init.mp4");
       assertThat(process.hasReadToEndOfOutput()).isFalse();
 
-      service.acknowledgeUploads = true;
-      service.acknowledgePendingUpload();
+      service.resumeAcknowledgingUploads();
       service.awaitCompleted(job);
 
       assertThat(service.uploads)
@@ -1093,14 +1092,22 @@ class TranscodeWorkerControlPlaneIT {
     private boolean sessionEnded;
     private StreamObserver<EstablishWorkerSessionResponse> responses;
     private final ConcurrentLinkedQueue<UploadedSegment> uploads = new ConcurrentLinkedQueue<>();
-    private volatile boolean acknowledgeUploads = true;
+    private boolean acknowledgeUploads = true;
     private StreamObserver<UploadSegmentResponse> pendingUpload;
     private int pendingLength;
 
-    private void acknowledgePendingUpload() {
-      pendingUpload.onNext(
-          UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(pendingLength).build());
-      pendingUpload.onCompleted();
+    private synchronized void stopAcknowledgingUploads() {
+      acknowledgeUploads = false;
+    }
+
+    private synchronized void resumeAcknowledgingUploads() {
+      acknowledgeUploads = true;
+      acknowledge(pendingUpload, pendingLength);
+    }
+
+    private static void acknowledge(StreamObserver<UploadSegmentResponse> response, int length) {
+      response.onNext(UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(length).build());
+      response.onCompleted();
     }
 
     private ControllableWorkerService() {
@@ -1190,14 +1197,7 @@ class TranscodeWorkerControlPlaneIT {
 
         @Override
         public void onCompleted() {
-          pendingUpload = responseObserver;
-          pendingLength = bytes.size();
-          receiveUpload(new UploadedSegment(metadata, bytes.toByteArray()));
-          if (acknowledgeUploads) {
-            responseObserver.onNext(
-                UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(bytes.size()).build());
-            responseObserver.onCompleted();
-          }
+          receiveUpload(new UploadedSegment(metadata, bytes.toByteArray()), responseObserver);
         }
       };
     }
@@ -1207,9 +1207,19 @@ class TranscodeWorkerControlPlaneIT {
       notifyAll();
     }
 
-    private synchronized void receiveUpload(UploadedSegment upload) {
+    // Decides in the section that publishes the upload. The test can resume acknowledging as soon
+    // as it sees the upload, and only one of the two may answer it.
+    private synchronized void receiveUpload(
+        UploadedSegment upload, StreamObserver<UploadSegmentResponse> response) {
       uploads.add(upload);
       notifyAll();
+      if (acknowledgeUploads) {
+        acknowledge(response, upload.bytes().length);
+        return;
+      }
+
+      pendingUpload = response;
+      pendingLength = upload.bytes().length;
     }
 
     private synchronized void markSessionEnded() {

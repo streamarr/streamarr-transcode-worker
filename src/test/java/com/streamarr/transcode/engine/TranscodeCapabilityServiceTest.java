@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -16,12 +18,20 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Capability Service Tests")
 class TranscodeCapabilityServiceTest {
+
+  private static final EncoderBackend H264_NVENC =
+      EncoderBackend.builder()
+          .codecFamily(CodecFamily.H264)
+          .encoder("h264_nvenc")
+          .hardware(true)
+          .build();
 
   @Test
   @DisplayName("Should report unavailable when FFmpeg not installed")
@@ -680,6 +690,127 @@ class TranscodeCapabilityServiceTest {
     assertThat(service.workerVerifiedEncoders())
         .extracting(encoder -> encoder.backend().encoder())
         .doesNotContain("h264_nvenc");
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a withdrawn hardware encoder withdrawn and start no test encode when its"
+          + " recheck runs on an interrupted thread")
+  void
+      shouldKeepAWithdrawnHardwareEncoderWithdrawnAndStartNoTestEncodeWhenItsRecheckRunsOnAnInterruptedThread() {
+    var nvencTestEncodes = testEncodes(createProcess("", 0), createProcess("", 0));
+    var service = detectH264Nvenc(nvencTestEncodes);
+    service.withdraw(H264_NVENC);
+    Thread.currentThread().interrupt();
+
+    try {
+      var changed = service.recheckWithdrawnEncoders();
+
+      assertThat(changed).isFalse();
+      assertThat(service.hasWithdrawnEncoders()).isTrue();
+      assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("libx264");
+      assertThat(nvencTestEncodes).hasSize(1);
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a withdrawn hardware encoder withdrawn and restore the interrupt when its"
+          + " recheck is interrupted during the test encode")
+  void
+      shouldKeepAWithdrawnHardwareEncoderWithdrawnAndRestoreTheInterruptWhenItsRecheckIsInterruptedDuringTheTestEncode() {
+    var interruptedTestEncode = TimedEncoderProcess.builder().interrupted(true).build();
+    var service = detectH264Nvenc(testEncodes(createProcess("", 0), interruptedTestEncode));
+    service.withdraw(H264_NVENC);
+
+    try {
+      var changed = service.recheckWithdrawnEncoders();
+
+      assertThat(changed).isFalse();
+      assertThat(service.hasWithdrawnEncoders()).isTrue();
+      assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("libx264");
+      assertThat(interruptedTestEncode.isAlive()).isFalse();
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  // The interrupt ends the wait for the listing's FFmpeg to exit, after detection read the listing.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"-encoders", "-hwaccels"})
+  @DisplayName(
+      "Should restore the interrupt, start no further FFmpeg and offer no software encoder when"
+          + " detection is interrupted during a listing")
+  void
+      shouldRestoreTheInterruptStartNoFurtherFfmpegAndOfferNoSoftwareEncoderWhenDetectionIsInterruptedDuringAListing(
+          String listing) {
+    var listings =
+        Map.of(
+            "-encoders", "V....D h264_nvenc NVENC H.264 encoder",
+            "-hwaccels", "Hardware acceleration methods:\ncuda\n");
+    var interruptedListing =
+        new FakeProcess(listings.get(listing), 0) {
+          @Override
+          public int waitFor() throws InterruptedException {
+            throw new InterruptedException("listing interrupted");
+          }
+        };
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.3", 0),
+            "encoders", createProcess(listings.get("-encoders"), 0));
+    var started = new ArrayList<List<String>>();
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              started.add(List.copyOf(command.command()));
+              if (command.command().contains(listing)) {
+                return interruptedListing;
+              }
+
+              return resolveProcess(command, outputs);
+            });
+
+    try {
+      service.detectCapabilities();
+
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+      assertThat(started.getLast()).contains(listing);
+      assertThat(service.softwareEncoders()).isEmpty();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  private static Deque<Process> testEncodes(Process... inOrder) {
+    return new ArrayDeque<>(List.of(inOrder));
+  }
+
+  // A service that detected h264_nvenc. Detection takes the first of the encoder's test encodes,
+  // and each recheck the next.
+  private TranscodeCapabilityService detectH264Nvenc(Deque<Process> nvencTestEncodes) {
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.3", 0),
+            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\n", 0),
+            "encoders", createProcess("V....D h264_nvenc NVENC H.264 encoder", 0));
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              if (command.command().contains("h264_nvenc")) {
+                return nvencTestEncodes.removeFirst();
+              }
+
+              return resolveProcess(command, outputs);
+            });
+    service.detectCapabilities();
+    return service;
   }
 
   private static EncoderBackend softwareBackend(CodecFamily codecFamily, String encoder) {
