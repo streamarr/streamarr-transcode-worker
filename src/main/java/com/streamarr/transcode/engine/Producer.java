@@ -234,9 +234,9 @@ public final class Producer {
     return producer;
   }
 
-  // FFmpeg writes nothing while its audio's input reads ahead, so the bytes that the FFmpeg process
-  // which reads that input reads count as its progress too. A copying FFmpeg that feeds a pipe
-  // waits meanwhile, so its reads show nothing.
+  // FFmpeg writes nothing while its audio's input reads ahead. So the reads of the FFmpeg process
+  // that reads the audio's input count as the attempt's progress too. The copying FFmpeg of a pipe
+  // waits meanwhile, so the copying FFmpeg's reads show nothing.
   private static StallWatchdog watchdogOf(FfmpegProcess ffmpeg, Settings settings) {
     if (!settings.audioInputReadsAhead()) {
       return new StallWatchdog(settings.stallTimeout());
