@@ -43,8 +43,8 @@ final class KeyframePacketScan {
   private static final String DEMUXING_ERROR = "Error during demuxing";
 
   /**
-   * Matroska rounds each packet's time to a whole millisecond, so an audio stream's last sample can
-   * end up to 1 ms after the latest end that the stream's packets give.
+   * Matroska rounds each packet's time and duration to a whole millisecond, so an audio stream's
+   * last sample can end up to 1 ms after its last packet counted at the stream's longest duration.
    */
   private static final BigDecimal AUDIO_END_MARGIN_SECONDS = new BigDecimal("0.001");
 
