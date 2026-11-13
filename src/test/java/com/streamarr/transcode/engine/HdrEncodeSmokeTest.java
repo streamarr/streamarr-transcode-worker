@@ -738,6 +738,20 @@ class HdrEncodeSmokeTest {
     }
 
     var written = root.resolve("dolby-vision-5-open-gop-written.mp4");
+    writeTestPatternProfile5Source(
+        written,
+        "keyint=50:min-keyint=50:scenecut=0:open-gop=1:bframes=8:b-pyramid=1:rc-lookahead=10");
+    assertThat(raslPicturesAfterEachCraPicture(written))
+        .as("the RASL pictures that follow each CRA picture in decode order")
+        .isNotEmpty()
+        .allSatisfy(count -> assertThat(count).isPositive());
+    return Files.move(written, source);
+  }
+
+  // 256x144 testsrc2 pictures, each one different, with the fixture's RPUs, which libx265 encodes
+  // under the GOP parameters and writes after each picture's slices.
+  private static void writeTestPatternProfile5Source(Path written, String gopParameters)
+      throws Exception {
     runToCompletion(
         List.of(
             "ffmpeg",
@@ -763,18 +777,12 @@ class HdrEncodeSmokeTest {
             "-strict",
             "unofficial",
             "-x265-params",
-            "keyint=50:min-keyint=50:scenecut=0:open-gop=1:bframes=8:b-pyramid=1"
-                + ":rc-lookahead=10:log-level=error:vbv-maxrate=1000:vbv-bufsize=1000",
+            gopParameters + ":log-level=error:vbv-maxrate=1000:vbv-bufsize=1000",
             "-bsf:v",
             "hevc_metadata=matrix_coefficients=2",
             "-tag:v",
             "dvh1",
             written.toString()));
-    assertThat(raslPicturesAfterEachCraPicture(written))
-        .as("the RASL pictures that follow each CRA picture in decode order")
-        .isNotEmpty()
-        .allSatisfy(count -> assertThat(count).isPositive());
-    return Files.move(written, source);
   }
 
   // The 256x144 source with the pictures that reach the reshape without an RPU. The stream declares
