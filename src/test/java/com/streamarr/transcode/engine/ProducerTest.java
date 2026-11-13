@@ -1046,8 +1046,106 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // The output ends with segment 1, whose interval runs from 1 s to 2 s. Its last picture ends one
+  // millisecond before 2 s, as times rounded to the millisecond leave it, or one whole picture of
+  // 1/24 s before. The audio ends at 1 s. Without audio after 1 s or video 1 s past it, segment 0
+  // closes only when the output ends, together with segment 1, so neither is delivered.
+  @ParameterizedTest(name = "{1} early, {0}")
+  @MethodSource("videoEndsWithinOneFrameOfTheLastIntervalsEnd")
+  @DisplayName(
+      "Should refuse a copy's last segment without copied audio when its video ends within one"
+          + " video frame of its interval's end")
+  void
+      shouldRefuseACopysLastSegmentWithoutCopiedAudioWhenItsVideoEndsWithinOneFrameOfItsIntervalsEnd(
+          CopyLayout layout, String early, int fullPictures, int lastPictureTicks) {
+    var output = copyWhoseSilentLastSegmentEndsWith(fullPictures, lastPictureTicks);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer = layout.producerOf(producerOfOneSecondSegments(process)).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  static Stream<Arguments> videoEndsWithinOneFrameOfTheLastIntervalsEnd() {
+    return Arrays.stream(CopyLayout.values())
+        .flatMap(
+            layout ->
+                Stream.of(
+                    Arguments.of(layout, "one millisecond", 23, 976),
+                    Arguments.of(layout, "one picture", 22, 1_000)));
+  }
+
+  // The same output, whose last picture ends one tick of the 24 kHz video timescale more than one
+  // picture before 2 s: a short copy.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(CopyLayout.class)
+  @DisplayName(
+      "Should complete a short copy when its silent last segment's video ends more than one video"
+          + " frame before its interval's end")
+  void shouldCompleteAShortCopyWhenItsSilentLastSegmentsVideoEndsMoreThanOneFrameBeforeItsEnd(
+      CopyLayout layout) {
+    var output = copyWhoseSilentLastSegmentEndsWith(22, 999);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer = layout.producerOf(producerOfOneSecondSegments(process)).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
+  // A copy of video and audio in two segments that start at 0 s and 1 s. Segment 0 holds 24
+  // pictures of 1/24 s and the audio, which ends at 1 s. Segment 1 holds this many pictures of 1/24
+  // s from 1 s, then one picture this many ticks of the 24 kHz video timescale long.
+  private static OneSecondSegments copyWhoseSilentLastSegmentEndsWith(
+      int fullPictures, int lastPictureTicks) {
+    return OneSecondSegments.of(
+        IsoBoxes.videoAndAudioMoov(),
+        TimedFragment.keyframeAt(0)
+            .videoDuration(1_000)
+            .videoSampleCount(24)
+            .audioFrom(0, oneSecondOfAudioSamples())
+            .build(),
+        TimedFragment.keyframeAt(24_000)
+            .videoDuration(1_000)
+            .videoSampleCount(fullPictures)
+            .build(),
+        TimedFragment.frameAt(24_000 + fullPictures * 1_000L)
+            .videoDuration(lastPictureTicks)
+            .build());
+  }
+
+  /**
+   * Where the interval of a copy's last segment, from 1 s, ends: at 2 s on the plain grid of 1 s
+   * and on a list of starts at 0 s and 1 s whose job advertises its end at 2 s; nowhere on that
+   * list without an advertised end, which measures the segment's video against its shortest
+   * interval, 1 s.
+   */
+  private enum CopyLayout {
+    PLAIN_GRID(SegmentIntervals.onPlainGrid(1)),
+    LIST_WITH_ADVERTISED_END(
+        startsAtZeroAndOneSecond().withLastListedSegmentEndingAt(Duration.ofSeconds(2))),
+    LIST_WITHOUT_ADVERTISED_END(startsAtZeroAndOneSecond());
+
+    private final SegmentIntervals intervals;
+
+    CopyLayout(SegmentIntervals intervals) {
+      this.intervals = intervals;
+    }
+
+    Producer.ProducerBuilder producerOf(Producer.ProducerBuilder producer) {
+      return producer
+          .intervals(intervals)
+          .mediaSegmentCount(2)
+          .copiesAudio(true)
+          .requiresSoundTrack(true);
+    }
+
+    private static SegmentIntervals startsAtZeroAndOneSecond() {
+      return SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L, 24L), 1, 24));
+    }
+  }
+
   // The output ends with segment 1. Its keyframe is presented at 1 s, and the picture that follows
-  // it in the fragment is presented before it, at 0.958 s. Its video ends at 1.958 s, one picture
+  // it in the fragment is presented before it, at 0.958 s. Its video ends at 1.917 s, two pictures
   // before its interval's end. The audio ends at 1 s.
   @Test
   @DisplayName(
@@ -1068,7 +1166,7 @@ class ProducerTest {
                 .videoDuration(1_000)
                 .videoSampleCount(2)
                 .build(),
-            TimedFragment.frameAt(25_000).videoDuration(1_000).videoSampleCount(22).build());
+            TimedFragment.frameAt(25_000).videoDuration(1_000).videoSampleCount(21).build());
     var process = ScriptedProcess.builder().output(output.bytes()).build();
     var producer =
         producerOfOneSecondSegments(process).copiesAudio(true).requiresSoundTrack(true).start();
@@ -1078,14 +1176,15 @@ class ProducerTest {
   }
 
   // Exact starts at 0 s, 1.083 s, 2 s and 3 s: segment 1's interval, 0.917 s, is the shortest. The
-  // copy ends in segment 2, whose 1 s interval holds 0.958 s of video after the audio's end.
+  // copy ends in segment 2, whose 1 s interval holds 0.917 s of video after the audio's end, two
+  // pictures before that interval's end.
   @Test
   @DisplayName(
       "Should complete a short copy when its silent last segment ends inside its own interval and"
-          + " an earlier interval is shorter than its video")
+          + " an earlier interval is no longer than its video")
   void
-      shouldCompleteAShortCopyWhenItsSilentLastSegmentEndsInsideItsOwnIntervalAndAnEarlierIntervalIsShorterThanItsVideo() {
-    var output = copyWhoseAudioEndsWhereItsLastSegmentStarts(23);
+      shouldCompleteAShortCopyWhenItsSilentLastSegmentEndsInsideItsOwnIntervalAndAnEarlierIntervalIsNoLongerThanItsVideo() {
+    var output = copyWhoseAudioEndsWhereItsLastSegmentStarts(22);
     var process = ScriptedProcess.builder().output(output.bytes()).build();
     var producer =
         producerOfOneSecondSegments(process)

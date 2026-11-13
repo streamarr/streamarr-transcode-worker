@@ -128,6 +128,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -6960,6 +6961,92 @@ class WorkerMediaSmokeTest {
             sourceAudio.stream()
                 .filter(packet -> packet.pts() < lastSegment * SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS)
                 .toList());
+  }
+
+  // Matroska keeps every time in whole milliseconds, so the source's last picture of 1/24 s ends at
+  // 23.999 s. Its AAC audio ends at 18 s. A copy of both on segments that start at 0 s, 6 s, 12 s
+  // and 18 s leaves segment 3, the last, with video and no audio. That video ends within one
+  // picture of 24 s, so the segment counts as a full interval without copied audio.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("advertisedEndsOfACopy")
+  @DisplayName(
+      "Should report copied audio that ran short and upload no segment after the audio when a copy's"
+          + " last segment holds no audio and its video ends within one frame of 24 s")
+  void shouldReportCopiedAudioThatRanShortWhenACopysSilentLastSegmentEndsWithinAFrameOfItsEnd(
+      String advertisedEnd, UnaryOperator<TranscodeExecution.Builder> withAdvertisedEnd)
+      throws Exception {
+    var source = matroskaAacEndsAtEighteenSecondsSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(1);
+    withAdvertisedEnd.apply(
+        job.getExecutionBuilder()
+            .setTargetSegmentDurationSeconds(6)
+            .setMediaSegmentCount(RISING_TONE_SOURCE_SEGMENT_COUNT)
+            .addAllSegmentStartTicks(List.of(0L, 6L, 12L, 18L))
+            .setSegmentStartTimeBase(WHOLE_SECONDS));
+
+    var failed =
+        executeExpectingFailure(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(24_000 - lastVideoPacketEndInMillis(source))
+        .as("how many milliseconds before 24 s the source's last picture ends")
+        .isBetween(1L, 41L);
+    assertThat(failed.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPIED_AUDIO_RAN_SHORT);
+    assertThat(failed.uploads().names())
+        .containsExactlyElementsOf(uploadNames(RISING_TONE_SOURCE_SEGMENT_COUNT - 1));
+  }
+
+  static Stream<Arguments> advertisedEndsOfACopy() {
+    return Stream.of(
+        Arguments.of(
+            "without an advertised end",
+            (UnaryOperator<TranscodeExecution.Builder>) execution -> execution),
+        Arguments.of(
+            "with the advertised end at 24 s",
+            (UnaryOperator<TranscodeExecution.Builder>)
+                execution -> {
+                  execution.getAdvertisedEndBuilder().setSeconds(24);
+                  return execution;
+                }));
+  }
+
+  // The rising-tone sources' video in Matroska, beside the rising tone as AAC for 18 s.
+  private static synchronized Path matroskaAacEndsAtEighteenSecondsSource() throws Exception {
+    var source = seekableSources.resolve("aac-ends-at-18s.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE_SOURCE_VIDEO,
+              "-f",
+              "lavfi",
+              "-i",
+              RISING_TONE + "18",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // Where the source's last video packet ends, in Matroska's ticks of one millisecond.
+  private static long lastVideoPacketEndInMillis(Path source) throws Exception {
+    var last =
+        ffprobe(List.of("-select_streams", "v:0", "-show_entries", "packet=pts,duration"), source)
+            .lines()
+            .reduce((_, later) -> later)
+            .orElseThrow()
+            .split(",");
+    return Long.parseLong(last[0]) + Long.parseLong(last[1]);
   }
 
   // The recovery of ADR 0058 encodes the audio and pads it. The encode must move no sample: a

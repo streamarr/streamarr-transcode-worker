@@ -377,10 +377,13 @@ final class SegmentAssembler {
 
     // A short copy may end with one final picture after its last audio packet. That still takes
     // the normal short-copy path; a complete interval without audio needs an audio encode, and so
-    // does any segment that a later one follows.
+    // does any segment that a later one follows. The interval counts as complete when its video
+    // ends within one video frame of its end, the frame tolerance of encoded video, so that times
+    // rounded to the millisecond do not make a full interval look short.
     if (videoDecision instanceof VideoDecision.Copy
         && segment.lastOfTheOutput()
-        && endsBeforeItsIntervalsEnd(segment, lastPictureEnd, timescale)) {
+        && endsBeforeItsIntervalsEnd(
+            segment, Math.addExact(lastPictureEnd, frameDuration), timescale)) {
       return;
     }
 
@@ -388,15 +391,16 @@ final class SegmentAssembler {
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
   }
 
-  // Whether the segment's last picture ends before its own interval does, wherever its first
-  // picture starts: a keyframe can come late, and a picture can be presented before the keyframe
-  // it follows. The last listed segment of a job without an advertised end runs to the end of the
-  // media and has no interval end, so its video is measured against the job's shortest interval.
+  // Whether video that ends at this tick ends before the segment's own interval does, wherever its
+  // first picture starts: a keyframe can come late, and a picture can be presented before the
+  // keyframe it follows. The last listed segment of a job without an advertised end runs to the end
+  // of the media and has no interval end, so its video is measured against the job's shortest
+  // interval.
   private boolean endsBeforeItsIntervalsEnd(
-      AwaitingSegment segment, long lastPictureEnd, long timescale) {
+      AwaitingSegment segment, long videoEnd, long timescale) {
     var intervalEnd = intervals.endOf(segment.sequenceNumber(), timescale);
     if (intervalEnd.isPresent()) {
-      return lastPictureEnd < intervalEnd.getAsLong();
+      return videoEnd < intervalEnd.getAsLong();
     }
 
     var start =
@@ -404,7 +408,7 @@ final class SegmentAssembler {
             .mapToLong(carried -> carried.sample().presentationTime())
             .min()
             .orElseThrow();
-    return new MediaTime(lastPictureEnd - start, new TimeBase(1, timescale))
+    return new MediaTime(videoEnd - start, new TimeBase(1, timescale))
             .compareTo(minimumCopyDuration)
         < 0;
   }
