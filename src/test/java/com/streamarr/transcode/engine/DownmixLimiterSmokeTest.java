@@ -361,6 +361,16 @@ class DownmixLimiterSmokeTest {
       source[frame][1] = source[frame][0];
     }
 
+    // The source's timestamps start ten seconds in, as a seek's do under -copyts.
+    var packets = packets(source, "asetpts=PTS+10/TB," + stereoFilter(sampleRate));
+
+    assertThat(packets.getFirst()[0]).as("first timestamp").isEqualTo(10L * sampleRate);
+    assertThat(packets.stream().mapToLong(packet -> packet[1]).sum()).isEqualTo(sampleRate);
+  }
+
+  // The timestamp and duration of each packet of FFmpeg's run of a 5.1 source through a filter
+  // under -copyts, in samples at the source's rate of 48 kHz.
+  private List<long[]> packets(double[][] source, String filter) throws Exception {
     var input = writeRaw(source);
     var command =
         List.of(
@@ -373,14 +383,13 @@ class DownmixLimiterSmokeTest {
             "-f",
             "f64le",
             "-ar",
-            String.valueOf(sampleRate),
+            "48000",
             "-ch_layout",
             "5.1",
             "-i",
             input.toString(),
             "-af",
-            // The source's timestamps start ten seconds in, as a seek's do under -copyts.
-            "asetpts=PTS+10/TB," + stereoFilter(sampleRate),
+            filter,
             "-c:a",
             "pcm_f64le",
             "-f",
@@ -394,8 +403,7 @@ class DownmixLimiterSmokeTest {
       }
     }
 
-    assertThat(packets.getFirst()[0]).as("first timestamp").isEqualTo(10L * sampleRate);
-    assertThat(packets.stream().mapToLong(packet -> packet[1]).sum()).isEqualTo(sampleRate);
+    return packets;
   }
 
   @Test
