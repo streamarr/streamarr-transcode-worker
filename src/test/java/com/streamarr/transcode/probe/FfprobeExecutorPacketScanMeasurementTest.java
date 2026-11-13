@@ -10,12 +10,14 @@ import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.junit.jupiter.api.BeforeEach;
@@ -369,6 +371,50 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     assertThat(report.result().getMedia().getStreamMeasurements().getSource())
         .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN);
+  }
+
+  // The contract carries at most 8,388,608 keyframe intervals across one attempt's measurement
+  // parts. The video and 1,023 AC-3 streams with 65,536 keyframes hold 1,024 x 65,536 intervals,
+  // 8 times that bound. A count of each AC-3 stream's interval takes 16 bytes, so counts of every
+  // interval need more than 1 GiB, and counts up to the bound about 200 MiB. The probe's JVM exits
+  // at its first OutOfMemoryError. Without that flag, an OutOfMemoryError on the thread that reads
+  // FFmpeg's output leaves the probe waiting.
+  @Test
+  @Timeout(120)
+  @DisplayName(
+      "Should report the keyframes without a measurement within a 512 MiB heap when the keyframe"
+          + " intervals of the scanned streams exceed what the contract carries")
+  void shouldReportKeyframesWithoutMeasurementWithinA512MibHeapWhenIntervalsExceedContractsBound()
+      throws IOException, InterruptedException {
+    var outcome = source.resolveSibling("outcome.txt");
+    var output = source.resolveSibling("output.txt");
+    var command = new ArrayList<String>();
+    command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+    command.addAll(List.of("-Xmx512m", "-XX:+ExitOnOutOfMemoryError"));
+    // The coverage agent, when the build runs one, also counts the probe's own JVM.
+    ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
+        .filter(argument -> argument.startsWith("-javaagent:"))
+        .forEach(command::add);
+    command.addAll(
+        List.of(
+            "-cp",
+            System.getProperty("java.class.path"),
+            PacketScanBoundedHeapProbe.class.getName(),
+            outcome.toString(),
+            "1023",
+            "65536"));
+    var probe =
+        new ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .redirectOutput(output.toFile())
+            .start();
+
+    var exited = probe.waitFor(100, TimeUnit.SECONDS);
+
+    probe.destroyForcibly();
+    assertThat(exited).as("the probe's JVM exits").isTrue();
+    assertThat(probe.exitValue()).as(Files.readString(output)).isZero();
+    assertThat(Files.readString(outcome)).isEqualTo("keyframes=65536 measured=false parts=0");
   }
 
   /** One source whose keyframe packet scan must report its keyframes but no measurement. */
