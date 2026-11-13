@@ -312,12 +312,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       uploads.forEach(UploadCall::acknowledgeWhenAwaited);
     }
 
-    /** Stops withholding acknowledgements and acknowledges every upload that awaits one. */
     /** Fails each later upload as a broken transport does once the server has answered it. */
     public void failUploadsAfterTheirAnswers() {
       uploadsFailAfterTheirAnswers = true;
     }
 
+    /** Stops withholding acknowledgements and acknowledges every upload that awaits one. */
     public void releaseAcknowledgements() {
       acknowledgementsWithheld = false;
       acknowledgeAwaitingUploads();
@@ -483,12 +483,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       reportCalls().forEach(ReportCall::acknowledgeWhenAwaited);
     }
 
-    /** The next report call that the worker opens is refused once its first message arrives. */
     /** Fails each later report call as a broken transport does once the server has answered it. */
     public void failReportCallsAfterTheirAnswers() {
       reportCallsFailAfterTheirAnswers = true;
     }
 
+    /** The next report call that the worker opens is refused once its first message arrives. */
     public void refuseNextReport() {
       refusingNextReport = true;
     }
