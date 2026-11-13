@@ -69,7 +69,7 @@ final class HdrEncoderParameters {
         new ArrayList<>(
             List.of(
                 "color-primaries=bt2020",
-                "transfer-characteristics=" + transfer.get().ffmpegName(),
+                "transfer-characteristics=" + transfer.get().svtAv1Name(),
                 "matrix-coefficients=bt2020-ncl",
                 "color-range=studio"));
     encode

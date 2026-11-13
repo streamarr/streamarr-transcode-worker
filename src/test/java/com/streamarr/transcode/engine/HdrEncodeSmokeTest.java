@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -138,19 +139,7 @@ class HdrEncodeSmokeTest {
           + " metadata when an HDR10 source encodes to AV1 HDR10")
   void shouldDeliverTenBitAv1WithThePqColourDescriptionAndTheJobsMetadataWhenEncodingAv1Hdr10()
       throws Exception {
-    var encode =
-        VideoDecision.Encode.builder()
-            .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
-            .sourceDynamicRange(range(VideoDynamicRange.CompatibleBase.PQ))
-            .outputDynamicRange(range(VideoDynamicRange.CompatibleBase.PQ))
-            .codecProfile(VideoCodecProfile.AV1_MAIN)
-            .tier(Optional.of(VideoCodecTier.MAIN))
-            .level(AV1_LEVEL)
-            .codecString(AV1_TEN_BIT_CODEC_STRING)
-            .softwareEncoder(true)
-            .outputPictureFormat(tenBit())
-            .staticHdrMetadata(Optional.of(SOURCE_METADATA))
-            .build();
+    var encode = av1Encode(range(VideoDynamicRange.CompatibleBase.PQ)).build();
 
     var probed = probed(encoded(hdr10, encode, 0).acceptedBytes());
 
@@ -167,6 +156,29 @@ class HdrEncodeSmokeTest {
             "side_data_type=Content light level metadata",
             "max_content=1000",
             "max_average=400");
+  }
+
+  @Test
+  @DisplayName("Should encode AV1 HDR10 when FFmpeg fails on a parameter that SVT-AV1 rejects")
+  void shouldEncodeAv1Hdr10WhenFfmpegFailsOnAParameterThatSvtAv1Rejects() throws Exception {
+    var encode = av1Encode(range(VideoDynamicRange.CompatibleBase.PQ)).build();
+
+    var delivered = deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(hdr10, encode);
+
+    assertThat(probed(delivered)).contains("color_transfer=smpte2084");
+  }
+
+  @Test
+  @DisplayName("Should encode AV1 HLG when FFmpeg fails on a parameter that SVT-AV1 rejects")
+  void shouldEncodeAv1HlgWhenFfmpegFailsOnAParameterThatSvtAv1Rejects() throws Exception {
+    var encode =
+        av1Encode(range(VideoDynamicRange.CompatibleBase.HLG))
+            .staticHdrMetadata(Optional.empty())
+            .build();
+
+    var delivered = deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(hlg, encode);
+
+    assertThat(probed(delivered)).contains("color_transfer=arib-std-b67");
   }
 
   @Test
@@ -386,6 +398,20 @@ class HdrEncodeSmokeTest {
         .staticHdrMetadata(Optional.of(SOURCE_METADATA));
   }
 
+  private static VideoDecision.Encode.EncodeBuilder av1Encode(VideoDynamicRange output) {
+    return VideoDecision.Encode.builder()
+        .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
+        .sourceDynamicRange(output)
+        .outputDynamicRange(output)
+        .codecProfile(VideoCodecProfile.AV1_MAIN)
+        .tier(Optional.of(VideoCodecTier.MAIN))
+        .level(AV1_LEVEL)
+        .codecString(AV1_TEN_BIT_CODEC_STRING)
+        .softwareEncoder(true)
+        .outputPictureFormat(tenBit())
+        .staticHdrMetadata(Optional.of(SOURCE_METADATA));
+  }
+
   private static PictureFormat tenBit() {
     return new PictureFormat(10, ChromaSubsampling.CHROMA_420);
   }
@@ -424,13 +450,46 @@ class HdrEncodeSmokeTest {
             .toURI());
   }
 
-  // The attempt's deliveries, after the producer accepted its output against the job.
   private static RecordingSegmentSink encoded(
       Path source, VideoDecision.Encode encode, int firstSegment) {
-    var sink = new RecordingSegmentSink();
-    var request = request(source, encode, firstSegment);
+    return deliveriesOf(
+        engine(new ProcessBuilderLauncher()), request(source, encode, firstSegment));
+  }
 
-    var producer = engine().startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
+  // FFmpeg's libsvtav1 wrapper logs a parameter that SVT-AV1 rejects and encodes without it. With
+  // err_detect explode on the video encoder, the wrapper fails instead, so the attempt completes
+  // only when SVT-AV1 takes every parameter that the job gives it.
+  private static byte[] deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(
+      Path source, VideoDecision.Encode encode) {
+    var launcher = new ProcessBuilderLauncher();
+    var encodes = new AtomicInteger();
+    ProcessLauncher failingOnARejectedParameter =
+        (command, jobAttemptId) -> {
+          var parameters = command.indexOf("-svtav1-params");
+          if (parameters < 0) {
+            return launcher.launch(command, jobAttemptId);
+          }
+
+          encodes.incrementAndGet();
+          var failing = new ArrayList<>(command);
+          failing.addAll(parameters + 2, List.of("-err_detect:v", "explode"));
+          return launcher.launch(failing, jobAttemptId);
+        };
+
+    var delivered =
+        deliveriesOf(engine(failingOnARejectedParameter), request(source, encode, 0))
+            .acceptedBytes();
+
+    assertThat(encodes).as("the FFmpeg processes that SVT-AV1 encoded in").hasValue(1);
+    return delivered;
+  }
+
+  // The attempt's deliveries, after the producer accepted its output against the job.
+  private static RecordingSegmentSink deliveriesOf(
+      FfmpegTranscodeEngine engine, TranscodeRequest request) {
+    var sink = new RecordingSegmentSink();
+
+    var producer = engine.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
     return sink;
@@ -466,11 +525,11 @@ class HdrEncodeSmokeTest {
         .build();
   }
 
-  private static FfmpegTranscodeEngine engine() {
+  private static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
         .capabilityService(DetectedCapabilities.realCapabilities())
-        .launcher(new ProcessBuilderLauncher())
+        .launcher(launcher)
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
   }
