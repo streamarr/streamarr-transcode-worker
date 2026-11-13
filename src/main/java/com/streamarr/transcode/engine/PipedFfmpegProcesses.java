@@ -323,10 +323,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       return Optional.empty();
     }
 
-    return Optional.of(
-        new Failed(
-            ProducerFailure.PROCESS_EXITED_WITH_ERROR,
-            encodeErrorOutput.exitDetail("FFmpeg", exitCode)));
+    return Optional.of(encodeErrorOutput.exitFailure("FFmpeg", exitCode));
   }
 
   private Optional<Failed> failureOfTheCopyAfterACleanEncode() {
@@ -348,10 +345,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       return Optional.empty();
     }
 
-    return Optional.of(
-        new Failed(
-            ProducerFailure.PROCESS_EXITED_WITH_ERROR,
-            copyErrorOutput.exitDetail(COPYING_FFMPEG, exitCode)));
+    return Optional.of(copyErrorOutput.exitFailure(COPYING_FFMPEG, exitCode));
   }
 
   private static boolean endsEarly(FragmentedMp4Exception failure) {

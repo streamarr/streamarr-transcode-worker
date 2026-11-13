@@ -1,6 +1,5 @@
 package com.streamarr.transcode.engine;
 
-import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -87,8 +86,7 @@ final class SingleFfmpegProcess implements FfmpegProcess {
   public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
     var exitCode = process.onExit().join().exitValue();
     if (exitCode != 0) {
-      return new Failed(
-          ProducerFailure.PROCESS_EXITED_WITH_ERROR, errorOutput.exitDetail("FFmpeg", exitCode));
+      return errorOutput.exitFailure("FFmpeg", exitCode);
     }
 
     return outcomeOnCleanExit;

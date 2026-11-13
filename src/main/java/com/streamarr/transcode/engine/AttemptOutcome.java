@@ -16,9 +16,22 @@ public sealed interface AttemptOutcome {
   record Completed(long droppedLateAudioSampleCount, @NonNull SourceEnd sourceEnd)
       implements AttemptOutcome {}
 
-  /** The attempt failed for the named reason; the detail describes it for the operator. */
-  record Failed(@NonNull ProducerFailure reason, @NonNull String detail)
-      implements AttemptOutcome {}
+  /**
+   * The attempt failed for the named reason; the detail describes it for the operator.
+   *
+   * @param errorOutput every line of error output that the worker kept from the process that exited
+   *     with an error, at most the last 200; empty when no process exited with an error. The worker
+   *     reads the attempt's hardware fault from these lines.
+   */
+  record Failed(
+      @NonNull ProducerFailure reason, @NonNull String detail, @NonNull String errorOutput)
+      implements AttemptOutcome {
+
+    /** A failure that no process's error output explains. */
+    public Failed(@NonNull ProducerFailure reason, @NonNull String detail) {
+      this(reason, detail, "");
+    }
+  }
 
   /** The worker stopped the attempt, and FFmpeg has exited. */
   record Stopped() implements AttemptOutcome {}

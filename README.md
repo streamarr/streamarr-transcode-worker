@@ -79,7 +79,7 @@ A Dolby Vision profile 5 source that hevc_nvenc encodes to PQ is the one job tha
 - a profile 10.0 source, which is AV1
 - any job on the software encoder
 
-NVDEC refuses a picture outside the sizes it decodes, such as one smaller than 144x144. FFmpeg then decodes in software, the GPU filters fail the job attempt, and the worker reports a hardware encoder failure for that job alone and keeps offering hevc_nvenc. The server places that job on the software encoder, as it does when the driver refuses an encode session. A GPU whose memory cannot hold the job's frames sends that job the same way. When the GPU chain fails for any other NVENC or CUDA error, the worker stops offering hevc_nvenc until every test encode passes again ([ADR 0044](https://github.com/streamarr/streamarr-adr/blob/main/adr/0044-encoder-headroom-and-the-preset-scale.adoc)), and the stream continues on libx265 with the CPU reshape.
+NVDEC refuses a picture outside the sizes it decodes, such as one smaller than 144x144. FFmpeg then decodes in software, the GPU filters fail the job attempt, and the worker reports a hardware encoder failure for that job alone and keeps offering hevc_nvenc. The server places that job on the software encoder, as it does when the driver refuses an encode session. A GPU whose memory cannot hold the job's frames sends that job the same way. When the GPU chain fails for any other NVENC or CUDA error, also a CUDA error that stops NVDEC from starting, the worker stops offering hevc_nvenc until every test encode passes again ([ADR 0044](https://github.com/streamarr/streamarr-adr/blob/main/adr/0044-encoder-headroom-and-the-preset-scale.adoc)), and the stream continues on libx265 with the CPU reshape.
 
 ## Architecture
 

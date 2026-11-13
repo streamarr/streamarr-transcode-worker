@@ -1003,7 +1003,7 @@ public final class TranscodeWorker implements AutoCloseable {
     return switch (outcome) {
       case Completed(var droppedLateAudioSampleCount, var sourceEnd) ->
           completion(job, droppedLateAudioSampleCount, sourceEnd);
-      case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
+      case Failed(var reason, var detail, _) -> transcodeFailure(job, reason, detail);
       case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
     };
   }
