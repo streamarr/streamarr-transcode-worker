@@ -81,6 +81,10 @@ class HdrEncodeSmokeTest {
   private static final int FIRST_NON_SLICE_NUT = 32;
   // The NAL unit type that carries a Dolby Vision RPU.
   private static final int UNSPEC62 = 62;
+  // H.265 Table E.5: an unspecified matrix, and the IPT-C2 matrix of a profile 5 base layer, which
+  // FFmpeg's libx265 declares for Dolby Vision.
+  private static final int UNSPECIFIED_MATRIX = 2;
+  private static final int IPT_C2_MATRIX = 15;
 
   /** A P3 D65 display of 1000 cd/m² and 0.005 cd/m², with MaxCLL 1000 and MaxFALL 400. */
   private static final StaticHdrMetadata SOURCE_METADATA =
@@ -486,17 +490,16 @@ class HdrEncodeSmokeTest {
   }
 
   // ADR 0013: the encode keeps every picture, also a picture that reaches the reshape without its
-  // RPU. Such a picture comes out unreshaped. The CPU reshape completes the encode of these
-  // sources.
+  // RPU. Such a picture comes out unreshaped.
   @ParameterizedTest(name = "{0}")
-  @EnumSource(MissingRpu.class)
+  @EnumSource(SourceWithoutAnRpu.class)
   @DisplayName(
       "Should deliver every picture when hevc_nvenc reshapes on the GPU a profile 5 source that"
           + " declares no transfer and whose decoder hands the reshape pictures without an RPU")
   void shouldDeliverEveryPictureWhenHevcNvencReshapesOnTheGpuPicturesWithoutAnRpu(
-      MissingRpu missing) throws Exception {
+      SourceWithoutAnRpu withoutAnRpu) throws Exception {
     assumeHevcNvencReshapesOnTheGpu();
-    var source = profile5SourceWith(missing);
+    var source = profile5SourceWith(withoutAnRpu);
 
     var delivered = encoded(source, onHevcNvenc(profile5EncodeBuilder()).build(), 0);
 
@@ -541,13 +544,32 @@ class HdrEncodeSmokeTest {
                 .toList());
   }
 
-  /** Which pictures of a profile 5 source reach the reshape without an RPU. */
-  enum MissingRpu {
+  /**
+   * A profile 5 source that declares no transfer, the pictures of it that reach the reshape without
+   * an RPU, and the matrix that its stream declares.
+   */
+  enum SourceWithoutAnRpu {
     // The RPU of the 11th picture, which FFmpeg's RPU parser rejects.
-    ONE_UNREADABLE_RPU,
+    ONE_UNREADABLE_RPU(MissingRpus.THE_ELEVENTH, UNSPECIFIED_MATRIX),
+    // The same picture, in a stream that declares the matrix of the base layer, which tonemap_cuda
+    // reads only with an RPU.
+    ONE_UNREADABLE_RPU_UNDER_THE_IPT_C2_MATRIX(MissingRpus.THE_ELEVENTH, IPT_C2_MATRIX),
     // Every RPU, as for a raw HEVC stream whose RPUs come ahead of the slices: FFmpeg's decoder
     // ignores each RPU of such a stream (ADR 0013).
-    NO_RPU
+    NO_RPU(MissingRpus.EVERY, UNSPECIFIED_MATRIX);
+
+    private final MissingRpus missing;
+    private final int matrixCoefficients;
+
+    SourceWithoutAnRpu(MissingRpus missing, int matrixCoefficients) {
+      this.missing = missing;
+      this.matrixCoefficients = matrixCoefficients;
+    }
+  }
+
+  private enum MissingRpus {
+    THE_ELEVENTH,
+    EVERY
   }
 
   /** How the worker decodes and reshapes a profile 5 source for hevc_nvenc. */
@@ -756,9 +778,9 @@ class HdrEncodeSmokeTest {
   }
 
   // The 256x144 source with the pictures that reach the reshape without an RPU. The stream declares
-  // no colour primaries, transfer or matrix, as a profile 5 stream usually does.
-  private static Path profile5SourceWith(MissingRpu missing) throws Exception {
-    var elementary = root.resolve("dolby-vision-5-" + missing + ".hevc");
+  // no colour primaries or transfer, as a profile 5 stream usually does.
+  private static Path profile5SourceWith(SourceWithoutAnRpu source) throws Exception {
+    var elementary = root.resolve("dolby-vision-5-" + source + ".hevc");
     runToCompletion(
         List.of(
             "ffmpeg",
@@ -781,12 +803,12 @@ class HdrEncodeSmokeTest {
     Files.write(
         elementary,
         concatenated(
-            switch (missing) {
-              case ONE_UNREADABLE_RPU -> withTheEleventhRpuUnreadable(nalUnits);
-              case NO_RPU ->
+            switch (source.missing) {
+              case THE_ELEVENTH -> withTheEleventhRpuUnreadable(nalUnits);
+              case EVERY ->
                   nalUnits.stream().filter(unit -> nalUnitType(unit) != UNSPEC62).toList();
             }));
-    var source = root.resolve("dolby-vision-5-" + missing + ".mp4");
+    var written = root.resolve("dolby-vision-5-" + source + ".mp4");
     runToCompletion(
         List.of(
             "ffmpeg",
@@ -801,13 +823,14 @@ class HdrEncodeSmokeTest {
             "-c",
             "copy",
             "-bsf:v",
-            "hevc_metadata=colour_primaries=2:transfer_characteristics=2:matrix_coefficients=2",
+            "hevc_metadata=colour_primaries=2:transfer_characteristics=2:matrix_coefficients="
+                + source.matrixCoefficients,
             "-tag:v",
             "dvh1",
             "-strict",
             "unofficial",
-            source.toString()));
-    return source;
+            written.toString()));
+    return written;
   }
 
   // FFmpeg's RPU parser requires the last byte of an RPU to be 0x80.
