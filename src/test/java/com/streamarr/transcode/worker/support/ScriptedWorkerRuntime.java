@@ -70,6 +70,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
@@ -175,6 +176,8 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final Map<String, ScriptedUpload<?, ?>> callsById = new ConcurrentHashMap<>();
     private final Server server;
     private final ManagedChannel uploadChannel;
+    // The in-process channel schedules the deadline of each of the worker's calls here.
+    private final ScheduledThreadPoolExecutor callDeadlines = callDeadlineTimers();
     private volatile boolean refusingAtTheWorkersLimit;
     private volatile boolean acknowledgementsWithheld;
     private volatile boolean reportAnswersWithheld;
@@ -193,12 +196,24 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
                   .addService(
                       ServerInterceptors.intercept(new ScriptedServer(), new CallIdReader()))
                   .build());
+      // An idle channel would schedule its idle timer beside the deadlines.
       uploadChannel =
           InProcessChannelBuilder.forName(name)
               .directExecutor()
+              .scheduledExecutorService(callDeadlines)
+              .idleTimeout(30, TimeUnit.DAYS)
               .intercept(new WorkerCallInstrumentation())
               .build();
       awaitReady(uploadChannel);
+    }
+
+    // A cancelled deadline leaves the queue at once, and the timer thread ends once none is left.
+    private static ScheduledThreadPoolExecutor callDeadlineTimers() {
+      var timers = new ScheduledThreadPoolExecutor(1, Thread.ofPlatform().daemon().factory());
+      timers.setRemoveOnCancelPolicy(true);
+      timers.setKeepAliveTime(1, TimeUnit.SECONDS);
+      timers.allowCoreThreadTimeOut(true);
+      return timers;
     }
 
     private static Server started(Server server) {
@@ -474,6 +489,14 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** The number of report messages the worker sent while its call reported it was not ready. */
     public int reportMessagesSentWhileNotReady() {
       return reportReadiness.violations();
+    }
+
+    /**
+     * The deadlines of the worker's upload and report calls that gRPC still holds: one for each
+     * open call, and one for each call whose end the worker left unprocessed.
+     */
+    public int pendingCallDeadlines() {
+      return callDeadlines.getQueue().size();
     }
 
     public void deliver(EstablishWorkerSessionResponse response) {
@@ -940,6 +963,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final CompletableFuture<Void> endKnownToTheWorker = new CompletableFuture<>();
     private ServerCallStreamObserver<R> responses;
     private Optional<Deadline> deadline = Optional.empty();
+    private Thread workersThread;
     private Optional<StatusRuntimeException> refusal = Optional.empty();
     private boolean requestedUnread;
     private boolean closed;
@@ -961,14 +985,16 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** The server's answer to an upload of this many bytes. */
     abstract R acknowledgementOf(long acceptedLengthBytes);
 
-    // Runs inside the server's method, which alone may turn gRPC's own reads off, and in the call's
-    // context, which holds the deadline that the worker stated.
+    // Runs inside the server's method, which alone may turn gRPC's own reads off, in the call's
+    // context, which holds the deadline that the worker stated, and on the worker's thread that
+    // opens the call.
     private void start(ServerCallStreamObserver<R> calls) {
       calls.disableAutoRequest();
       calls.setOnCancelHandler(this::cancelled);
       synchronized (this) {
         responses = calls;
         deadline = Optional.ofNullable(Context.current().getDeadline());
+        workersThread = Thread.currentThread();
       }
 
       openUploads.opened();
@@ -1013,6 +1039,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** The deadline that the worker stated for the call; empty when it stated none. */
     public synchronized Optional<Deadline> deadline() {
       return deadline;
+    }
+
+    /** Interrupts the worker's thread that opened the call, as a shutdown of its threads does. */
+    public synchronized void interruptTheWorkersThread() {
+      workersThread.interrupt();
     }
 
     /** Whether the server refused the upload. */

@@ -373,6 +373,35 @@ class TranscodeWorkerProbeReportTest {
   }
 
   @Test
+  @DisplayName(
+      "Should end the report call and leave no deadline pending when the report thread is"
+          + " interrupted while the call is open")
+  void shouldEndTheReportCallAndLeaveNoDeadlinePendingWhenTheReportThreadIsInterrupted()
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);
+    var request = requestBuilder().build();
+    var configuration = configurationBuilder().uploadDeadline(Duration.ofMinutes(5)).build();
+
+    try (var worker =
+        workerBuilder(tempDir).configuration(configuration).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdReportReadiness();
+      start(connection, request);
+      runtime.probes().drain();
+      var call = connection.awaitReportCalls(1).getFirst();
+
+      call.interruptTheWorkersThread();
+      connection.awaitReportThreads();
+
+      assertThat(call.wasCancelled()).isTrue();
+      assertThat(connection.pendingCallDeadlines()).isZero();
+      assertThat(connection.attemptsEndedWithoutReport())
+          .containsExactly(request.getProbeAttemptId());
+    }
+  }
+
+  @Test
   @DisplayName("Should open the report call with the upload deadline when the report is sent")
   void shouldOpenTheReportCallWithTheUploadDeadlineWhenTheReportIsSent() throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), ONE_VIDEO_STREAM);

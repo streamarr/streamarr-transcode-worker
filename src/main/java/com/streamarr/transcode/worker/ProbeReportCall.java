@@ -76,29 +76,44 @@ final class ProbeReportCall {
     }
   }
 
-  // A write after the server has closed the call sends nothing, and the answer then decides. The
-  // answer stands once the call closes after it, as a unary answer does.
   private void sendOn(
       BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call,
       ProbeAttemptReportMetadata.Builder metadata)
       throws InterruptedException, StatusException {
-    call.write(ReportProbeAttemptRequest.newBuilder().setMetadata(metadata).build());
-    for (var sent = 0; sent < encoded.size(); sent += MESSAGE_BYTES) {
-      var end = Math.min(sent + MESSAGE_BYTES, encoded.size());
-      call.write(
-          ReportProbeAttemptRequest.newBuilder().setData(encoded.substring(sent, end)).build());
-    }
-
-    call.halfClose();
-    var accepted =
-        Optional.ofNullable(call.read()).map(ReportProbeAttemptResponse::getAcceptedLengthBytes);
-    call.read();
+    var accepted = acceptedLength(call, metadata);
     if (accepted.filter(length -> length == encoded.size()).isEmpty()) {
       throw new WorkerJobException(
           "Server accepted "
               + accepted.map(String::valueOf).orElse("no")
               + " bytes of a probe report of "
               + encoded.size());
+    }
+  }
+
+  // A write after the server has closed the call sends nothing, and the answer then decides. The
+  // answer stands once the call closes after it, as a unary answer does. A cancelled context ends
+  // the call's stream but leaves the end of its deadline timer to the call's close, which only this
+  // thread reads, so this thread cancels a call that it leaves open.
+  private Optional<Long> acceptedLength(
+      BlockingClientCall<ReportProbeAttemptRequest, ReportProbeAttemptResponse> call,
+      ProbeAttemptReportMetadata.Builder metadata)
+      throws InterruptedException, StatusException {
+    try {
+      call.write(ReportProbeAttemptRequest.newBuilder().setMetadata(metadata).build());
+      for (var sent = 0; sent < encoded.size(); sent += MESSAGE_BYTES) {
+        var end = Math.min(sent + MESSAGE_BYTES, encoded.size());
+        call.write(
+            ReportProbeAttemptRequest.newBuilder().setData(encoded.substring(sent, end)).build());
+      }
+
+      call.halfClose();
+      var accepted =
+          Optional.ofNullable(call.read()).map(ReportProbeAttemptResponse::getAcceptedLengthBytes);
+      call.read();
+      return accepted;
+    } catch (InterruptedException | RuntimeException e) {
+      call.cancel("The worker left the report call", e);
+      throw e;
     }
   }
 
