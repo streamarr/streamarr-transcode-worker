@@ -126,6 +126,12 @@ public sealed interface VideoDecision {
         throw new IllegalArgumentException(
             "an encode carries static HDR metadata exactly when its output is PQ");
       }
+
+      if (assumedSourceMatrix.isPresent()
+          && !AssumedSourceMatrix.isAssumableFor(sourceDynamicRange)) {
+        throw new IllegalArgumentException(
+            "only an encode of an SDR or untagged source assumes a source matrix");
+      }
     }
 
     private static boolean outputsHdr(VideoDynamicRange range) {

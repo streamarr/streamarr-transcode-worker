@@ -35,7 +35,8 @@ import org.junit.jupiter.api.io.TempDir;
  * keyframe every second. The profile 5 source is the synthetic {@code dolby-vision-5-dvh1.mp4}
  * sample-entry fixture, whose RPUs come from dovi_tool's generator: these tests check the reshape's
  * plumbing, not its colours. Each job asks for the software encoder, which carries the encode
- * features also on a host whose codec family resolves to a hardware encoder.
+ * features also on a host whose codec family resolves to a hardware encoder. The SDR encodes that
+ * assume a source matrix (ADR 0013) run here too, on a source that names none.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")

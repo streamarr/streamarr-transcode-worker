@@ -51,7 +51,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 /**
  * Runs 10-bit and HDR encode jobs (streamarr/streamarr-transcode-worker#27, the contract of
  * streamarr/streamarr-server#809) through the worker and reads the FFmpeg command it launches, or
- * the failure it reports for a job that the contract forbids.
+ * the failure it reports for a job that the contract forbids. The SDR encodes that assume a source
+ * matrix (ADR 0013) run here too, beside the other conversions of the picture's colour.
  */
 @Tag("UnitTest")
 @DisplayName("Transcode Worker HDR Encode Tests")
@@ -219,6 +220,25 @@ class TranscodeWorkerHdrEncodeTest {
             "scale=-2:\\d+:in_color_matrix="
                 + matrix
                 + ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,");
+  }
+
+  // The server assumes a matrix for a source whose compatible base is SDR as for one whose base
+  // is unspecified: a stream can name its transfer without naming its matrix.
+  @Test
+  @DisplayName(
+      "Should read the source with the matrix that the job assumes when the source's compatible"
+          + " base is SDR")
+  void shouldReadTheSourceWithTheMatrixThatTheJobAssumesWhenTheSourcesCompatibleBaseIsSdr()
+      throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(range(CompatibleBase.COMPATIBLE_BASE_SDR))
+        .setAssumedSourceMatrix(MatrixCoefficients.MATRIX_COEFFICIENTS_BT709);
+
+    var command = commandOf(job);
+
+    assertThat(valueOf(command, "-vf")).contains(":in_color_matrix=bt709:out_color_matrix=bt709:");
   }
 
   @Test

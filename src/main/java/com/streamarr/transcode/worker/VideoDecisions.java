@@ -148,7 +148,8 @@ final class VideoDecisions {
     }
 
     var assumedSourceMatrix = assumedSourceMatrix(video.getAssumedSourceMatrix());
-    if (assumedSourceMatrix.isPresent() && !isSdrOrUntagged(sourceDynamicRange)) {
+    if (assumedSourceMatrix.isPresent()
+        && !AssumedSourceMatrix.isAssumableFor(sourceDynamicRange)) {
       throw new InvalidJobSpecificationException(
           "Only an encode of an SDR or untagged source assumes a source matrix, and this source's"
               + " compatible base is "
@@ -210,15 +211,6 @@ final class VideoDecisions {
           UNRECOGNIZED ->
           throw new InvalidJobSpecificationException(
               "An encode assumes BT.709 or SMPTE 170M as its source's matrix, not " + matrix);
-    };
-  }
-
-  // Only the conversion of an SDR or untagged source to BT.709 reads the matrix that the job
-  // assumes (ADR 0013).
-  private static boolean isSdrOrUntagged(VideoDynamicRange source) {
-    return switch (source.compatibleBase()) {
-      case SDR, UNSPECIFIED -> true;
-      case PQ, HLG, NONE -> false;
     };
   }
 

@@ -13,6 +13,17 @@ public enum AssumedSourceMatrix {
     this.scaleFilterName = scaleFilterName;
   }
 
+  /**
+   * Whether an encode of a source in the range can assume a matrix: only the conversion of an SDR
+   * or untagged source to BT.709 reads it.
+   */
+  public static boolean isAssumableFor(VideoDynamicRange source) {
+    return switch (source.compatibleBase()) {
+      case SDR, UNSPECIFIED -> true;
+      case PQ, HLG, NONE -> false;
+    };
+  }
+
   /** The name that the scale filter's in_color_matrix takes. */
   String scaleFilterName() {
     return scaleFilterName;
