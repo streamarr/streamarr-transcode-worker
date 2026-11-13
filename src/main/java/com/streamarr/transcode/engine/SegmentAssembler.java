@@ -382,11 +382,12 @@ final class SegmentAssembler {
     // the interval it belongs to. Once the copied audio reaches where the dropped audio starts, to
     // within one frame, the dropped audio continues it beside the segment's pictures past the
     // interval; audio that resumes only after a gap does not show that the copy lasts as long as
-    // the video.
+    // the video. As with the segment's own audio, a dropped sample that starts once the video has
+    // ended plays beside none of it.
     var discardedStart = audio.discardedStart();
     if (discardedStart.isPresent()
         && reachesToWithinOneFrame(copiedTail, discardedStart.get(), oneFrame)) {
-      audioTail = audio.discardedTail();
+      audioTail = audio.discardedTailBefore(videoEnd).or(() -> copiedTail);
     }
 
     if (audioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {

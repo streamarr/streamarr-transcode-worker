@@ -846,6 +846,36 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
   }
 
+  // The output's only segment, segment 0, holds 24 pictures of 1/24 s, which end at its interval's
+  // end, and copied audio of 1/48 s to 1.083 s. The samples from 1 s on belong to segment 1, which
+  // no keyframe opened, so the assembler drops them when the output ends (ADR 0037). They start
+  // once the video has ended, and the audio that segment 0 takes lasts as long as its video.
+  @Test
+  @DisplayName(
+      "Should deliver the output's last segment when its encoded video fills its interval and the"
+          + " copied audio runs on past the interval")
+  void
+      shouldDeliverTheOutputsLastSegmentWhenItsEncodedVideoFillsItsIntervalAndTheCopiedAudioRunsOnPastTheInterval() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(0, audioSamples(52, 1_000))
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .copiesAudio(true)
+            .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
   // The encoder missed the keyframe at 1 s, and the output ends at 1.083 s before any later one,
   // so segment 0 is the output's last and its 26 pictures run two frames past its interval. The
   // copied audio lasts as long, but its samples from 1 s on belong to segment 1, which no keyframe
@@ -1125,6 +1155,26 @@ class ProducerTest {
     var producer =
         producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
             oneSecondOfAudioSamples(), 50_001);
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
+  }
+
+  // The same video. The copied audio runs on past the interval's end to 1.021 s, and no sample
+  // spans the gap before it resumes at 1.083 s, as the video ends. The assembler drops the audio
+  // from 1 s on when the output ends. The video outlasts the copied audio by 62.5 ms, more than one
+  // frame, which ADR 0060 refuses: the audio that resumes as the video ends plays beside none of
+  // it, so it does not show that the copy lasts as long as the video.
+  @Test
+  @DisplayName(
+      "Should refuse the output's last segment when its encoded video runs past its interval"
+          + " without a keyframe and the copied audio runs past the interval but stops more than"
+          + " one frame before the video ends and resumes only as it ends")
+  void
+      shouldRefuseTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioRunsPastTheIntervalButStopsMoreThanOneFrameBeforeTheVideoEndsAndResumesOnlyAsItEnds() {
+    var producer =
+        producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
+            joined(oneSecondOfAudioSamples(), audioSamples(1, 1_000)), 52_000);
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
     assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");

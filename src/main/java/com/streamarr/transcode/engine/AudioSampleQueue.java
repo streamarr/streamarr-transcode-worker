@@ -119,10 +119,14 @@ final class AudioSampleQueue {
   }
 
   /**
-   * Where the latest sample that {@link #discardAfter} dropped ends; empty when it dropped none.
+   * Where the latest sample that {@link #discardAfter} dropped and that starts before this time
+   * ends; empty when it dropped none that starts before it.
    */
-  Optional<AudioTail> discardedTail() {
-    return Optional.ofNullable(dropped.peekLast()).map(DroppedSample::tail);
+  Optional<AudioTail> discardedTailBefore(MediaTime time) {
+    return dropped.reversed().stream()
+        .filter(sample -> sample.start().compareTo(time) < 0)
+        .findFirst()
+        .map(DroppedSample::tail);
   }
 
   /**
