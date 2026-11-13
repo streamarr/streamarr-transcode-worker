@@ -2,10 +2,13 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 // The error lines are the ones that FFmpeg 8's nvenc.c and its CUDA loader print.
@@ -128,26 +131,53 @@ class HardwareEncoderFaultTest {
         .contains(HardwareEncoderFault.DECODER_REFUSED);
   }
 
-  // FFmpeg prints the source's path and metadata near the start of its error output. Text there
-  // that reads like an NVENC or CUDA error is not an error of the GPU.
-  @Test
+  // FFmpeg prints the source's path and metadata ahead of its stream mapping, and prints a line
+  // break in a path or a metadata key as it is.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("inputDumpsThatReadLikeErrors")
   @DisplayName(
-      "Should read a decoder refusal when the hardware decoder refuses a source whose metadata"
-          + " reads like an NVENC or CUDA error")
-  void
-      shouldReadADecoderRefusalWhenTheHardwareDecoderRefusesASourceWhoseMetadataReadsLikeAnError() {
+      "Should read a decoder refusal when the hardware decoder refuses a source whose path or"
+          + " metadata reads like an NVENC or CUDA error")
+  void shouldReadADecoderRefusalWhenTheHardwareDecoderRefusesASourceWhoseMetadataReadsLikeAnError(
+      String inputDump) {
     var errorOutput =
-        """
-        Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/barracuda failed.mp4':
-          Metadata:
-            major_brand     : iso4
-            title           : [hevc_nvenc @ 0x0] encode failed: CUDA_ERROR_UNKNOWN
-          Duration: 00:00:06.00, start: 0.000000, bitrate: 71 kb/s
-        """
+        inputDump
+            + """
+            Stream mapping:
+              Stream #0:0 -> #0:0 (hevc (native) -> hevc (hevc_nvenc))
+            """
             + DECODER_REFUSAL;
 
     assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput)))
         .contains(HardwareEncoderFault.DECODER_REFUSED);
+  }
+
+  static Stream<Named<String>> inputDumpsThatReadLikeErrors() {
+    return Stream.of(
+        Named.of(
+            "a path and a title that read like errors",
+            """
+            Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/barracuda failed.mp4':
+              Metadata:
+                title           : [hevc_nvenc @ 0x0] encode failed: CUDA_ERROR_UNKNOWN
+              Duration: 00:00:06.00, start: 0.000000, bitrate: 71 kb/s
+            """),
+        Named.of(
+            "a metadata key whose line break starts a line like FFmpeg's own",
+            """
+            Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/movie.mp4':
+              Metadata:
+                x
+            [hevc @ 0x0] cuvidCreateDecoder failed -> CUDA_ERROR_UNKNOWN: unknown error
+              Duration: 00:00:06.00, start: 0.000000, bitrate: 71 kb/s
+            """),
+        Named.of(
+            "a path whose line break starts a line like FFmpeg's own",
+            """
+            Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/x
+            [h264_nvenc @ 0x0] OpenEncodeSessionEx failed: device lost (40).mp4':
+              Duration: 00:00:06.00, start: 0.000000, bitrate: 71 kb/s
+            """));
   }
 
   // FFmpeg's nvdec.c and its CUDA filters report a failed CUDA call with the call and its status.

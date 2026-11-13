@@ -51,7 +51,7 @@ final class SourceStreamObservation {
   // cuts it away.
   private static final int DISCARD = 0x4;
   private static final int SOURCE_STREAMS_OUTPUT = 1;
-  private static final String MAPPING_HEADER = "Stream mapping:";
+  static final String MAPPING_HEADER = "Stream mapping:";
 
   private final Map<Integer, TimeBase> timeBases = new HashMap<>();
   private final Map<Integer, Integer> sourceIndexes = new HashMap<>();

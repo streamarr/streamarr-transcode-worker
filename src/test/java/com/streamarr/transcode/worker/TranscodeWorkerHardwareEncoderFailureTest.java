@@ -139,9 +139,8 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   // The line that FFmpeg's CHECK_CU prints when cuvidCreateDecoder fails, as after a driver reset
   // that takes the hardware decoder down.
   private static final String DECODER_FAILURE =
-      NVDEC_START_FAILURE.formatted(
-          "[hevc @ 0x56489279cf00] decoder->cvdl->cuvidCreateDecoder(&decoder->decoder, params)"
-              + " failed -> CUDA_ERROR_UNKNOWN: unknown error");
+      "[hevc @ 0x56489279cf00] decoder->cvdl->cuvidCreateDecoder(&decoder->decoder, params)"
+          + " failed -> CUDA_ERROR_UNKNOWN: unknown error";
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
 
   @TempDir Path tempDir;
@@ -264,18 +263,20 @@ class TranscodeWorkerHardwareEncoderFailureTest {
     }
   }
 
-  // FFmpeg prints the source's path and metadata ahead of the stream mapping. Text there that reads
-  // like an NVENC or CUDA error is not an error of the GPU.
+  // FFmpeg prints the source's path and metadata ahead of the stream mapping, and prints a line
+  // break in a metadata key as it is. Text there that reads like an NVENC or CUDA error is not an
+  // error of the GPU.
   static Stream<Named<String>> refusedSources() {
     return Stream.of(
         Named.of("a picture smaller than 144x144", DECODER_REFUSAL),
         Named.of(
-            "a picture smaller than 144x144, in a source whose title reads like a CUDA error",
+            "a picture smaller than 144x144, in a source whose metadata reads like CUDA errors",
             """
             Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/barracuda failed.mp4':
               Metadata:
-                major_brand     : iso4
                 title           : [hevc_nvenc @ 0x0] encode failed: CUDA_ERROR_UNKNOWN
+                x
+            [hevc @ 0x0] cuvidCreateDecoder failed -> CUDA_ERROR_UNKNOWN: unknown error
               Duration: 00:00:06.00, start: 0.000000, bitrate: 71 kb/s
             """
                 + DECODER_REFUSAL));
@@ -284,13 +285,14 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   // ADR 0044: a driver reset that takes down the hardware encoder can take down the hardware
   // decoder on the same device too, so the worker withdraws the encoder before it reports the
   // failure.
-  @Test
   @DisplayName(
       "Should stop offering NVENC before it reports the hardware encoder failure when a CUDA error"
           + " stops the hardware decoder from starting")
-  void shouldStopOfferingNvencBeforeItReportsTheFailureWhenACudaErrorStopsTheHardwareDecoder()
-      throws Exception {
-    var launcher = launcherFailingNvencWith(DECODER_FAILURE);
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("decoderFailures")
+  void shouldStopOfferingNvencBeforeItReportsTheFailureWhenACudaErrorStopsTheHardwareDecoder(
+      String decoderFailure) throws Exception {
+    var launcher = launcherFailingNvencWith(NVDEC_START_FAILURE.formatted(decoderFailure));
     var failed = encodeJob();
 
     try (var worker = worker(launcher, Duration.ofHours(1))) {
@@ -307,6 +309,18 @@ class TranscodeWorkerHardwareEncoderFailureTest {
       assertThat(event(connection, EventCase.JOB_ATTEMPT_FAILED).getJobAttemptFailed().getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_HARDWARE_ENCODER_FAILED);
     }
+  }
+
+  // FFmpeg's CHECK_CU prints a failed call and its CUDA error in separate writes, and the framecrc
+  // of the source streams, which FFmpeg writes to the same error output, can land between them.
+  static Stream<Named<String>> decoderFailures() {
+    return Stream.of(
+        Named.of("in one line", DECODER_FAILURE),
+        Named.of(
+            "split by a framecrc record",
+            "[hevc @ 0x56489279cf00] decoder->cvdl->cuvidCreateDecoder(&decoder->decoder, params)"
+                + " failed0,          0,          0,      512,      517, 0x2e5b1c4a, F=0x1\n"
+                + " -> CUDA_ERROR_UNKNOWN: unknown error"));
   }
 
   @Test

@@ -58,34 +58,35 @@ public enum HardwareEncoderFault {
       return Optional.empty();
     }
 
-    var diagnostics = diagnosticLines(errorOutput);
-    if (NVENC_ERROR.matcher(withoutBusyDeviceLines(diagnostics)).find()) {
+    var afterTheMapping = linesAfterTheStreamMapping(errorOutput);
+    if (NVENC_ERROR.matcher(withoutBusyDeviceLines(afterTheMapping)).find()) {
       return Optional.of(FAILED);
     }
 
-    if (OUT_OF_DEVICE_MEMORY.matcher(diagnostics).find()) {
+    if (OUT_OF_DEVICE_MEMORY.matcher(afterTheMapping).find()) {
       return Optional.of(DEVICE_OUT_OF_MEMORY);
     }
 
-    if (SESSION_REFUSAL.matcher(diagnostics).find()) {
+    if (SESSION_REFUSAL.matcher(afterTheMapping).find()) {
       return Optional.of(SESSION_REFUSED);
     }
 
-    if (GPU_FILTERS_GOT_NO_GPU_FRAME.matcher(errorOutput).find()) {
+    if (GPU_FILTERS_GOT_NO_GPU_FRAME.matcher(afterTheMapping).find()) {
       return Optional.of(DECODER_REFUSED);
     }
 
     return Optional.empty();
   }
 
-  // FFmpeg starts each line that a component such as NVENC, NVDEC or a CUDA filter logs with that
-  // component's name in brackets. The source's path and metadata, which FFmpeg also prints, start
-  // otherwise, so text there that reads like an error is not read as one.
-  private static String diagnosticLines(String errorOutput) {
-    return errorOutput
-        .lines()
-        .filter(line -> line.startsWith("["))
-        .collect(Collectors.joining("\n"));
+  // FFmpeg prints the source's path and metadata, line breaks included, ahead of its stream
+  // mapping, and no output copies the source's metadata. The last mapping line is FFmpeg's own.
+  // NVENC, NVDEC and the CUDA filters fail after it. When the kept lines hold no mapping, every
+  // kept line counts. Either the drain dropped the mapping, or FFmpeg ended before it, as it does
+  // when a CUDA error stops the decoder's device from starting.
+  private static String linesAfterTheStreamMapping(String errorOutput) {
+    var lines = errorOutput.lines().toList();
+    var mapping = lines.lastIndexOf(SourceStreamObservation.MAPPING_HEADER);
+    return String.join("\n", lines.subList(mapping + 1, lines.size()));
   }
 
   // FFmpeg tries each GPU in turn and, once none opened a session, adds "No capable devices
