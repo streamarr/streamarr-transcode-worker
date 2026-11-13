@@ -1096,14 +1096,14 @@ class ProducerTest {
   // durations from 0 s. Without a keyframe, a second fragment holds two more pictures, to 1.083 s,
   // and four copied audio samples of 1/48 s from this tick of the audio's 48,000.
   private Producer producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
-      Integer[] audioBeforeOneSecond, long laterAudioStart) {
+      Integer[] audioFromZero, long laterAudioStart) {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
             TimedFragment.keyframeAt(0)
                 .videoDuration(1_000)
                 .videoSampleCount(24)
-                .audioFrom(0, audioBeforeOneSecond)
+                .audioFrom(0, audioFromZero)
                 .build(),
             TimedFragment.frameAt(24_000)
                 .videoDuration(1_000)
