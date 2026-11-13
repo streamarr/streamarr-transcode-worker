@@ -115,7 +115,7 @@ final class AudioSampleQueue {
     while (!held.isEmpty() && held.peekLast().number() > number) {
       var dropped = held.removeLast().sample();
       discardedTail = discardedTail.or(() -> Optional.of(tailOf(dropped)));
-      discardedStart = Optional.of(startOf(dropped));
+      discardedStart = Optional.of(dropped.audioStart());
     }
   }
 
@@ -213,11 +213,6 @@ final class AudioSampleQueue {
 
   private static long audioTimescaleOf(Fragment fragment) {
     return fragment.tracks().audio().orElseThrow().timescale();
-  }
-
-  private static MediaTime startOf(CarriedSample carried) {
-    return new MediaTime(
-        carried.sample().presentationTime(), new TimeBase(1, audioTimescaleOf(carried.fragment())));
   }
 
   /**

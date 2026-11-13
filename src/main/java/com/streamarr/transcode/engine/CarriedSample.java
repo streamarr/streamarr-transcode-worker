@@ -21,4 +21,11 @@ record CarriedSample(@NonNull Fragment fragment, @NonNull Sample sample) {
   long audioTrackId() {
     return fragment.tracks().audio().orElseThrow().trackId();
   }
+
+  /** When this audio sample is presented, in the sound track's timescale. */
+  MediaTime audioStart() {
+    return new MediaTime(
+        sample.presentationTime(),
+        new TimeBase(1, fragment.tracks().audio().orElseThrow().timescale()));
+  }
 }

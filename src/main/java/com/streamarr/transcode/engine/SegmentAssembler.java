@@ -428,11 +428,7 @@ final class SegmentAssembler {
       return audio.discardedTail().isPresent();
     }
 
-    var first = samples.getFirst();
-    var timescale = first.fragment().tracks().audio().orElseThrow().timescale();
-    return new MediaTime(first.sample().presentationTime(), new TimeBase(1, timescale))
-            .compareTo(videoEnd)
-        >= 0;
+    return samples.getFirst().audioStart().compareTo(videoEnd) >= 0;
   }
 
   // The length of one video frame in the segment: the duration that most of its pictures share, the
