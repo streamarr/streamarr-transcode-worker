@@ -1,5 +1,7 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.fixtures.DetectedCapabilities.realCapabilities;
+import static com.streamarr.transcode.fixtures.DetectedCapabilities.softwareCapabilities;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
@@ -224,6 +226,19 @@ class WorkerMediaSmokeTest {
   // 64x36 variant needs H.264 level 1.1.
   private static final H264Source SEEKABLE_SOURCE = new H264Source("avc1.F4000A", 11);
 
+  // The numbered-picture source's libx264 encode: High at level 3.0. Its 320x180 variant at 24 fps
+  // and 500 kb/s needs H.264 level 1.3.
+  private static final H264Source NUMBERED_PICTURE_SOURCE = new H264Source("avc1.64001E", 13);
+  private static final int NUMBERED_PICTURE_WIDTH = 320;
+  private static final int NUMBERED_PICTURE_HEIGHT = 180;
+  private static final int NUMBERED_PICTURE_RATE = 24;
+  // Two pictures more than the 144 of two 3 s periods, so that segment 2 holds two pictures.
+  private static final int NUMBERED_PICTURE_COUNT = 146;
+  // A picture's number in binary: eight stripes across the picture's top 36 rows, the lowest bit
+  // on the left, white for one.
+  private static final int NUMBER_STRIPES = 8;
+  private static final int NUMBER_STRIPE_HEIGHT = 36;
+
   // The levels that a 64x36 variant at 24 fps and up to 100 kb/s needs: H.264 1.1, because High
   // allows 80 kb/s at level 1.0, H.265 1.0 and AV1 2.0.
   private static final Map<String, Integer> TINY_VARIANT_LEVELS =
@@ -278,9 +293,12 @@ class WorkerMediaSmokeTest {
   // The 90 s that the truncated source's index promises, in 6 s segments.
   private static final int TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT = 15;
   private static final Duration ONE_FRAME_AT_24_FPS = Duration.ofNanos(1_000_000_000L / 24 + 1);
-  // 1,764 s of audio in 6 s segments after the same 64 s of video.
-  private static final int LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT = 294;
-  private static final Duration HALF_OF_THE_LONG_AUDIO = Duration.ofSeconds(882);
+  // The same 64 s of video beside 300 s and beside 1,764 s of audio, in 6 s segments.
+  private static final int FIVE_MINUTE_AUDIO_SECONDS = 300;
+  private static final int FIVE_MINUTE_AUDIO_SEGMENT_COUNT = 50;
+  private static final Duration HALF_OF_THE_FIVE_MINUTE_AUDIO = Duration.ofSeconds(150);
+  private static final int HALF_HOUR_AUDIO_SECONDS = 1764;
+  private static final int HALF_HOUR_AUDIO_SEGMENT_COUNT = 294;
   // The seekable sources' 6 s period at their 24 fps.
   private static final int FRAMES_IN_A_PERIOD = 144;
   // The longest frame among the audio codecs these tests encode: AC-3 and E-AC-3 code 1,536
@@ -2142,10 +2160,12 @@ class WorkerMediaSmokeTest {
     assertThat(fromRpusAhead.names())
         .containsExactlyElementsOf(fromRpusBehind.names())
         .hasSize(PROFILE_5_SEGMENT_COUNT - startSequenceNumber + 1);
+    assertThat(fromRpusAhead.segments())
+        .containsEntry("init.mp4", fromRpusBehind.segments().get("init.mp4"));
     for (var name : fromRpusBehind.names()) {
-      assertThat(packetsOf(fromRpusAhead, name))
+      assertThat(samplesByTrackOf(fromRpusAhead, name))
           .as(name)
-          .containsExactlyElementsOf(packetsOf(fromRpusBehind, name));
+          .isEqualTo(samplesByTrackOf(fromRpusBehind, name));
     }
   }
 
@@ -2535,7 +2555,7 @@ class WorkerMediaSmokeTest {
 
   // Runs the profile 5 job once as one FFmpeg, whose source's RPUs follow their pictures, and once
   // as the encode of the source's copy, whose RPUs may start samples, each with libx264 on one
-  // thread, and compares their packets.
+  // thread, and compares their initialization segments and the times and bytes of their samples.
   private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
       Path source, VariantJob.Builder job) throws Exception {
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
@@ -2558,10 +2578,12 @@ class WorkerMediaSmokeTest {
 
     assertThat(commands).as("the FFmpegs of the attempt that reads the copy").hasSize(2);
     assertThat(fromTheCopy.names()).containsExactlyElementsOf(oneFfmpeg.names());
+    assertThat(fromTheCopy.segments())
+        .containsEntry("init.mp4", oneFfmpeg.segments().get("init.mp4"));
     for (var name : oneFfmpeg.names()) {
-      assertThat(packetsOf(fromTheCopy, name))
+      assertThat(samplesByTrackOf(fromTheCopy, name))
           .as(name)
-          .containsExactlyElementsOf(packetsOf(oneFfmpeg, name));
+          .isEqualTo(samplesByTrackOf(oneFfmpeg, name));
     }
 
     return fromTheCopy;
@@ -3783,16 +3805,248 @@ class WorkerMediaSmokeTest {
     assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
     var replacementMedia = playable(replacementUploads.contentOf(replacementUploads.names()));
     assertDecodes(replacementMedia);
-    // The attempt from the start copies every source packet in decode order, so its packet at the
+    // The attempt from the start copies every source packet in decode order, so its sample at the
     // keyframe's index is that keyframe on the output timeline.
-    var fromStartPackets =
-        videoPackets(playable(fromStartUploads.contentOf(fromStartUploads.names())));
-    assertThat(fromStartPackets).hasSameSizeAs(sourcePackets);
-    var copiedKeyframe = fromStartPackets.get(keyframeIndex);
-    assertThat(copiedKeyframe.keyframe()).as("the copy of the server's keyframe").isTrue();
-    assertThat(videoPackets(replacementMedia).getFirst().presentationTime())
-        .as("the first video presentation time of the replacement attempt's segment 2")
-        .isEqualByComparingTo(copiedKeyframe.presentationTime());
+    var fromStartSamples = videoSamples(fromStartUploads.contentOf(fromStartUploads.names()));
+    assertThat(fromStartSamples).hasSameSizeAs(sourcePackets);
+    var copiedKeyframe = fromStartSamples.get(keyframeIndex);
+    assertThat(copiedKeyframe.isSync()).as("the copy of the server's keyframe").isTrue();
+    var replacementSamples = videoSamples(replacementUploads.contentOf(replacementUploads.names()));
+    assertThat(replacementSamples.getFirst().presentationTime())
+        .as("the first video presentation time of the replacement attempt's segment 2, in ticks")
+        .isEqualTo(copiedKeyframe.presentationTime());
+  }
+
+  // The output's video samples in decode order, with the times that its bytes carry.
+  private static List<Mp4Samples.Sample> videoSamples(byte[] media) {
+    var movie = Mp4Samples.read(media);
+    return movie.samplesOf(movie.videoTrack());
+  }
+
+  // Segment 2 holds the source's last two pictures, a keyframe and the picture after it, which no
+  // encoder reorders, while the attempt from the start reorders pictures. The server sends an MP4
+  // source's keyframe as its presentation time: segment 2's own keyframe at 6 s for a copy, and
+  // for an encode the keyframe at 4 s, the last one at least 0.5 s before segment 2.
+  @ParameterizedTest(name = "{0}, reading from {1} s")
+  @CsvSource({"TRANSCODE_MODE_REMUX, 6", "TRANSCODE_MODE_VIDEO_TRANSCODE, 4"})
+  @DisplayName(
+      "Should show each numbered picture at its source time when a replacement attempt starts on"
+          + " a last segment of two pictures")
+  void
+      shouldShowEachNumberedPictureAtItsSourceTimeWhenAReplacementAttemptStartsOnALastSegmentOfTwoPictures(
+          TranscodeMode mode, int keyframeSeconds) throws Exception {
+    var source = numberedPictureSource();
+    var fromStart = numberedPictureJob(source, mode);
+    var replacement = numberedPictureJob(source, mode);
+    replacement.getExecutionBuilder().setStartSequenceNumber(REPLACEMENT_START_SEQUENCE_NUMBER);
+    setSeekPosition(replacement.getExecutionBuilder(), BigDecimal.valueOf(keyframeSeconds));
+
+    var fromStartUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), fromStart.build());
+    var replacementUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), replacement.build());
+
+    assertThat(replacementUploads.names())
+        .containsExactly("init.mp4", segmentName(REPLACEMENT_START_SEQUENCE_NUMBER));
+    var fromStartMedia = fromStartUploads.contentOf(fromStartUploads.names());
+    var replacementMedia = replacementUploads.contentOf(replacementUploads.names());
+    assertThat(deepestReorderingDelay(fromStartMedia))
+        .as("the reordering delay of the attempt from the start, in ticks")
+        .isPositive();
+    assertThat(deepestReorderingDelay(replacementMedia))
+        .as("the reordering delay of the replacement attempt's two pictures, in ticks")
+        .isZero();
+    assertThat(shownPictures(fromStartMedia))
+        .as("the pictures of the attempt from the start")
+        .containsExactlyElementsOf(numberedPicturesFrom(0));
+    assertThat(shownPictures(replacementMedia))
+        .as("the pictures of the replacement attempt's segment 2")
+        .containsExactlyElementsOf(
+            numberedPicturesFrom(
+                REPLACEMENT_START_SEQUENCE_NUMBER * SLOT_SECONDS * NUMBERED_PICTURE_RATE));
+  }
+
+  // The rule of FFmpeg's reader that the reading of shown pictures corrects for, and the reason
+  // two outputs are never compared by the times FFmpeg reads: a segment that reorders no picture
+  // reads at its own times alone, and later by the upload's delay behind the segments before it.
+  @Test
+  @DisplayName(
+      "Should read every presentation time later by the deepest reordering delay of the media"
+          + " when FFmpeg reads an upload whole or its last segment alone")
+  void
+      shouldReadEveryPresentationTimeLaterByTheDeepestReorderingDelayOfTheMediaWhenFfmpegReadsAnUploadWholeOrItsLastSegmentAlone()
+          throws Exception {
+    var source = numberedPictureSource();
+    var job = numberedPictureJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var whole = uploads.contentOf(uploads.names());
+    var lastSegmentAlone =
+        uploads.contentOf(List.of("init.mp4", segmentName(REPLACEMENT_START_SEQUENCE_NUMBER)));
+    var delay = deepestReorderingDelay(whole);
+    assertThat(delay).as("the reordering delay of the whole upload, in ticks").isPositive();
+    assertThat(deepestReorderingDelay(lastSegmentAlone))
+        .as("the reordering delay of the last segment, in ticks")
+        .isZero();
+    assertThat(sortedVideoPresentationTicksThatFfprobeReads(whole))
+        .as("the whole upload's presentation times as ffprobe reads them")
+        .containsExactlyElementsOf(
+            sortedVideoPresentationTicks(whole).stream().map(time -> time + delay).toList());
+    assertThat(sortedVideoPresentationTicksThatFfprobeReads(lastSegmentAlone))
+        .as("the last segment's presentation times as ffprobe reads them alone")
+        .containsExactlyElementsOf(sortedVideoPresentationTicks(lastSegmentAlone));
+  }
+
+  private static List<ShownPicture> numberedPicturesFrom(int first) {
+    return IntStream.range(first, NUMBERED_PICTURE_COUNT)
+        .mapToObj(
+            number -> new ShownPicture(new BigFraction(number, NUMBERED_PICTURE_RATE), number))
+        .toList();
+  }
+
+  // A picture's number and the time in seconds at which the output's bytes present it.
+  private record ShownPicture(BigFraction presentationTime, int number) {}
+
+  // The output's pictures in the order the decoder returns them, each at the presentation time
+  // that the bytes give its own sample: ADR 0037's decode time plus composition offset. FFmpeg
+  // hands the decoder each sample's time later by the deepest reordering delay of the media, so
+  // the bytes' time is that time less the delay.
+  private List<ShownPicture> shownPictures(byte[] media) throws Exception {
+    var file = playable(media);
+    var timescale = Mp4Samples.read(media).videoTrack().timescale();
+    var delay = deepestReorderingDelay(media);
+    var times =
+        ffprobe(List.of("-select_streams", "v:0", "-show_entries", "frame=pts"), file)
+            .lines()
+            .map(line -> Long.parseLong(line.replace(",", "").strip()))
+            .map(ticks -> new BigFraction(ticks - delay, timescale))
+            .toList();
+    var numbers = decodedPictureNumbers(file);
+    assertThat(times)
+        .as("one decoded picture for each video sample")
+        .hasSameSizeAs(videoSamples(media));
+    assertThat(numbers).as("one number for each decoded picture").hasSameSizeAs(times);
+    return IntStream.range(0, times.size())
+        .mapToObj(index -> new ShownPicture(times.get(index), numbers.get(index)))
+        .toList();
+  }
+
+  // The video samples' presentation times in ticks, as the bytes carry them, in ascending order.
+  private static List<Long> sortedVideoPresentationTicks(byte[] media) {
+    return videoSamples(media).stream().map(Mp4Samples.Sample::presentationTime).sorted().toList();
+  }
+
+  private List<Long> sortedVideoPresentationTicksThatFfprobeReads(byte[] media) throws Exception {
+    return FfprobePackets.of(media, root).stream()
+        .filter(Packet::isVideo)
+        .map(Packet::pts)
+        .sorted()
+        .toList();
+  }
+
+  // The longest time by which a video sample decodes after it presents, in ticks: minus the most
+  // negative composition offset, and zero for an output that reorders no picture.
+  private static long deepestReorderingDelay(byte[] media) {
+    return videoSamples(media).stream()
+        .mapToLong(sample -> sample.decodeTime() - sample.presentationTime())
+        .max()
+        .orElseThrow();
+  }
+
+  // The numbers of the media's decoded pictures, in the order the decoder returns them.
+  private List<Integer> decodedPictureNumbers(Path media) throws Exception {
+    var pictures = Files.createTempFile(root, "pictures", ".gray");
+    runFfmpeg(
+        List.of(
+            "-i",
+            media.toString(),
+            "-map",
+            "0:v:0",
+            "-fps_mode",
+            "passthrough",
+            "-pix_fmt",
+            "gray",
+            "-f",
+            "rawvideo"),
+        pictures);
+    var luma = Files.readAllBytes(pictures);
+    var pictureSize = NUMBERED_PICTURE_WIDTH * NUMBERED_PICTURE_HEIGHT;
+    assertThat(luma.length % pictureSize).as("whole decoded pictures").isZero();
+    return IntStream.range(0, luma.length / pictureSize)
+        .mapToObj(picture -> pictureNumber(luma, picture * pictureSize))
+        .toList();
+  }
+
+  // The number that the stripes of the picture at the offset code, read in the middle of each.
+  private static int pictureNumber(byte[] luma, int pictureStart) {
+    var stripeWidth = NUMBERED_PICTURE_WIDTH / NUMBER_STRIPES;
+    var middleRow = pictureStart + NUMBER_STRIPE_HEIGHT / 2 * NUMBERED_PICTURE_WIDTH;
+    return IntStream.range(0, NUMBER_STRIPES)
+        .filter(bit -> (luma[middleRow + bit * stripeWidth + stripeWidth / 2] & 0xFF) > 127)
+        .map(bit -> 1 << bit)
+        .sum();
+  }
+
+  // 146 pictures of a moving test pattern at 24 fps, each under the stripes of its number, as
+  // H.264 in MP4. A keyframe every 2 s opens segment 2 on picture 144, and two B-frames between
+  // the other pictures make a copy reorder its pictures.
+  private static synchronized Path numberedPictureSource() throws Exception {
+    var stripeWidth = NUMBERED_PICTURE_WIDTH / NUMBER_STRIPES;
+    var stripes =
+        IntStream.range(0, NUMBER_STRIPES)
+            .mapToObj(
+                bit ->
+                    "drawbox=x=%d:y=0:w=%d:h=%d:color=white:t=fill:enable='bitand(n,%d)'"
+                        .formatted(bit * stripeWidth, stripeWidth, NUMBER_STRIPE_HEIGHT, 1 << bit))
+            .collect(Collectors.joining(","));
+    var pictures =
+        "testsrc2=size=%dx%d:rate=%d,format=yuv420p,drawbox=x=0:y=0:w=%d:h=%d:color=black:t=fill,%s"
+            .formatted(
+                NUMBERED_PICTURE_WIDTH,
+                NUMBERED_PICTURE_HEIGHT,
+                NUMBERED_PICTURE_RATE,
+                NUMBERED_PICTURE_WIDTH,
+                NUMBER_STRIPE_HEIGHT,
+                stripes);
+    return buildFixtureOnce(
+        seekableSources.resolve("numbered-pictures.mp4"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    pictures,
+                    "-frames:v",
+                    String.valueOf(NUMBERED_PICTURE_COUNT),
+                    "-c:v",
+                    "libx264",
+                    "-profile:v",
+                    "high",
+                    "-level:v",
+                    "3.0",
+                    "-x264-params",
+                    "keyint=48:min-keyint=48:scenecut=0:bframes=2:b-adapt=0"),
+                output));
+  }
+
+  // The numbered-picture source at its own size and frame rate on 3 s periods, without audio.
+  private static VariantJob.Builder numberedPictureJob(Path source, TranscodeMode mode) {
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, NUMBERED_PICTURE_SOURCE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder()
+        .setWidth(NUMBERED_PICTURE_WIDTH)
+        .setHeight(NUMBERED_PICTURE_HEIGHT)
+        .setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(REPLACEMENT_START_SEQUENCE_NUMBER + 1)
+        .setOutputFrameRate(
+            Fraction.newBuilder().setNumerator(NUMBERED_PICTURE_RATE).setDenominator(1));
+    return job;
   }
 
   @ParameterizedTest(name = "{0} source, {1}, from segment {2}")
@@ -3804,11 +4058,9 @@ class WorkerMediaSmokeTest {
       String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
     var run = runSeekableSourceJob(container, mode, startSequenceNumber);
 
-    var ffmpegBoxes = TopLevelBoxes.of(run.ffmpegOutput());
-    assertThat(ffmpegBoxes).extracting(Box::type).startsWith("ftyp", "moov");
     assertThat(run.uploads().segments())
         .as("the initialization segment")
-        .containsEntry("init.mp4", Arrays.copyOf(run.ffmpegOutput(), ffmpegBoxes.get(1).end()));
+        .containsEntry("init.mp4", initializationSegmentOf(run.ffmpegOutput()));
     assertThat(run.mediaSegmentNames())
         .isNotEmpty()
         .allSatisfy(
@@ -3816,23 +4068,40 @@ class WorkerMediaSmokeTest {
                 assertThat(TopLevelBoxes.of(run.uploads().segments().get(name)))
                     .extracting(Box::type)
                     .containsExactly("moof", "mdat"));
-    var ffmpegPackets = FfprobePackets.of(run.ffmpegOutput(), root);
-    var ffmpegPacketsByStreamAndDts =
-        ffmpegPackets.stream()
-            .collect(Collectors.toMap(WorkerMediaSmokeTest::streamAndDts, Function.identity()));
-    var uploadedPackets = FfprobePackets.of(run.uploadedOutput(), root);
-    assertThat(uploadedPackets)
+    var ffmpegMovie = Mp4Samples.read(run.ffmpegOutput());
+    var ffmpegSamplesByTrackAndDecodeTime =
+        everySampleOf(ffmpegMovie).stream()
+            .collect(
+                Collectors.toMap(WorkerMediaSmokeTest::trackAndDecodeTime, Function.identity()));
+    var uploadedMovie = Mp4Samples.read(run.uploadedOutput());
+    assertThat(everySampleOf(uploadedMovie))
         .isNotEmpty()
         .allSatisfy(
-            packet ->
-                assertThat(packet)
-                    .isEqualTo(ffmpegPacketsByStreamAndDts.get(streamAndDts(packet))));
-    var uploadedVideo = uploadedPackets.stream().filter(Packet::isVideo).toList();
-    var ffmpegVideo = ffmpegPackets.stream().filter(Packet::isVideo).toList();
-    assertThat(uploadedVideo.getFirst().isKeyframe()).isTrue();
+            sample ->
+                assertThat(sample)
+                    .isEqualTo(ffmpegSamplesByTrackAndDecodeTime.get(trackAndDecodeTime(sample))));
+    var uploadedVideo = uploadedMovie.samplesOf(uploadedMovie.videoTrack());
+    var ffmpegVideo = ffmpegMovie.samplesOf(ffmpegMovie.videoTrack());
+    assertThat(uploadedVideo.getFirst().isSync()).isTrue();
     assertThat(uploadedVideo)
         .containsExactlyElementsOf(
             ffmpegVideo.subList(ffmpegVideo.indexOf(uploadedVideo.getFirst()), ffmpegVideo.size()));
+  }
+
+  // The output's ftyp and moov, as FFmpeg writes them ahead of its fragments.
+  private static byte[] initializationSegmentOf(byte[] ffmpegOutput) {
+    var boxes = TopLevelBoxes.of(ffmpegOutput);
+    assertThat(boxes).extracting(Box::type).startsWith("ftyp", "moov");
+    return Arrays.copyOf(ffmpegOutput, boxes.get(1).end());
+  }
+
+  // Every sample of the output, in the order its fragments carry them.
+  private static List<Mp4Samples.Sample> everySampleOf(Mp4Samples.Movie movie) {
+    return movie.fragments().stream().flatMap(fragment -> fragment.samples().stream()).toList();
+  }
+
+  private static List<Long> trackAndDecodeTime(Mp4Samples.Sample sample) {
+    return List.of(sample.trackId(), sample.decodeTime());
   }
 
   @ParameterizedTest(name = "{0} source, {1}, from segment {2}")
@@ -3919,9 +4188,9 @@ class WorkerMediaSmokeTest {
         .filteredOn(sample -> sample.trackId() == videoTrackId && sample.isSync())
         .hasSize(2);
     assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
-    assertThat(videoPacketsOf(replacementUploads, "segment2.m4s"))
+    assertThat(videoSamplesOf(replacementUploads, "segment2.m4s"))
         .isNotEmpty()
-        .isEqualTo(videoPacketsOf(fromStartUploads, "segment2.m4s"));
+        .isEqualTo(videoSamplesOf(fromStartUploads, "segment2.m4s"));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -5678,16 +5947,18 @@ class WorkerMediaSmokeTest {
 
     var lastVideoSegment = "segment" + VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + ".m4s";
     assertThat(uploads.names()).containsExactly("init.mp4", lastVideoSegment);
-    var ffmpegPackets =
-        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root);
+    var ffmpegOutput = launcher.outputOf(fromProto(job.getJobAttemptId()));
+    assertThat(uploads.segments())
+        .as("the initialization segment")
+        .containsEntry("init.mp4", initializationSegmentOf(ffmpegOutput));
+    assertThat(videoSamplesOf(uploads, lastVideoSegment))
+        .isNotEmpty()
+        .containsExactlyElementsOf(videoSamples(ffmpegOutput));
+    var ffmpegPackets = FfprobePackets.of(ffmpegOutput, root);
     var interval =
         AudioInterval.ofDeliveredSegment(
             VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT, SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS);
-    var uploaded = packetsOf(uploads, lastVideoSegment);
-    assertThat(uploaded.stream().filter(Packet::isVideo).toList())
-        .isNotEmpty()
-        .containsExactlyElementsOf(ffmpegPackets.stream().filter(Packet::isVideo).toList());
-    assertThat(uploaded.stream().filter(Packet::isAudio).toList())
+    assertThat(packetsOf(uploads, lastVideoSegment).stream().filter(Packet::isAudio).toList())
         .as("the copied audio of 60 s to 66 s, packet for packet")
         .isNotEmpty()
         .containsExactlyElementsOf(
@@ -6593,7 +6864,10 @@ class WorkerMediaSmokeTest {
   }
 
   @ParameterizedTest(name = "{0} from segment {2}")
-  @MethodSource("videoEndsBeforeAudioSourcesAndStarts")
+  @MethodSource({
+    "videoEndsBeforeAudioSourcesAndStarts",
+    "halfAnHourOfAudioFromTheFirstSegmentAfterTheVideosEnd"
+  })
   @DisplayName(
       "Should upload every advertised segment, each opening at a keyframe with one period of"
           + " video and only its own interval's audio, when an encode holds the last frame of video"
@@ -6647,8 +6921,9 @@ class WorkerMediaSmokeTest {
                 VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT),
             Arguments.of(
                 Named.<ThrowingSupplier<Path>>of(
-                    "1,764 s of 5.1 AC-3", WorkerMediaSmokeTest::longAudioAfterVideoEndSource),
-                LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT))
+                    "300 s of 5.1 AC-3",
+                    () -> videoEndsEarlyInItsAudioSource(FIVE_MINUTE_AUDIO_SECONDS)),
+                FIVE_MINUTE_AUDIO_SEGMENT_COUNT))
         .flatMap(
             source ->
                 Stream.of(
@@ -6658,18 +6933,30 @@ class WorkerMediaSmokeTest {
                     .map(start -> Arguments.of(source.get()[0], source.get()[1], start)));
   }
 
+  // One start only: an attempt from any start encodes the audio to its end and holds the last
+  // frame through the same 283 segments after the video's end.
+  static Stream<Arguments> halfAnHourOfAudioFromTheFirstSegmentAfterTheVideosEnd() {
+    return Stream.of(
+        Arguments.of(
+            Named.<ThrowingSupplier<Path>>of(
+                "1,764 s of 5.1 AC-3",
+                () -> videoEndsEarlyInItsAudioSource(HALF_HOUR_AUDIO_SECONDS)),
+            HALF_HOUR_AUDIO_SEGMENT_COUNT,
+            VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1));
+  }
+
   // The first segment after the video's end needs one period of held pictures and of audio, so it
-  // must not wait for the downmix of the 1,700 s of audio after it. What FFmpeg had written when
+  // must not wait for the downmix of the 228 s of audio after it. What FFmpeg had written when
   // that segment's upload started shows how far past it FFmpeg had encoded the audio.
   @Test
   @DisplayName(
       "Should upload the first segment after the video's end before encoding the audio after it"
-          + " when an encode holds the last frame and downmixes half an hour of 5.1 audio")
+          + " when an encode holds the last frame and downmixes five minutes of 5.1 audio")
   void shouldUploadTheFirstSegmentAfterTheVideosEndBeforeEncodingTheAudioAfterItWhenAHoldRuns()
       throws Exception {
-    var source = longAudioAfterVideoEndSource();
+    var source = videoEndsEarlyInItsAudioSource(FIVE_MINUTE_AUDIO_SECONDS);
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    paddedTo(job, LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT);
+    paddedTo(job, FIVE_MINUTE_AUDIO_SEGMENT_COUNT);
     job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
     job.getDecisionBuilder()
         .getAudioBuilder()
@@ -6698,11 +6985,9 @@ class WorkerMediaSmokeTest {
         .as("the audio FFmpeg had written when %s's upload started", segment)
         .isNotEmpty();
     assertThat(written.latestSampleEnd())
-        .as(
-            "how far FFmpeg had written when %s's upload started; the audio ends at 1,764 s",
-            segment)
+        .as("how far FFmpeg had written when %s's upload started; the audio ends at 300 s", segment)
         .isGreaterThan(Duration.ofSeconds(6L * firstSegmentAfterTheVideo))
-        .isLessThan(HALF_OF_THE_LONG_AUDIO);
+        .isLessThan(HALF_OF_THE_FIVE_MINUTE_AUDIO);
   }
 
   // The output's boxes up to the end of its last whole mdat, so that a snapshot taken while FFmpeg
@@ -6932,10 +7217,6 @@ class WorkerMediaSmokeTest {
         execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
 
     return new SeekableSourceRun(uploads, launcher.outputOf(fromProto(job.getJobAttemptId())));
-  }
-
-  private static List<Long> streamAndDts(Packet packet) {
-    return List.of((long) packet.stream(), packet.dts());
   }
 
   static Stream<Arguments> sourceContainersAndModes() {
@@ -8768,11 +9049,12 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
-  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 64 s, and 1,764 s of pink noise as
-  // 5.1 AC-3 at 384 kb/s: the video ends inside segment 10, and the audio runs on through
-  // segment 293.
-  private static synchronized Path longAudioAfterVideoEndSource() throws Exception {
-    var source = seekableSources.resolve("long-audio-after-video-end.mp4");
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 64 s, and pink noise as 5.1 AC-3 at
+  // 384 kb/s for the audio's seconds: the video ends inside segment 10, and the audio runs on.
+  private static synchronized Path videoEndsEarlyInItsAudioSource(int audioSeconds)
+      throws Exception {
+    var source =
+        seekableSources.resolve("video-ends-64-s-into-" + audioSeconds + "-s-of-audio.mp4");
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(
           List.of(
@@ -8783,8 +9065,9 @@ class WorkerMediaSmokeTest {
               "-f",
               "lavfi",
               "-i",
-              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=1764,"
-                  + "pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration="
+                  + audioSeconds
+                  + ",pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
               "-c:v",
               "libx264",
               "-g",
@@ -9106,10 +9389,19 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
-  private List<Packet> videoPacketsOf(MediaUploads uploads, String name) throws Exception {
-    return FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root).stream()
-        .filter(Packet::isVideo)
-        .toList();
+  // The media segment's video samples, read after the initialization segment, with the times that
+  // its bytes carry.
+  private static List<Mp4Samples.Sample> videoSamplesOf(MediaUploads uploads, String name) {
+    return videoSamples(uploads.contentOf(List.of("init.mp4", name)));
+  }
+
+  // The media segment's samples, read after the initialization segment, for each track with its
+  // timescale, with the times that its bytes carry.
+  private static Map<Mp4Samples.Track, List<Mp4Samples.Sample>> samplesByTrackOf(
+      MediaUploads uploads, String name) {
+    var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", name)));
+    return movie.tracks().values().stream()
+        .collect(Collectors.toMap(Function.identity(), movie::samplesOf));
   }
 
   // H.264 at one frame per second with libx264's default B-frames and a keyframe every 6 s, and
@@ -9418,8 +9710,6 @@ class WorkerMediaSmokeTest {
 
   private static FfmpegTranscodeEngine engine(
       TranscodeCapabilityService capabilities, ProcessLauncher launcher) {
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", DEFAULT_FRAGMENTATION_TARGET))
         .capabilityService(capabilities)
@@ -9439,23 +9729,6 @@ class WorkerMediaSmokeTest {
       adjusted.set(parameters, command.get(parameters) + ":lp=1");
       return launcher.launch(adjusted, jobAttemptId);
     };
-  }
-
-  private static TranscodeCapabilityService realCapabilities() {
-    return new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-  }
-
-  // Lists no hardware encoder, so that each codec family runs its software encoder.
-  private static TranscodeCapabilityService softwareCapabilities() {
-    return new TranscodeCapabilityService(
-        "ffmpeg",
-        command -> {
-          if (command.command().contains("-encoders")) {
-            return new ProcessBuilder("true").start();
-          }
-
-          return command.start();
-        });
   }
 
   // A tiny H.264 and AAC source for more than a thousand 1 s segments, recorded once.
@@ -9657,12 +9930,19 @@ class WorkerMediaSmokeTest {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
   }
 
+  // Each pass serves one read of the FIFO and then waits for that reader to exit. An open for
+  // writing returns while any process still holds the FIFO for reading. Without the wait the next
+  // pass would open against the reader just served and its write would fail once that reader
+  // exits. A reader that opens the FIFO before the failed pass closes it reads the end of an empty
+  // file.
   private static void serveUntilThePacketScanOpens(
       Path fifo, byte[] media, CompletableFuture<ProcessHandle> scanReady) {
     while (!Thread.currentThread().isInterrupted()) {
+      var reader = Optional.<ProcessHandle>empty();
       // Opening a FIFO for writing waits for a reader.
       try (var output = Files.newOutputStream(fifo)) {
-        var scan = packetScanProcess(fifo);
+        reader = processesNaming(fifo).findFirst();
+        var scan = reader.filter(WorkerMediaSmokeTest::isPacketScan);
         if (scan.isPresent()) {
           scanReady.complete(scan.get());
           new CountDownLatch(1).await();
@@ -9672,24 +9952,29 @@ class WorkerMediaSmokeTest {
       } catch (InterruptedException _) {
         Thread.currentThread().interrupt();
       } catch (IOException _) {
-        // A reader that stops early closes the pipe; the next read opens it again.
+        // A reader that exits before the write closes the pipe.
       }
+
+      reader.ifPresent(process -> process.onExit().join());
     }
   }
 
   private static Optional<ProcessHandle> packetScanProcess(Path source) {
+    return processesNaming(source).filter(WorkerMediaSmokeTest::isPacketScan).findFirst();
+  }
+
+  private static Stream<ProcessHandle> processesNaming(Path source) {
     return ProcessHandle.current()
         .descendants()
-        .filter(
-            process ->
-                process
-                    .info()
-                    .arguments()
-                    .map(List::of)
-                    .filter(arguments -> arguments.contains("framecrc"))
-                    .filter(arguments -> arguments.contains(source.toString()))
-                    .isPresent())
-        .findFirst();
+        .filter(process -> argumentsOf(process).contains(source.toString()));
+  }
+
+  private static boolean isPacketScan(ProcessHandle process) {
+    return argumentsOf(process).contains("framecrc");
+  }
+
+  private static List<String> argumentsOf(ProcessHandle process) {
+    return process.info().arguments().map(List::of).orElse(List.of());
   }
 
   private static ProbeRequest keyframeRequest() {

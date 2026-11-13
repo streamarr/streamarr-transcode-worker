@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.within;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
+import com.streamarr.transcode.fixtures.DetectedCapabilities;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
@@ -408,12 +409,9 @@ class HdrEncodeSmokeTest {
   }
 
   private static FfmpegTranscodeEngine engine() {
-    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
-        .capabilityService(capabilities)
+        .capabilityService(DetectedCapabilities.realCapabilities())
         .launcher(new ProcessBuilderLauncher())
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();

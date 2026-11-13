@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
+import com.streamarr.transcode.fixtures.DetectedCapabilities;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import com.streamarr.transcode.worker.support.TeeingProcessLauncher;
@@ -765,12 +766,9 @@ class HdrCopySmokeTest {
   }
 
   private static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
-    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
-        .capabilityService(capabilities)
+        .capabilityService(DetectedCapabilities.realCapabilities())
         .launcher(launcher)
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
