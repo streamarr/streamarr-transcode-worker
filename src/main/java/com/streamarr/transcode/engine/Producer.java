@@ -7,6 +7,8 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.ReadingEnding.Abandoned;
 import com.streamarr.transcode.engine.ReadingEnding.Decided;
 import com.streamarr.transcode.engine.ReadingEnding.EndOfOutput;
+import com.streamarr.transcode.engine.ReadingEnding.EndOfOutputWithFailedExit;
+import com.streamarr.transcode.engine.ReadingEnding.EndOfOutputWithoutExit;
 import com.streamarr.transcode.engine.ReadingEnding.TruncatedOutput;
 import java.io.IOException;
 import java.time.Duration;
@@ -20,7 +22,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -46,10 +47,14 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
  * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the
- * output ends and the sink has accepted its last segment, FFmpeg must exit within the grace period,
- * or the producer fails the attempt too, as a truncated output when it was one. In both cases it
- * asks FFmpeg to terminate and destroys it after the grace period, because a hung FFmpeg can ignore
- * termination.
+ * output ends and the sink has accepted the segment in delivery, FFmpeg must exit within the grace
+ * period, or the producer fails the attempt too, as a truncated output when it was one. In both
+ * cases it asks FFmpeg to terminate and destroys it after the grace period, because a hung FFmpeg
+ * can ignore termination.
+ *
+ * <p>The end of the output closes the segments still open, and those awaiting their audio, only
+ * once FFmpeg has exited cleanly. The output of an FFmpeg that fails or does not exit ends where
+ * FFmpeg stopped writing, so the producer delivers none of those segments and the attempt fails.
  */
 @Slf4j
 // The launch builder's parameters only pass through to FFmpeg and the assembler (worker #109).
@@ -138,8 +143,8 @@ public final class Producer {
    *
    * @param intervals the media segments' intervals, on which the producer groups the output
    * @param gracePeriod how long FFmpeg may take to exit once its output ends and the sink has
-   *     accepted its last segment, after a stop asks it to quit, and after the producer asks it to
-   *     terminate
+   *     accepted the segment in delivery, after a stop asks it to quit, and after the producer asks
+   *     it to terminate
    * @param stallTimeout how long FFmpeg may write nothing while the reader reads its output
    * @param encodedFrameRate the frame rate an attempt that encodes video forces on its output, so
    *     that the producer fails an output holding a video sample shorter than half a frame; empty
@@ -633,32 +638,37 @@ public final class Producer {
   private void conclude(ReadingEnding ending) {
     Runnable conclusion =
         switch (ending) {
-          case EndOfOutput() ->
-              () -> settleAtExitOnceAccepted(this::outcomeOfCompleteOutput, notExited());
-          case TruncatedOutput(var failure) ->
-              () -> settleAtExitOnceAccepted(() -> failure, failure);
+          case EndOfOutput() -> this::settleCompleteOutputOnceAccepted;
+          case EndOfOutputWithFailedExit(var failure) -> () -> settleUnlessDecided(failure);
+          case EndOfOutputWithoutExit() -> () -> failAndTerminateFfmpeg(notExited());
+          case TruncatedOutput(var failure) -> () -> settleTruncatedOutputAtExit(failure);
           case Abandoned(var failure) -> () -> abandon(failure);
           case Decided() -> ffmpeg::discardRemainingOutput;
         };
     conclusion.run();
   }
 
-  // FFmpeg's exit decides a complete output's outcome, and a non-zero exit takes precedence over
-  // any outcome. A truncated output fails whether or not FFmpeg exits, so it keeps its own reason
-  // as the failure when FFmpeg outlives the grace period.
-  private void settleAtExitOnceAccepted(
-      Supplier<AttemptOutcome> outcomeOnCleanExit, Failed failureWithoutExit) {
+  // FFmpeg has exited cleanly, so only the acceptance of the last segment is outstanding.
+  private void settleCompleteOutputOnceAccepted() {
+    if (tryAwaitAcceptanceOfDeliveryInFlight()) {
+      settleUnlessDecided(outcomeOfCompleteOutput());
+    }
+  }
+
+  // A non-zero exit explains the truncation, so it takes precedence. A truncated output fails
+  // whether or not FFmpeg exits, so it keeps its own reason as the failure when FFmpeg outlives
+  // the grace period.
+  private void settleTruncatedOutputAtExit(Failed truncation) {
     if (!tryAwaitAcceptanceOfDeliveryInFlight()) {
       return;
     }
 
     if (!ffmpeg.tryAwaitExitWithinGracePeriod()) {
-      failAndTerminateFfmpeg(failureWithoutExit);
+      failAndTerminateFfmpeg(truncation);
       return;
     }
 
-    var failureAtExit = ffmpeg.failureAtExit().<AttemptOutcome>map(failure -> failure);
-    settleUnlessDecided(failureAtExit.orElseGet(outcomeOnCleanExit));
+    settleUnlessDecided(ffmpeg.failureAtExit().orElse(truncation));
   }
 
   private void settleUnlessDecided(AttemptOutcome outcome) {
@@ -670,9 +680,7 @@ public final class Producer {
   private Failed notExited() {
     return new Failed(
         ProducerFailure.PROCESS_DID_NOT_EXIT,
-        "FFmpeg did not exit within "
-            + ffmpeg.gracePeriod()
-            + " after its output ended and its last segment was accepted");
+        "FFmpeg did not exit within " + ffmpeg.gracePeriod() + " after its output ended");
   }
 
   // The segment already in delivery is complete, so the reader lets it finish before it ends a
@@ -767,18 +775,51 @@ public final class Producer {
   }
 
   // Moves the segments the next unit closes into the queue, the last segments at the end of the
-  // output, and returns what ends reading once they are handed off. Neither the unit nor anything
-  // else that references the segments outlives this, so a segment whose delivery has released its
-  // memory is unreachable while the next waits for its handoff.
+  // output of an FFmpeg that exited cleanly, and returns what ends reading once they are handed
+  // off. Neither the unit nor anything else that references the segments outlives this, so a
+  // segment whose delivery has released its memory is unreachable while the next waits for its
+  // handoff.
   private Optional<ReadingEnding> closeSegmentsOfNextUnit(Deque<ClosedSegment> closedSegments)
       throws IOException {
     var unit = reader.next();
     if (unit.isEmpty()) {
-      return Optional.of(closeLastSegments(closedSegments));
+      return Optional.of(closeLastSegmentsOnceFfmpegExitsCleanly(closedSegments));
     }
 
     advanceOutputEnd(unit.orElseThrow());
     return closeSegmentsOf(unit.orElseThrow(), closedSegments);
+  }
+
+  // FFmpeg's output ends where the source ends only when FFmpeg then exits cleanly. An FFmpeg that
+  // fails stops writing wherever it is, which cuts short the open segment and the audio of each
+  // segment that awaits its audio. So the end of the output closes those segments only after a
+  // clean exit. The segment already in delivery is complete, so the sink accepts it first.
+  private ReadingEnding closeLastSegmentsOnceFfmpegExitsCleanly(
+      Deque<ClosedSegment> closedSegments) {
+    endPauses();
+    if (!tryAwaitAcceptanceOfDeliveryInFlight()) {
+      return new Decided();
+    }
+
+    if (!tryAwaitExitAfterTheEndOfTheOutput()) {
+      return new EndOfOutputWithoutExit();
+    }
+
+    return ffmpeg
+        .failureAtExit()
+        .<ReadingEnding>map(EndOfOutputWithFailedExit::new)
+        .orElseGet(() -> closeLastSegments(closedSegments));
+  }
+
+  // FFmpeg writes nothing more, so the time it takes to exit is neither a stall nor production
+  // time of the last segment.
+  private boolean tryAwaitExitAfterTheEndOfTheOutput() {
+    pauseTimers();
+    try {
+      return ffmpeg.tryAwaitExitWithinGracePeriod();
+    } finally {
+      resumeTimers();
+    }
   }
 
   // Empty unless reading ends once the closed segments are handed off: because the unit skipped a

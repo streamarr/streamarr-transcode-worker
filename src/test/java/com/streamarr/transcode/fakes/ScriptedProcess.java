@@ -81,6 +81,7 @@ public final class ScriptedProcess extends Process {
   private final CompletableFuture<Void> pauseReached = new CompletableFuture<>();
   private final CompletableFuture<Void> inputBlocked = new CompletableFuture<>();
   private final CompletableFuture<Void> exitAwaited = new CompletableFuture<>();
+  private final CompletableFuture<Void> exitAwaitedWithinABound = new CompletableFuture<>();
   private final InputStream stdout = new ScriptedOutput();
   private final InputStream errorOutput = new ScriptedErrorOutput();
   private final ScriptedInput stdinStream = new ScriptedInput();
@@ -258,6 +259,11 @@ public final class ScriptedProcess extends Process {
     return exitAwaited.copy();
   }
 
+  /** Completes once something waits for the process to exit within a bound. */
+  public CompletableFuture<Void> exitAwaitedWithinABound() {
+    return exitAwaitedWithinABound.copy();
+  }
+
   /** Whether something closed standard input, as the end of FFmpeg's piped media input. */
   public synchronized boolean hasInputEnded() {
     return inputEnded;
@@ -290,6 +296,7 @@ public final class ScriptedProcess extends Process {
 
   @Override
   public boolean waitFor(long timeout, TimeUnit unit) throws InterruptedException {
+    exitAwaitedWithinABound.complete(null);
     try {
       exit.get(timeout, unit);
       return true;

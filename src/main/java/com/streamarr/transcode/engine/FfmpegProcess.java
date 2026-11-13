@@ -21,8 +21,8 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses
    * Starts FFmpeg for the job attempt.
    *
    * @param gracePeriod how long FFmpeg may take to exit once its output ends and the sink has
-   *     accepted its last segment, after a stop asks it to quit, and after the producer asks it to
-   *     terminate
+   *     accepted the segment in delivery, after a stop asks it to quit, and after the producer asks
+   *     it to terminate
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
