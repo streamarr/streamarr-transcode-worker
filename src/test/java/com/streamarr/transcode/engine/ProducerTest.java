@@ -1092,6 +1092,44 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // The same video. The copied audio reaches the interval's end at 1 s, and it resumes at 1.042 s
+  // and lasts as long as the video. The gap is one video frame of 1/24 s, 2,000 ticks of the
+  // audio's 48,000, and so twice as long as one audio frame of 1/48 s. A gap of one frame is
+  // within the frame tolerance of ADR 0060, so the dropped audio still continues the audio that
+  // segment 0 takes.
+  @Test
+  @DisplayName(
+      "Should deliver the output's last segment when its encoded video runs past its interval"
+          + " without a keyframe and the copied audio resumes after it one video frame after it"
+          + " stopped")
+  void
+      shouldDeliverTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioResumesAfterItOneVideoFrameAfterItStopped() {
+    var producer =
+        producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
+            oneSecondOfAudioSamples(), 50_000);
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The same video and audio, but the gap lasts one tick of the audio's 48,000 longer than one
+  // video frame, so it exceeds the frame tolerance of ADR 0060 and the dropped audio does not
+  // continue the audio that segment 0 takes.
+  @Test
+  @DisplayName(
+      "Should refuse the output's last segment when its encoded video runs past its interval"
+          + " without a keyframe and the copied audio resumes after it more than one video frame"
+          + " after it stopped")
+  void
+      shouldRefuseTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioResumesAfterItMoreThanOneVideoFrameAfterItStopped() {
+    var producer =
+        producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
+            oneSecondOfAudioSamples(), 50_001);
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
+  }
+
   // A fragment from a keyframe at 0 s holds 24 pictures of 1/24 s and copied audio of these
   // durations from 0 s. Without a keyframe, a second fragment holds two more pictures, to 1.083 s,
   // and four copied audio samples of 1/48 s from this tick of the audio's 48,000.

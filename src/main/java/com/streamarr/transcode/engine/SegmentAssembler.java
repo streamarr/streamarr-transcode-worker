@@ -376,6 +376,7 @@ final class SegmentAssembler {
 
     var copiedTail = lastBesideTheVideo.map(audio::tailOf).or(() -> earlierTail);
     var frameDuration = oneVideoFrame(videoSamples);
+    var oneFrame = new MediaTime(frameDuration, timeBase);
     var audioTail = copiedTail;
     // The audio after the output's last segment's interval was dropped, because no keyframe opened
     // the interval it belongs to. Once the copied audio reaches where the dropped audio starts, to
@@ -384,7 +385,7 @@ final class SegmentAssembler {
     // the video.
     var discardedStart = audio.discardedStart();
     if (discardedStart.isPresent()
-        && reachesToWithinOneFrame(copiedTail, discardedStart.get(), frameDuration)) {
+        && reachesToWithinOneFrame(copiedTail, discardedStart.get(), oneFrame)) {
       audioTail = audio.discardedTail();
     }
 
@@ -393,7 +394,7 @@ final class SegmentAssembler {
     }
 
     if (videoDecision instanceof VideoDecision.Encode
-        && reachesToWithinOneFrame(audioTail, videoEnd, frameDuration)) {
+        && reachesToWithinOneFrame(audioTail, videoEnd, oneFrame)) {
       return;
     }
 
@@ -413,14 +414,17 @@ final class SegmentAssembler {
         Reason.COPIED_AUDIO_RAN_SHORT, "a media segment has video beyond its copied audio");
   }
 
-  // Whether the copied audio reaches this end of the segment's video to within one audio or video
-  // frame: past the start of the video's last frame, or with one full audio frame more.
+  // Whether the copied audio reaches this end to within one audio or video frame: past the start of
+  // the video's last frame, or with one full audio frame more. The video frame counts in whole
+  // ticks of the end's time base, rounded down, which never changes the answer: the end of the
+  // segment's video shares the frame's time base, and where the dropped audio starts shares the
+  // copied audio's, whose end falls on a whole tick of it.
   private static boolean reachesToWithinOneFrame(
-      Optional<AudioTail> audioTail, MediaTime videoEnd, long frameDuration) {
-    var beforeLastFrame = new MediaTime(videoEnd.ticks() - frameDuration, videoEnd.timeBase());
-    return audioTail
-        .filter(tail -> tail.coversToWithinOneFrame(videoEnd, beforeLastFrame))
-        .isPresent();
+      Optional<AudioTail> audioTail, MediaTime end, MediaTime videoFrame) {
+    var beforeLastFrame =
+        new MediaTime(
+            Math.subtractExact(end.ticks(), videoFrame.floorIn(end.timeBase())), end.timeBase());
+    return audioTail.filter(tail -> tail.coversToWithinOneFrame(end, beforeLastFrame)).isPresent();
   }
 
   // Whether a segment that no copied audio reached before it comes before the copied audio's first
