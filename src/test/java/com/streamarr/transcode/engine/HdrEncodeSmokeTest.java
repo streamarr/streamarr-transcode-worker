@@ -499,6 +499,11 @@ class HdrEncodeSmokeTest {
   // The G, B and R planes of the first frame's centre 2x2 pixels, decoded to 10-bit RGB from the
   // colour description that the stream declares.
   private static int[] centreRgb(byte[] media) throws Exception {
+    return centreSamples(media, "gbrp10le");
+  }
+
+  // The planes of the first frame's centre 2x2 pixels in the 10-bit pixel format.
+  private static int[] centreSamples(byte[] media, String pixelFormat) throws Exception {
     var file = Files.createTempFile(root, "colour", ".mp4");
     Files.write(file, media);
     var process =
@@ -512,22 +517,22 @@ class HdrEncodeSmokeTest {
                 "-frames:v",
                 "1",
                 "-vf",
-                "crop=2:2:32:18,format=gbrp10le",
+                "crop=2:2:32:18,format=" + pixelFormat,
                 "-f",
                 "rawvideo",
                 "-")
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start();
-    var samples = process.getInputStream().readAllBytes();
+    var bytes = process.getInputStream().readAllBytes();
     assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
     assertThat(process.exitValue()).isZero();
-    var buffer = ByteBuffer.wrap(samples).order(ByteOrder.LITTLE_ENDIAN);
-    var rgb = new int[samples.length / 2];
-    for (var index = 0; index < rgb.length; index++) {
-      rgb[index] = Short.toUnsignedInt(buffer.getShort());
+    var buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+    var samples = new int[bytes.length / 2];
+    for (var index = 0; index < samples.length; index++) {
+      samples[index] = Short.toUnsignedInt(buffer.getShort());
     }
 
-    return rgb;
+    return samples;
   }
 
   // The largest luma sample of any decoded frame, in the stream's bit depth. The metadata key is
