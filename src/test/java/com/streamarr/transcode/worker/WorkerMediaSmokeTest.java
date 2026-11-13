@@ -6144,8 +6144,22 @@ class WorkerMediaSmokeTest {
       int[] byTime, BitSet delivered, long deliveredTwice, int[] played, int[] times) {
 
     static DeliveredAudio of(Path media) throws Exception {
+      return decodedWith(media, List.of());
+    }
+
+    // The decode options must leave one channel of the delivered audio's first stream, and must
+    // keep its frames.
+    private static DeliveredAudio decodedWith(Path media, List<String> decodeOptions)
+        throws Exception {
       var decoded = media.resolveSibling(media.getFileName() + ".s32le");
-      runFfmpeg(List.of("-i", media.toString(), "-map", "0:a:0", "-f", "s32le"), decoded);
+      runFfmpeg(
+          Stream.of(
+                  List.of("-i", media.toString(), "-map", "0:a:0"),
+                  decodeOptions,
+                  List.of("-f", "s32le"))
+              .flatMap(List::stream)
+              .toList(),
+          decoded);
       var samples =
           ByteBuffer.wrap(Files.readAllBytes(decoded)).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
       var frames =
