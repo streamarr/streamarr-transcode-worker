@@ -54,6 +54,24 @@ class FfmpegCommandBuilderHdrEncodeTest {
     assertThatThrownBy(encode::build).isInstanceOf(IllegalArgumentException.class);
   }
 
+  // Only the conversion of an SDR or untagged source to BT.709 reads the assumed matrix (ADR 0013).
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = VideoDynamicRange.CompatibleBase.class,
+      names = {"PQ", "HLG", "NONE"})
+  @DisplayName(
+      "Should refuse an encode when it assumes a matrix for a source whose compatible base is PQ,"
+          + " HLG or none")
+  void shouldRefuseAnEncodeWhenItAssumesAMatrixForASourceWhoseCompatibleBaseIsPqHlgOrNone(
+      VideoDynamicRange.CompatibleBase base) {
+    var encode =
+        hevcMain10Encode(VideoDynamicRange.sdr())
+            .sourceDynamicRange(range(base))
+            .assumedSourceMatrix(Optional.of(AssumedSourceMatrix.BT709));
+
+    assertThatThrownBy(encode::build).isInstanceOf(IllegalArgumentException.class);
+  }
+
   @Test
   @DisplayName("Should refuse a PQ encode when it carries no static HDR metadata")
   void shouldRefuseAPqEncodeWhenItCarriesNoStaticHdrMetadata() {
