@@ -349,6 +349,9 @@ class WorkerMediaSmokeTest {
   private static final int VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT = 17;
   // About three times the byte rate of that source's video, which fills it after the audio's end.
   private static final int THRICE_THE_VIDEOS_BYTE_RATE = 280_000;
+  // About three times the byte rate of the profile 5 source's video, which fills that source after
+  // the audio's end.
+  private static final int THRICE_THE_PROFILE_5_VIDEOS_BYTE_RATE = 200_000;
   // JobAttemptProgress.ffmpeg_bytes_read in the worker contract, which the pinned SDK predates.
   private static final int FFMPEG_BYTES_READ_FIELD = 4;
   // About three times the 256 kb/s of the audio that makes up nearly all of a source's bytes.
@@ -6975,17 +6978,7 @@ class WorkerMediaSmokeTest {
       assertThat(delivered.silentSamples(COUNTED_AUDIO_SAMPLES, advertisedEndSamples))
           .as("the samples from the audio's end at 10 s to the advertised end at 51 s")
           .isEqualTo(new SilentSamples(advertisedEndSamples - COUNTED_AUDIO_SAMPLES, 0, 0));
-      assertThat(completion.longestTimeWithoutOutput())
-          .as("the longest time in which the attempt's output did not advance")
-          .isGreaterThan(PACED_STALL_TIMEOUT);
-      assertThat(completion.longestSilence())
-          .as("the longest time without a progress report before the attempt completed")
-          .isLessThan(SERVER_STALL_THRESHOLD);
-      assertThat(completion.progress().stream().flatMapToLong(TimedProgress::ffmpegBytesRead))
-          .as("the bytes read that the reports carry, each only once it has grown")
-          .isNotEmpty()
-          .doesNotHaveDuplicates()
-          .isSorted();
+      assertProgressThroughAPauseLongerThanTheStallTimeout(completion);
     }
   }
 
@@ -7018,22 +7011,184 @@ class WorkerMediaSmokeTest {
 
       var failed = executeProbedJobExpectingFailure(engine, source.getParent(), job.build());
 
-      assertThat(failed.failure().getFailure())
-          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      var stoppedAt = pipes.firstStoppedAtNanos();
-      assertThat(stoppedAt).as("when a pipe served its last byte").isPresent();
-      assertThat(failed.timeWithoutOutputBefore(stoppedAt.getAsLong()))
-          .as("how long the attempt's output had not advanced when the source stopped")
-          .isGreaterThan(PACED_STALL_TIMEOUT);
-      assertThat(failed.lastProgressAfter(stoppedAt.getAsLong()))
-          .as("the last progress report, counted from the source's last byte")
-          .isLessThan(Duration.ofSeconds(3));
-      assertThat(Duration.ofNanos(failed.failedAtNanos() - stoppedAt.getAsLong()))
-          .as("the failure report, counted from the source's last byte")
-          .isBetween(
-              PACED_STALL_TIMEOUT.minusSeconds(1),
-              PACED_STALL_TIMEOUT.plus(FFMPEG_GRACE_PERIOD).plusSeconds(3));
+      assertFailureWithinTheStallTimeoutOfTheSourcesLastByte(failed, pipes);
     }
+  }
+
+  // The encode of a profile 5 source's copy reads the copy on its standard input, and the source's
+  // audio from the source, an input of its own. FFmpeg holds the copy back while the audio trails.
+  // Once the audio's packets stop, the encoding FFmpeg writes nothing until the audio's input has
+  // read on to the source's end. The copying FFmpeg reads nothing meanwhile, because it waits for
+  // the encoding FFmpeg to read the copy. Both FFmpegs read the source through pipes at about
+  // three times real time, so reading the 41 s of video after the audio's end takes about 14 s:
+  // longer than the engine's stall timeout of 5 s and than the server's stall threshold. The
+  // worker counts the bytes that the encoding FFmpeg reads as the attempt's progress, and reports
+  // them, while that FFmpeg writes nothing.
+  @Test
+  @DisplayName(
+      "Should complete and report progress throughout when the encode of a Dolby Vision profile 5"
+          + " source's copy reads a paced source's video for longer than the stall timeout after"
+          + " the audio's end")
+  void shouldCompleteAndReportProgressWhenTheEncodeOfAProfile5CopyReadsOnLongAfterTheAudiosEnd()
+      throws Exception {
+    var source = countedAudioEndsLongBeforeNoisyProfile5VideoSource();
+    var job = profile5CountedAudioJob(source);
+    var commands = new CopyOnWriteArrayList<List<String>>();
+
+    try (var pipes = new PacedSourcePipes(root, THRICE_THE_PROFILE_5_VIDEOS_BYTE_RATE)) {
+      var engine =
+          engine(
+              softwareCapabilities(),
+              capturingCommands(pipes.feeding(new ProcessBuilderLauncher()), commands),
+              PACED_STALL_TIMEOUT);
+
+      var completion = executeToCompletion(engine, source.getParent(), job.build());
+
+      assertThat(commands).as("the copying FFmpeg and the encoding FFmpeg").hasSize(2);
+      assertThat(completion.uploads().names())
+          .containsExactlyElementsOf(uploadNames(VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT));
+      assertProgressThroughAPauseLongerThanTheStallTimeout(completion);
+    }
+  }
+
+  // The pipes stop 7 s into the read after the audio's end and stay open, as a mount that hangs
+  // does, so the encoding FFmpeg waits in a read of the audio's input. By then the read has
+  // outlasted the stall timeout as progress. From then on nothing counts as progress: the reports
+  // stop, and the producer fails the attempt once the encoding FFmpeg has read nothing for the
+  // stall timeout. An FFmpeg that waits in a read ignores the request to terminate, so the producer
+  // destroys both FFmpegs after the grace period and then reports the failure.
+  @Test
+  @DisplayName(
+      "Should fail the attempt within the stall timeout of the source's last byte when the source"
+          + " stops serving the encode of a Dolby Vision profile 5 source's copy while its audio's"
+          + " input reads on")
+  void shouldFailTheAttemptWithinTheStallTimeoutWhenTheSourceStopsServingTheEncodeOfAProfile5Copy()
+      throws Exception {
+    var source = countedAudioEndsLongBeforeNoisyProfile5VideoSource();
+    var job = profile5CountedAudioJob(source);
+    var servedBytes = lastAudioPacketOffset(source) + 7L * THRICE_THE_PROFILE_5_VIDEOS_BYTE_RATE;
+
+    try (var pipes =
+        new PacedSourcePipes(root, THRICE_THE_PROFILE_5_VIDEOS_BYTE_RATE, servedBytes)) {
+      var engine =
+          engine(
+              softwareCapabilities(),
+              pipes.feeding(new ProcessBuilderLauncher()),
+              PACED_STALL_TIMEOUT);
+
+      var failed = executeProbedJobExpectingFailure(engine, source.getParent(), job.build());
+
+      assertFailureWithinTheStallTimeoutOfTheSourcesLastByte(failed, pipes);
+    }
+  }
+
+  // A job that encodes the profile 5 source's counted audio to FLAC, as the counted job does, and
+  // pads it to the advertised end at 51 s. The video ends there too, so the job holds no picture.
+  private static VariantJob.Builder profile5CountedAudioJob(Path source) {
+    var job =
+        profile5Job(source, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE, 0);
+    paddedToSlots(job, VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(1)
+        .setStreamIndex(1)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO);
+    return job;
+  }
+
+  // 51 s of noise in 10-bit HEVC at 64x36 and 24 fps with a keyframe every second, at about 68 kB
+  // a second, beside the counted source's 10 s of 24-bit mono FLAC. Behind each picture's access
+  // unit delimiter, the picture's sample starts with the stand-in RPU of the picture before, as
+  // mkvmerge wrote it before version 57. The muxer interleaves strictly by time: by default it
+  // wrote the copied video's first 40 s before most of the audio's packets. After the audio's last
+  // packet, about 0.9 MB into the file, 41 s of video alone follow in about 2.8 MB.
+  private static synchronized Path countedAudioEndsLongBeforeNoisyProfile5VideoSource()
+      throws Exception {
+    return buildFixtureOnce(
+        rpuLayoutSources.resolve("counted-audio-ends-long-before-noisy-profile-5-video.mkv"),
+        output -> {
+          var pictures = rpuLayoutSources.resolve("noisy-pictures.hevc");
+          runFfmpeg(
+              List.of(
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "testsrc=size=64x36:rate=24:duration=51,noise=alls=100:allf=t+u,"
+                      + "format=yuv420p10le",
+                  "-c:v",
+                  "libx265",
+                  "-x265-params",
+                  "keyint=24:min-keyint=24:bframes=0:aud=1:crf=0:log-level=error",
+                  "-f",
+                  "hevc"),
+              pictures);
+          var withRpus = rpuLayoutSources.resolve("noisy-pictures-with-rpus.hevc");
+          Files.write(
+              withRpus,
+              withStandInRpus(Files.readAllBytes(pictures), RpuLayout.AHEAD_OF_THE_NEXT_PICTURE));
+          var arguments =
+              Stream.of(
+                      List.of("-i", withRpus.toString()),
+                      countedAudioInput(),
+                      List.of(
+                          "-map",
+                          "0:v",
+                          "-map",
+                          "1:a",
+                          "-c:v",
+                          "copy",
+                          "-bsf:v",
+                          "setts=pts=N*1/24/TB:dts=N*1/24/TB",
+                          "-c:a",
+                          "flac",
+                          "-sample_fmt",
+                          "s32",
+                          "-max_interleave_delta",
+                          "0"))
+                  .flatMap(List::stream)
+                  .toList();
+          runFfmpeg(arguments, output);
+        });
+  }
+
+  // The attempt's output did not advance for longer than the stall timeout, and the reports never
+  // stopped for the server's stall threshold and carried the bytes read as they grew.
+  private static void assertProgressThroughAPauseLongerThanTheStallTimeout(
+      CompletedExecution completion) {
+    assertThat(completion.longestTimeWithoutOutput())
+        .as("the longest time in which the attempt's output did not advance")
+        .isGreaterThan(PACED_STALL_TIMEOUT);
+    assertThat(completion.longestSilence())
+        .as("the longest time without a progress report before the attempt completed")
+        .isLessThan(SERVER_STALL_THRESHOLD);
+    assertThat(completion.progress().stream().flatMapToLong(TimedProgress::ffmpegBytesRead))
+        .as("the bytes read that the reports carry, each only once it has grown")
+        .isNotEmpty()
+        .doesNotHaveDuplicates()
+        .isSorted();
+  }
+
+  // The attempt's output had not advanced for longer than the stall timeout when the source served
+  // its last byte. The reports stopped soon after that byte, and the worker reported a failure
+  // within the stall timeout and the grace period.
+  private static void assertFailureWithinTheStallTimeoutOfTheSourcesLastByte(
+      FailedExecution failed, PacedSourcePipes pipes) {
+    assertThat(failed.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+    var stoppedAt = pipes.firstStoppedAtNanos();
+    assertThat(stoppedAt).as("when a pipe served its last byte").isPresent();
+    assertThat(failed.timeWithoutOutputBefore(stoppedAt.getAsLong()))
+        .as("how long the attempt's output had not advanced when the source stopped")
+        .isGreaterThan(PACED_STALL_TIMEOUT);
+    assertThat(failed.lastProgressAfter(stoppedAt.getAsLong()))
+        .as("the last progress report, counted from the source's last byte")
+        .isLessThan(Duration.ofSeconds(3));
+    assertThat(Duration.ofNanos(failed.failedAtNanos() - stoppedAt.getAsLong()))
+        .as("the failure report, counted from the source's last byte")
+        .isBetween(
+            PACED_STALL_TIMEOUT.minusSeconds(1),
+            PACED_STALL_TIMEOUT.plus(FFMPEG_GRACE_PERIOD).plusSeconds(3));
   }
 
   private static long lastAudioPacketOffset(Path source) throws Exception {
@@ -7072,12 +7227,15 @@ class WorkerMediaSmokeTest {
   }
 
   /**
-   * Feeds FFmpeg each of its inputs through a named pipe of its own, in place of the path that its
-   * command reads, at a steady number of bytes a second, as a slow mount would serve it.
+   * Feeds FFmpeg each of its inputs that names a file through a named pipe of its own, in place of
+   * the path that its command reads, at a steady number of bytes a second, as a slow mount would
+   * serve it. An input on FFmpeg's standard input, such as the copy that the encode of a profile 5
+   * source's copy reads, stays as the worker feeds it.
    */
   private static final class PacedSourcePipes implements AutoCloseable {
 
     private static final int WRITES_PER_SECOND = 20;
+    private static final String STANDARD_INPUT = "pipe:0";
 
     private final Path directory;
     private final int bytesPerWrite;
@@ -7105,9 +7263,10 @@ class WorkerMediaSmokeTest {
         var inputs =
             IntStream.range(1, command.size())
                 .filter(argument -> command.get(argument - 1).equals("-i"))
+                .filter(argument -> !command.get(argument).equals(STANDARD_INPUT))
                 .boxed()
                 .toList();
-        assertThat(inputs).as("the command reads an input").isNotEmpty();
+        assertThat(inputs).as("the command reads a file").isNotEmpty();
         var adjusted = new ArrayList<>(command);
         for (var input : inputs) {
           adjusted.set(input, pipeFeeding(readSource(Path.of(command.get(input)))).toString());

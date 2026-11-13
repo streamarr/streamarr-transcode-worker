@@ -202,6 +202,11 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   }
 
   @Override
+  public Process audioReadingProcess() {
+    return encode;
+  }
+
+  @Override
   public Duration gracePeriod() {
     return gracePeriod;
   }
