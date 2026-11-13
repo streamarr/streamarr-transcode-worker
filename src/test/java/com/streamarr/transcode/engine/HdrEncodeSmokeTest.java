@@ -27,13 +27,17 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Runs 10-bit and HDR encodes (streamarr/streamarr-transcode-worker#27) through the producer over
@@ -550,27 +554,30 @@ class HdrEncodeSmokeTest {
     assertThat(handed).as("the pictures handed to hevc_nvenc").isEqualTo(expected);
   }
 
+  static Stream<Arguments> openGopSeeks() {
+    return Arrays.stream(ReshapeChain.values())
+        .flatMap(
+            chain ->
+                Arrays.stream(OpenGopContainer.values())
+                    .map(container -> Arguments.of(chain, container)));
+  }
+
   // ADR 0037 drops the leading pictures of a hardware decode's first keyframe with a bitstream
   // filter. The worker's NVDEC decode of an HEVC source runs without it: FFmpeg's HEVC decoder
-  // skips the RASL pictures of the CRA picture it starts at before they reach NVDEC. The software
-  // chain needs no GPU, so CI also runs this test's commands and comparison.
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(ReshapeChain.class)
+  // withholds from NVDEC the RASL pictures of the CRA picture it starts at. The software chain
+  // needs no GPU, so CI also runs this test's commands and comparison.
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("openGopSeeks")
   @DisplayName(
       "Should hand hevc_nvenc the start attempt's pictures at the same times when a seek attempt"
           + " starts at an open-GOP keyframe of a profile 5 source whose leading pictures it"
           + " cannot decode")
   void shouldHandHevcNvencTheStartAttemptsPicturesWhenASeekStartsAtAnOpenGopKeyframe(
-      ReshapeChain chain) throws Exception {
-    if (chain == ReshapeChain.NVDEC_AND_CUDA_FILTERS) {
-      assumeHevcNvencReshapesOnTheGpu();
-    }
+      ReshapeChain chain, OpenGopContainer container) throws Exception {
+    assumeTheHostRuns(chain);
     var encode = onHevcNvenc(profile5EncodeBuilder()).build();
-    var source = openGopProfile5Source();
-    var fromSegment2 =
-        request(source, encode, 2).toBuilder()
-            .seekPosition(Optional.of(SECOND_OPEN_GOP_KEYFRAME))
-            .build();
+    var source = openGopProfile5Source(container);
+    var fromSegment2 = attemptFromSegment2(container, source, encode);
     var segment2Start = Duration.ofSeconds(2L * PROFILE_5_PERIOD_SECONDS);
 
     var fromStart = picturesHandedToTheEncoder(chain, request(source, encode, 0));
@@ -630,6 +637,22 @@ class HdrEncodeSmokeTest {
   enum ReshapeChain {
     NVDEC_AND_CUDA_FILTERS,
     SOFTWARE_DECODE_AND_CPU_FILTERS
+  }
+
+  /** The container of the open-GOP source that a seek attempt reads. */
+  enum OpenGopContainer {
+    // The MP4 demuxer hands the HEVC decoder the CRA picture first, so the decoder skips the CRA
+    // picture's RASL pictures.
+    MP4,
+    // The MPEG-TS demuxer hands the HEVC decoder pictures from before the CRA picture first, so the
+    // decoder refuses the CRA picture's RASL pictures, whose reference pictures it lacks.
+    MPEG_TS
+  }
+
+  private static void assumeTheHostRuns(ReshapeChain chain) {
+    if (chain == ReshapeChain.NVDEC_AND_CUDA_FILTERS) {
+      assumeHevcNvencReshapesOnTheGpu();
+    }
   }
 
   private static void assumeHevcNvencReshapesOnTheGpu() {
@@ -800,6 +823,99 @@ class HdrEncodeSmokeTest {
         .isNotEmpty()
         .allSatisfy(count -> assertThat(count).isPositive());
     return Files.move(written, source);
+  }
+
+  // The open-GOP source in the container. The MPEG-TS source holds the MP4 source's video stream,
+  // packet for packet.
+  private static Path openGopProfile5Source(OpenGopContainer container) throws Exception {
+    var mp4 = openGopProfile5Source();
+    if (container == OpenGopContainer.MP4) {
+      return mp4;
+    }
+
+    var source = root.resolve("dolby-vision-5-open-gop.ts");
+    if (Files.exists(source)) {
+      return source;
+    }
+
+    var written = root.resolve("dolby-vision-5-open-gop-written.ts");
+    runToCompletion(
+        List.of(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            mp4.toString(),
+            "-map",
+            "0:v:0",
+            "-c",
+            "copy",
+            "-f",
+            "mpegts",
+            written.toString()));
+    return Files.move(written, source);
+  }
+
+  // An attempt from segment 2 at 4 s, with the position that the server sends for the CRA picture
+  // at 50/24 s: its presentation time from an MP4 source, and its decode time from an MPEG-TS
+  // source (ADR 0037).
+  private static TranscodeRequest attemptFromSegment2(
+      OpenGopContainer container, Path source, VideoDecision.Encode encode) throws Exception {
+    var position =
+        switch (container) {
+          case MP4 -> SECOND_OPEN_GOP_KEYFRAME;
+          case MPEG_TS -> decodeTimeOfTheKeyframeAt(source, SECOND_OPEN_GOP_KEYFRAME);
+        };
+    return request(source, encode, 2).toBuilder().seekPosition(Optional.of(position)).build();
+  }
+
+  // The decode time of the keyframe that presents at the time. Both times count from the
+  // container's start time, as the times that the server stores for each keyframe do.
+  private static Duration decodeTimeOfTheKeyframeAt(Path source, Duration presentationTime)
+      throws Exception {
+    var probed =
+        JsonMapper.builder()
+            .build()
+            .readTree(
+                runToCompletion(
+                    List.of(
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "format=start_time:stream=time_base:packet=pts,dts,flags",
+                        "-of",
+                        "json",
+                        source.toString())));
+    var timeBase = probed.path("streams").path(0).path("time_base").asString().split("/");
+    var startTicks =
+        new BigDecimal(probed.path("format").path("start_time").asString())
+            .multiply(new BigDecimal(timeBase[1]))
+            .divide(new BigDecimal(timeBase[0]), 0, RoundingMode.HALF_UP)
+            .longValueExact();
+    return probed
+        .path("packets")
+        .valueStream()
+        .filter(packet -> packet.path("flags").asString().startsWith("K"))
+        .filter(
+            packet ->
+                timeOf(packet.path("pts").asLong() - startTicks, timeBase).equals(presentationTime))
+        .map(packet -> timeOf(packet.path("dts").asLong() - startTicks, timeBase))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private static Duration timeOf(long ticks, String[] timeBase) {
+    return Duration.ofNanos(
+        BigDecimal.valueOf(ticks)
+            .multiply(new BigDecimal(timeBase[0]))
+            .movePointRight(9)
+            .divide(new BigDecimal(timeBase[1]), 0, RoundingMode.HALF_EVEN)
+            .longValueExact());
   }
 
   // 256x144 testsrc2 pictures, each one different, with the fixture's RPUs, which libx265 encodes
@@ -1092,16 +1208,7 @@ class HdrEncodeSmokeTest {
     return lines.stream()
         .filter(line -> !line.startsWith("#") && !line.isBlank())
         .map(line -> line.split(",\\s*"))
-        .map(
-            fields ->
-                new Picture(
-                    Duration.ofNanos(
-                        new BigDecimal(fields[2])
-                            .multiply(new BigDecimal(timeBase[0]))
-                            .movePointRight(9)
-                            .divide(new BigDecimal(timeBase[1]), 0, RoundingMode.HALF_EVEN)
-                            .longValueExact()),
-                    fields[5]))
+        .map(fields -> new Picture(timeOf(Long.parseLong(fields[2]), timeBase), fields[5]))
         .toList();
   }
 
