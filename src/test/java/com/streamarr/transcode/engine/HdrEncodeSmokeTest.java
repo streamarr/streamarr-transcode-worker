@@ -583,15 +583,40 @@ class HdrEncodeSmokeTest {
     var fromStart = picturesHandedToTheEncoder(chain, request(source, encode, 0));
     var fromTheKeyframe = picturesHandedToTheEncoder(chain, fromSegment2);
 
-    assertThat(firstDecodedPicture(chain, fromSegment2))
-        .as("the seek attempt's first decoded picture, the CRA picture of its keyframe")
-        .isEqualTo(SECOND_OPEN_GOP_KEYFRAME);
     assertThat(fromStart).extracting(Picture::md5).doesNotHaveDuplicates();
     assertThat(fromTheKeyframe)
         .isNotEmpty()
         .isEqualTo(
             fromStart.stream()
                 .filter(picture -> picture.time().compareTo(segment2Start) >= 0)
+                .toList());
+  }
+
+  // ADR 0037: the worker's filters drop each picture that presents before the first segment, so a
+  // wrong picture there shows only in what the decoder outputs. Software decoding writes no CUDA
+  // frame, and the NVDEC case copies CUDA frames to system memory, so that case fails when NVDEC
+  // does not start and FFmpeg decodes in software instead.
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("openGopSeeks")
+  @DisplayName(
+      "Should decode the start attempt's picture at each time from an open-GOP keyframe on, and no"
+          + " picture before it, when a seek attempt starts at that keyframe of a profile 5 source")
+  void shouldDecodeTheStartAttemptsPicturesFromTheKeyframeOnWhenASeekStartsAtAnOpenGopKeyframe(
+      ReshapeChain chain, OpenGopContainer container) throws Exception {
+    assumeTheHostRuns(chain);
+    var encode = onHevcNvenc(profile5EncodeBuilder()).build();
+    var source = openGopProfile5Source(container);
+
+    var fromStart = picturesThatTheDecoderOutputs(chain, request(source, encode, 0));
+    var fromTheKeyframe =
+        picturesThatTheDecoderOutputs(chain, attemptFromSegment2(container, source, encode));
+
+    assertThat(fromStart).extracting(Picture::md5).doesNotHaveDuplicates();
+    assertThat(fromTheKeyframe)
+        .as("the seek attempt's decoded pictures, from the CRA picture at 50/24 s on")
+        .containsExactlyElementsOf(
+            fromStart.stream()
+                .filter(picture -> picture.time().compareTo(SECOND_OPEN_GOP_KEYFRAME) >= 0)
                 .toList());
   }
 
@@ -1180,9 +1205,10 @@ class HdrEncodeSmokeTest {
         request(source, onHevcNvenc(profile5EncodeBuilder()).build(), 0));
   }
 
-  private static Duration firstDecodedPicture(ReshapeChain chain, TranscodeRequest request)
-      throws Exception {
-    return pictures(workerCommand(chain, request), "null" + downloadOf(chain)).getFirst().time();
+  // The pictures that the decoder of the worker's command outputs, ahead of the worker's filters.
+  private static List<Picture> picturesThatTheDecoderOutputs(
+      ReshapeChain chain, TranscodeRequest request) throws Exception {
+    return pictures(workerCommand(chain, request), "null" + downloadOf(chain));
   }
 
   private static String downloadOf(ReshapeChain chain) {
