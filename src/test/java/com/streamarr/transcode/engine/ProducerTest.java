@@ -1119,7 +1119,8 @@ class ProducerTest {
   // A variable frame rate. The output ends with segment 1, whose pictures end more than one video
   // frame before its interval's end. One video frame is the length that most of the segment's
   // pictures share, the shorter of two as common, and never shorter than its last picture. A longer
-  // picture that is neither does not widen it. The audio ends where segment 1 starts.
+  // picture that is neither does not widen it, even when a last picture of no duration ends where
+  // it does. The audio ends where segment 1 starts.
   @ParameterizedTest(name = "{1}, {0}")
   @MethodSource("silentLastSegmentsThatEndMoreThanOneVideoFrameEarly")
   @DisplayName(
@@ -1162,6 +1163,15 @@ class ProducerTest {
                     .intervalSeconds(1)
                     .opening(new Pictures(8, 1_800))
                     .closing(new Pictures(8, 1_000))
+                    .build()),
+            Named.of(
+                "six pictures of 1/24 s, one held still for 0.5 s, then one of no duration at"
+                    + " 1.75 s",
+                SilentLastSegment.builder()
+                    .intervalSeconds(1)
+                    .opening(new Pictures(6, 1_000))
+                    .closing(new Pictures(1, 12_000))
+                    .closing(new Pictures(1, 0))
                     .build())));
   }
 
@@ -1204,6 +1214,13 @@ class ProducerTest {
                     .intervalSeconds(1)
                     .opening(new Pictures(23, 1_000))
                     .closing(new Pictures(1, 24))
+                    .build()),
+            Named.of(
+                "23 pictures of 1/24 s, then one of no duration at 1.958 s",
+                SilentLastSegment.builder()
+                    .intervalSeconds(1)
+                    .opening(new Pictures(23, 1_000))
+                    .closing(new Pictures(1, 0))
                     .build())));
   }
 

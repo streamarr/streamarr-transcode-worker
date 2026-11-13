@@ -405,14 +405,17 @@ final class SegmentAssembler {
   // The length of one video frame in the segment: the duration that most of its pictures share, the
   // shorter of two as common, and never shorter than its last picture, as a full audio frame is
   // measured. One long picture, such as a still held for half a second, does not widen it unless
-  // that picture is the last.
+  // that picture is the last. Of pictures that end together, the last is the one presented last,
+  // so a final picture of no duration does not hand its place to the picture before it.
   private static long oneVideoFrame(List<CarriedSample> videoSamples) {
     var lastPicture =
         videoSamples.stream()
             .map(CarriedSample::sample)
             .max(
                 Comparator.comparingLong(
-                    sample -> Math.addExact(sample.presentationTime(), sample.duration())))
+                        (Sample sample) ->
+                            Math.addExact(sample.presentationTime(), sample.duration()))
+                    .thenComparingLong(Sample::presentationTime))
             .orElseThrow();
     var pictureCounts =
         videoSamples.stream()
