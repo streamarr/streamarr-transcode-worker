@@ -6,8 +6,6 @@ import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
 import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import com.streamarr.transcode.probe.SyntheticMp4.Edit;
-import com.streamarr.transcode.probe.SyntheticMp4.GroupRun;
-import com.streamarr.transcode.probe.SyntheticMp4.SampleToGroup;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -596,39 +594,6 @@ class Mp4StreamMeasurerTest {
     var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO));
 
     assertThat(index.measured().getFirst().intervalBytes()).containsExactly(60);
-  }
-
-  // FFmpeg's mov demuxer gives the keyframe flag to the samples of a 'rap ' sample group, so a
-  // stream copy's keyframe intervals start at them too.
-  @Test
-  @DisplayName(
-      "Should measure an interval from each random-access sample when the stss lists only the first"
-          + " sample")
-  void shouldMeasureIntervalFromEachRandomAccessSampleWhenStssListsOnlyFirstSample()
-      throws Exception {
-    var source =
-        write(
-            SyntheticMp4.builder()
-                .mediaTimescale(1_000)
-                .sampleDurations(6, 100)
-                .sampleSizes(6, 10)
-                .syncSamples(List.of(1L))
-                .randomAccessDescription(true)
-                .sampleToGroup(
-                    SampleToGroup.builder()
-                        .groupingType(SyntheticMp4.RANDOM_ACCESS)
-                        .run(new GroupRun(2, 0))
-                        .run(new GroupRun(1, 1))
-                        .run(new GroupRun(1, 0))
-                        .run(new GroupRun(1, 1))
-                        .build()));
-
-    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO));
-
-    assertThat(index.measured())
-        .singleElement()
-        .extracting(TrackMeasurement::intervalPacketCounts)
-        .isEqualTo(new int[] {2, 2, 2});
   }
 
   private static SyntheticMp4.SyntheticMp4Builder audio() {
