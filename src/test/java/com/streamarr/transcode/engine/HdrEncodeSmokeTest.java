@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
@@ -620,6 +621,37 @@ class HdrEncodeSmokeTest {
                 .toList());
   }
 
+  // ADR 0037: the decoder option showall makes the HEVC decoder output the pictures whose
+  // reference pictures it lacks. The worker never passes that option. A wrong picture with it
+  // shows that the MPEG-TS seek still reaches the refusal, so the comparison above can catch a
+  // decoder that stops refusing.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(ReshapeChain.class)
+  @DisplayName(
+      "Should decode a picture unlike the start attempt's at the same time when the decoder"
+          + " outputs the pictures that it refuses after a seek attempt reads an MPEG-TS source"
+          + " from an open-GOP keyframe")
+  void shouldDecodeAPictureUnlikeTheStartAttemptsWhenTheDecoderOutputsItsRefusedPictures(
+      ReshapeChain chain) throws Exception {
+    assumeTheHostRuns(chain);
+    var encode = onHevcNvenc(profile5EncodeBuilder()).build();
+    var source = openGopProfile5Source(OpenGopContainer.MPEG_TS);
+    var fromStart =
+        picturesThatTheDecoderOutputs(chain, request(source, encode, 0)).stream()
+            .collect(Collectors.toMap(Picture::time, Picture::md5));
+    var command =
+        new ArrayList<>(
+            workerCommand(chain, attemptFromSegment2(OpenGopContainer.MPEG_TS, source, encode)));
+    command.addAll(command.indexOf("-i"), List.of("-flags2", "+showall"));
+
+    var showingAll = picturesThatTheDecoderOutputs(chain, command);
+
+    assertThat(showingAll)
+        .as("the decoded pictures unlike the start attempt's picture at the same time")
+        .filteredOn(picture -> !picture.md5().equals(fromStart.get(picture.time())))
+        .isNotEmpty();
+  }
+
   /**
    * A profile 5 source that declares no transfer, the pictures of it that reach the reshape without
    * an RPU, and the matrix that its stream declares.
@@ -1208,7 +1240,12 @@ class HdrEncodeSmokeTest {
   // The pictures that the decoder of the worker's command outputs, ahead of the worker's filters.
   private static List<Picture> picturesThatTheDecoderOutputs(
       ReshapeChain chain, TranscodeRequest request) throws Exception {
-    return pictures(workerCommand(chain, request), "null" + downloadOf(chain));
+    return picturesThatTheDecoderOutputs(chain, workerCommand(chain, request));
+  }
+
+  private static List<Picture> picturesThatTheDecoderOutputs(
+      ReshapeChain chain, List<String> workerCommand) throws Exception {
+    return pictures(workerCommand, "null" + downloadOf(chain));
   }
 
   private static String downloadOf(ReshapeChain chain) {
