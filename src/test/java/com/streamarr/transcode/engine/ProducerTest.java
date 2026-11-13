@@ -4456,6 +4456,29 @@ class ProducerTest {
         .containsExactlyElementsOf(uploadNames(recording).subList(0, deliveryBeforeTheLast + 1));
   }
 
+  @Test
+  @DisplayName(
+      "Should settle only the stop when stopped while FFmpeg has not exited after its output ends"
+          + " and FFmpeg then exits non-zero")
+  void
+      shouldSettleOnlyTheStopWhenStoppedWhileFfmpegHasNotExitedAfterItsOutputEndsAndFfmpegThenExitsNonZero() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(outputEndingInsideTheThirdMediaSegment(recording))
+            .exitCode(KILLED_EXIT_CODE)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).start();
+    assertThat(process.exitAwaitedWithinABound()).succeedsWithin(OUTCOME_LIMIT);
+
+    producer.requestStop();
+    process.exit();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
   private static void awaitLatch(CountDownLatch latch) {
     try {
       assertThat(latch.await(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS))
