@@ -334,6 +334,8 @@ class WorkerMediaSmokeTest {
   private static final String MPEG4_AVI_SOURCE = "mpeg4-mp3.avi";
   private static final String H264_AC3_SOURCE = "h264-ac3.mkv";
   private static final String MOVED_AUDIO_BLOCK_SOURCE = "h264-ac3-moved-audio-block.mkv";
+  private static final String AUDIO_BLOCK_ONE_TICK_EARLY_SOURCE =
+      "h264-ac3-audio-block-one-tick-early.mkv";
   private static final byte[] MATROSKA_SEGMENT_ID = {0x18, 0x53, (byte) 0x80, 0x67};
   private static final byte[] MATROSKA_CLUSTER_ID = {0x1F, 0x43, (byte) 0xB6, 0x75};
   private static final byte CLUSTER_TIMESTAMP_ID = (byte) 0xE7;
@@ -1199,14 +1201,18 @@ class WorkerMediaSmokeTest {
   }
 
   // ADR 0054: a measurement counts the source's packets. FFmpeg's stream copy raises the decode
-  // time of each audio packet that starts before the moved block, and prints the raised times.
-  @Test
+  // time of an audio packet that decodes before the packet that the file holds before it, and
+  // prints the raised time. In the source with one block 1 tick early, the raise moves that
+  // block's packet into the next keyframe interval. FFmpeg logs a raise of at most 2 ticks only at
+  // its debug level.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {MOVED_AUDIO_BLOCK_SOURCE, AUDIO_BLOCK_ONE_TICK_EARLY_SOURCE})
   @DisplayName(
       "Should report the keyframes without a measurement when FFmpeg changes the times of the"
           + " packets that a keyframe packet scan copies")
-  void shouldReportKeyframesWithoutMeasurementWhenFfmpegChangesTimesOfPacketsThatScanCopies()
-      throws Exception {
-    var source = measuredSource(MOVED_AUDIO_BLOCK_SOURCE);
+  void shouldReportKeyframesWithoutMeasurementWhenFfmpegChangesTimesOfPacketsThatScanCopies(
+      String fixture) throws Exception {
+    var source = measuredSource(fixture);
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
@@ -10078,6 +10084,8 @@ class WorkerMediaSmokeTest {
           Files.write(
               output,
               withAudioBlockMovedLater(Files.readAllBytes(measuredSource(H264_AC3_SOURCE))));
+      case AUDIO_BLOCK_ONE_TICK_EARLY_SOURCE ->
+          Files.write(output, withAudioBlockOneTickEarly(measuredSource(H264_AC3_SOURCE)));
       default -> {
         return keyframeSource(name);
       }
@@ -10180,6 +10188,40 @@ class WorkerMediaSmokeTest {
         .findFirst()
         .orElseThrow(() -> new AssertionError("No block of track 2 starts at or after 1 s"))
         .moveTo(blocks, 2_500);
+    return changed;
+  }
+
+  // The Matroska bytes with two blocks of track 2 retimed around the keyframe that ffprobe lists
+  // second: the last block that presents before the keyframe presents at the keyframe, and the
+  // block after it presents 1 ms before the keyframe, as a muxer that rounds audio times unevenly
+  // writes them. Each block moves by the milliseconds between its listed time and its new time,
+  // so the codec delay that the demuxer subtracts from every AC-3 time does not matter.
+  private static byte[] withAudioBlockOneTickEarly(Path matroska) throws Exception {
+    var keyframe =
+        ffprobe(List.of("-select_streams", "0", "-show_entries", "packet=pts,flags"), matroska)
+            .lines()
+            .map(line -> line.split(","))
+            .filter(fields -> fields[1].startsWith("K"))
+            .map(fields -> Long.parseLong(fields[0]))
+            .skip(1)
+            .findFirst()
+            .orElseThrow();
+    var listed =
+        ffprobe(List.of("-select_streams", "1", "-show_entries", "packet=pts"), matroska)
+            .lines()
+            .map(line -> Long.parseLong(line.split(",")[0]))
+            .toList();
+    var lastBefore = Math.toIntExact(listed.stream().filter(time -> time < keyframe).count()) - 1;
+    var changed = Files.readAllBytes(matroska);
+    var blocks = ByteBuffer.wrap(changed);
+    var audio = audioBlocks(changed);
+    assertThat(audio).as("the blocks of track 2").hasSameSizeAs(listed);
+    var atKeyframe = audio.get(lastBefore);
+    var oneTickEarly = audio.get(lastBefore + 1);
+    var atKeyframeStart = atKeyframe.start(blocks) + keyframe - listed.get(lastBefore);
+    var oneTickEarlyStart = oneTickEarly.start(blocks) + keyframe - 1 - listed.get(lastBefore + 1);
+    atKeyframe.moveTo(blocks, atKeyframeStart);
+    oneTickEarly.moveTo(blocks, oneTickEarlyStart);
     return changed;
   }
 

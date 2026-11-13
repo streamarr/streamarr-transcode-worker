@@ -46,10 +46,10 @@ final class KeyframePacketScan {
   private static final String DEMUXING_ERROR = "Error during demuxing";
 
   /**
-   * FFmpeg logs one of these warnings when its stream copy changes a packet's times before framecrc
+   * FFmpeg logs one of these lines when its stream copy changes a packet's times before framecrc
    * prints them, and then exits with code 0. The printed times are then not the source's. FFmpeg
-   * logs a rise of at most 2 ticks in an audio packet's decode time only at its debug level, so the
-   * scan does not see that change.
+   * logs a rise of at most 2 ticks in an audio packet's decode time at its debug level, and every
+   * other change as a warning.
    */
   private static final List<String> CHANGED_PACKET_TIMES =
       List.of("Non-monotonic DTS", "Invalid DTS");
@@ -221,7 +221,7 @@ final class KeyframePacketScan {
             .isPresent();
   }
 
-  // -v warning prints the warnings that FFmpeg logs when it changes a packet's times.
+  // -v debug prints every line that FFmpeg logs when it changes a packet's times.
   // -copyts keeps each packet's time from the source; the report subtracts the start time.
   // -copyinkf keeps the packets before each stream's first keyframe. A stream copy drops them, but
   // ADR 0054 counts them in the first keyframe interval, as a bitrate scan does.
@@ -233,7 +233,7 @@ final class KeyframePacketScan {
                 "-hide_banner",
                 "-nostats",
                 "-v",
-                "warning",
+                "debug",
                 "-copyts",
                 "-i",
                 probed.source().toString()));
