@@ -374,7 +374,11 @@ class FfprobeExecutorPacketScanMeasurementTest {
   /** One source whose keyframe packet scan must report its keyframes but no measurement. */
   @Builder
   private record Unmeasured(
-      String streams, String packetScan, String packetScanDiagnostics, String firstAacPacket) {}
+      String streams,
+      String packetScan,
+      String packetScanDiagnostics,
+      String packetScanDebugDiagnostics,
+      String firstAacPacket) {}
 
   private static final String KEYFRAMES_AND_THREE_STREAMS =
       """
@@ -554,10 +558,33 @@ class FfprobeExecutorPacketScanMeasurementTest {
             "a packet whose times FFmpeg replaced because it decoded after it presented",
             Unmeasured.builder()
                 .packetScanDiagnostics(
-                    "[vost#0:0/copy @ 0x1] Invalid DTS: 7500 PTS: 3750, replacing by guess\n")));
+                    "[vost#0:0/copy @ 0x1] Invalid DTS: 7500 PTS: 3750, replacing by guess\n")),
+        // FFmpeg logs a rise of at most 2 ticks in an audio packet's decode time only at its debug
+        // level. The source decodes the last AC-3 packet at 2,879, 1 tick before the AC-3 packet
+        // that precedes it.
+        unmeasured(
+            "a packet whose decode time FFmpeg raised by 1 tick to the decode time before it",
+            Unmeasured.builder()
+                .packetScan(
+                    """
+                    0,          0,          0,     3750,     4000, 0x00000000
+                    1,          0,          0,     2880,      768, 0x00000000
+                    2,          0,          0,     2351,      417, 0x00000000
+                    1,       2880,       2880,     2880,      768, 0x00000000
+                    1,       2880,       2880,     2880,      768, 0x00000000
+                    0,       3750,      18750,     3750,     6000, 0x00000000
+                    """)
+                .packetScanDebugDiagnostics(
+                    "[aost#0:1/copy @ 0x1] Non-monotonic DTS; previous: 2880, current: 2879;"
+                        + " changing to 2880. This may result in incorrect timestamps in the"
+                        + " output file.\n")));
   }
 
   private static final String FAILED_READ = "the read fails";
+
+  /** FFmpeg's -v levels, from the one that shows the fewest lines to the one that shows most. */
+  private static final List<String> FFMPEG_LOG_LEVELS =
+      List.of("quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace");
 
   /** The scan holds at most this many audio packets whose keyframe interval it cannot yet tell. */
   private static final int WAITING_AUDIO_PACKETS_THAT_THE_SCAN_HOLDS = 1 << 18;
@@ -598,6 +625,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
                     ? KEYFRAMES_AND_THREE_STREAMS
                     : unmeasured.packetScan())
             .packetScanDiagnostics(unmeasured.packetScanDiagnostics())
+            .packetScanDebugDiagnostics(unmeasured.packetScanDebugDiagnostics())
             .firstAacPacket(unmeasured.firstAacPacket())
             .build();
 
@@ -638,12 +666,16 @@ class FfprobeExecutorPacketScanMeasurementTest {
    * Answers the probe's ffprobe runs with the stream descriptions, a read of an AAC stream's first
    * packet with {@code firstAacPacket}, or a failure for {@link #FAILED_READ}, every other read of
    * packets with nothing, and FFmpeg's packet scan with the framecrc lines and its diagnostics.
+   * Like FFmpeg, the scripted packet scan prints {@code packetScanDiagnostics} only when its -v
+   * level shows warnings, and {@code packetScanDebugDiagnostics} only when its -v level shows debug
+   * lines.
    */
   @Builder
   private record ScriptedScan(
       String streams,
       String packetScan,
       String packetScanDiagnostics,
+      String packetScanDebugDiagnostics,
       String firstAacPacket,
       List<String> packetScanArguments) {
 
@@ -661,7 +693,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
         packetScanArguments.addAll(arguments);
         return ScriptedProcess.builder()
             .output(packetScan.getBytes(StandardCharsets.UTF_8))
-            .stderr(packetScanDiagnostics)
+            .stderr(diagnosticsShownBy(arguments))
             .build();
       }
 
@@ -674,6 +706,30 @@ class FfprobeExecutorPacketScanMeasurementTest {
       }
 
       return printing(streams, 0);
+    }
+
+    // FFmpeg shows the lines of the -v level and of every level before it in FFMPEG_LOG_LEVELS.
+    // Without -v, FFmpeg shows the info level.
+    private String diagnosticsShownBy(List<String> arguments) {
+      var level = "info";
+      if (arguments.contains("-v")) {
+        level = arguments.get(arguments.indexOf("-v") + 1);
+      }
+
+      var shown = new StringBuilder();
+      if (isShown("warning", level) && packetScanDiagnostics != null) {
+        shown.append(packetScanDiagnostics);
+      }
+
+      if (isShown("debug", level) && packetScanDebugDiagnostics != null) {
+        shown.append(packetScanDebugDiagnostics);
+      }
+
+      return shown.toString();
+    }
+
+    private static boolean isShown(String lineLevel, String commandLevel) {
+      return FFMPEG_LOG_LEVELS.indexOf(lineLevel) <= FFMPEG_LOG_LEVELS.indexOf(commandLevel);
     }
 
     private Process firstAacPacketRead() {
