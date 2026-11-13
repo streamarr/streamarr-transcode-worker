@@ -48,6 +48,7 @@ final class AudioSampleQueue {
   private OptionalLong latestSampleDuration = OptionalLong.empty();
   private Optional<AudioTail> prerollTail = Optional.empty();
   private Optional<AudioTail> discardedTail = Optional.empty();
+  private Optional<MediaTime> discardedStart = Optional.empty();
 
   /**
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence; empty
@@ -114,6 +115,7 @@ final class AudioSampleQueue {
     while (!held.isEmpty() && held.peekLast().number() > number) {
       var dropped = held.removeLast().sample();
       discardedTail = discardedTail.or(() -> Optional.of(tailOf(dropped)));
+      discardedStart = Optional.of(startOf(dropped));
     }
   }
 
@@ -122,6 +124,14 @@ final class AudioSampleQueue {
    */
   Optional<AudioTail> discardedTail() {
     return discardedTail;
+  }
+
+  /**
+   * Where the earliest sample that {@link #discardAfter} dropped starts; empty when it dropped
+   * none.
+   */
+  Optional<MediaTime> discardedStart() {
+    return discardedStart;
   }
 
   /** The audio samples dropped because they arrived after their segment closed. */
@@ -203,6 +213,11 @@ final class AudioSampleQueue {
 
   private static long audioTimescaleOf(Fragment fragment) {
     return fragment.tracks().audio().orElseThrow().timescale();
+  }
+
+  private static MediaTime startOf(CarriedSample carried) {
+    return new MediaTime(
+        carried.sample().presentationTime(), new TimeBase(1, audioTimescaleOf(carried.fragment())));
   }
 
   /**

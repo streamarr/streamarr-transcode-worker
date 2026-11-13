@@ -988,6 +988,26 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
   }
 
+  // The same video. The copied audio reaches the interval's end at 1 s, but no sample spans the gap
+  // before it resumes at 2 s, in an interval that no keyframe opened, so the assembler drops what
+  // resumes when the output ends. The video outlasts the audio that segment 0 takes by two frames,
+  // which ADR 0060 refuses: audio that resumes after the video has ended does not continue that
+  // audio beside the pictures past the interval.
+  @Test
+  @DisplayName(
+      "Should refuse the output's last segment when its encoded video runs past its interval"
+          + " without a keyframe and the copied audio stops at the interval's end and resumes only"
+          + " after the video ends")
+  void
+      shouldRefuseTheOutputsLastSegmentWhenItsEncodedVideoRunsPastItsIntervalWithoutAKeyframeAndTheCopiedAudioStopsAtTheIntervalsEndAndResumesOnlyAfterTheVideoEnds() {
+    var producer =
+        producerOfEncodedVideoPastTheKeyframeMissedAtOneSecondBeside(
+            oneSecondOfAudioSamples(), 96_000);
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).doesNotContain("segment0.m4s");
+  }
+
   // The same video. The copied audio's last sample before 1 s lasts 952 ticks, so the audio stops
   // 1 ms before the interval's end, and it resumes at 1 s and lasts as long as the video. A gap of
   // 1 ms is within the frame tolerance of ADR 0060, so the dropped audio still continues the audio

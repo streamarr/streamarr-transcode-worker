@@ -372,13 +372,14 @@ final class SegmentAssembler {
     var frameDuration = oneVideoFrame(videoSamples);
     var audioTail = copiedTail;
     // The audio after the output's last segment's interval was dropped, because no keyframe opened
-    // the interval it belongs to. Once the copied audio reaches that interval's end, to within one
-    // frame, the dropped audio continues it beside the segment's pictures past the interval; audio
-    // that resumes only after a gap plays beside none of the segment's video.
-    if (intervalEnd.isPresent()
-        && reachesToWithinOneFrame(
-            copiedTail, new MediaTime(intervalEnd.getAsLong(), timeBase), frameDuration)) {
-      audioTail = audio.discardedTail().or(() -> copiedTail);
+    // the interval it belongs to. Once the copied audio reaches where the dropped audio starts, to
+    // within one frame, the dropped audio continues it beside the segment's pictures past the
+    // interval; audio that resumes only after a gap does not show that the copy lasts as long as
+    // the video.
+    var discardedStart = audio.discardedStart();
+    if (discardedStart.isPresent()
+        && reachesToWithinOneFrame(copiedTail, discardedStart.get(), frameDuration)) {
+      audioTail = audio.discardedTail();
     }
 
     if (audioTail.filter(tail -> tail.end().compareTo(videoEnd) >= 0).isPresent()) {
