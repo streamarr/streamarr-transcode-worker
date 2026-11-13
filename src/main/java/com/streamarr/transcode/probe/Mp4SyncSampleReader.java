@@ -31,8 +31,9 @@ import java.util.Optional;
 
 /**
  * Reads the keyframes of one MP4 or MOV track from its sample tables: the media timescale (mdhd),
- * the decode durations (stts), the composition offsets (ctts), the sync samples (stss) and the edit
- * list (elst). The times match the ones FFmpeg's mov demuxer gives the track's packets.
+ * the decode durations (stts), the composition offsets (ctts), the sync samples (stss), the
+ * random-access sample group ({@link Mp4RandomAccessGroup}) and the edit list (elst). The times
+ * match the ones FFmpeg's mov demuxer gives the track's packets.
  */
 final class Mp4SyncSampleReader {
 
@@ -98,7 +99,7 @@ final class Mp4SyncSampleReader {
       return incomplete();
     }
 
-    var keyframes = rawKeyframes(sampleTable, durations);
+    var keyframes = rawKeyframes(sampleTable, durations, (int) sampleCount);
     if (edit.isEmpty() || keyframes.isEmpty()) {
       return incomplete();
     }
@@ -144,7 +145,8 @@ final class Mp4SyncSampleReader {
     return runs.stream().mapToLong(Run::count).sum();
   }
 
-  private static List<KeyframeTime> rawKeyframes(ByteBuffer sampleTable, List<Run> durations) {
+  private static List<KeyframeTime> rawKeyframes(
+      ByteBuffer sampleTable, List<Run> durations, int sampleCount) {
     var offsets = child(sampleTable, "ctts").map(Mp4SampleTables::runs).orElse(List.of());
     var syncSamples = child(sampleTable, "stss").map(Mp4SyncSampleReader::syncSamples);
     if (syncSamples.isPresent() && syncSamples.get().isEmpty()) {
@@ -155,12 +157,13 @@ final class Mp4SyncSampleReader {
     var keyframes = new ArrayList<KeyframeTime>();
     var offsetRuns = new RunCursor(offsets);
     var sync = syncSamples.<SyncSamples>map(ListedSyncSamples::new).orElseGet(EverySample::new);
+    var randomAccess = Mp4RandomAccessGroup.members(sampleTable, sampleCount);
     long sample = 1;
     long decodeTime = 0;
     for (var run : durations) {
       for (long i = 0; i < run.count(); i++, sample++) {
         var offset = offsetRuns.next();
-        if (sync.isSync(sample)) {
+        if (sync.isSync(sample) || randomAccess.get((int) sample - 1)) {
           keyframes.add(new KeyframeTime(decodeTime + offset, decodeTime - decodeShift));
         }
 

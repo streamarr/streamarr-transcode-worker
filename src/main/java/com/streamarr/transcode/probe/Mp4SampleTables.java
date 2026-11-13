@@ -48,7 +48,7 @@ final class Mp4SampleTables {
   }
 
   /** The entry count at the buffer's position, then that many runs. */
-  private static List<Run> runEntries(ByteBuffer box) {
+  static List<Run> runEntries(ByteBuffer box) {
     var entries = Integer.toUnsignedLong(box.getInt());
     var runs = new ArrayList<Run>();
     for (long i = 0; i < entries; i++) {

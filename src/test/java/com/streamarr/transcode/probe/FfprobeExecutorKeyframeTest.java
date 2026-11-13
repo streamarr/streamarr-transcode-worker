@@ -39,6 +39,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import com.streamarr.transcode.probe.SyntheticMp4.DurationRun;
+import com.streamarr.transcode.probe.SyntheticMp4.GroupRun;
+import com.streamarr.transcode.probe.SyntheticMp4.SampleToGroup;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -150,6 +152,54 @@ class FfprobeExecutorKeyframeTest {
                 .setProbeAttemptId(request.getProbeAttemptId())
                 .addAllPresentationTimeDeltas(List.of(0L, 8_704L, 16_896L, 10_240L))
                 .addAllDecodeTimeDeltas(List.of(-1_024L, 8_704L, 16_896L, 10_240L))
+                .build());
+  }
+
+  // An open-GOP HEVC MP4 can list only its first IDR picture in the stss and mark each later CRA
+  // picture in a 'rap ' sample group (ISO/IEC 14496-12, 10.4). FFmpeg's mov demuxer gives the
+  // packets of that group the keyframe flag.
+  @Test
+  @DisplayName(
+      "Should report each random-access sample as a keyframe position when the stss lists only the"
+          + " first sample")
+  void shouldReportEachRandomAccessSampleAsKeyframePositionWhenStssListsOnlyFirstSample(
+      @TempDir Path directory) throws Exception {
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(6, 500)
+                .syncSamples(List.of(1L))
+                .sampleToGroup(
+                    SampleToGroup.builder()
+                        .groupingType(SyntheticMp4.RANDOM_ACCESS)
+                        .run(new GroupRun(2, 0))
+                        .run(new GroupRun(1, 1))
+                        .run(new GroupRun(1, 0))
+                        .run(new GroupRun(1, 1))
+                        .run(new GroupRun(1, 0))
+                        .build())
+                .build()
+                .bytes());
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(streamsBesideVideoTrack(""))
+            .packet("0.000000%+#1", "{\"packets\":[{\"pts\":0,\"dts\":0,\"flags\":\"K__\"}]}")
+            .packet("2.000000%+#1", "{\"packets\":[{\"pts\":2000,\"dts\":2000,\"flags\":\"K__\"}]}")
+            .build();
+    var request = keyframeRequest();
+
+    var report = ffprobe.executor().probe(source, request);
+
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(3);
+    assertThat(report.keyframePositionsParts())
+        .containsExactly(
+            ProbeKeyframePositionsPart.newBuilder()
+                .setProbeAttemptId(request.getProbeAttemptId())
+                .addAllPresentationTimeDeltas(List.of(0L, 1_000L, 1_000L))
+                .addAllDecodeTimeDeltas(List.of(0L, 1_000L, 1_000L))
                 .build());
   }
 
