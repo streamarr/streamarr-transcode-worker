@@ -7002,13 +7002,7 @@ class WorkerMediaSmokeTest {
         Arguments.of(
             "without an advertised end",
             (UnaryOperator<TranscodeExecution.Builder>) execution -> execution),
-        Arguments.of(
-            "with the advertised end at 24 s",
-            (UnaryOperator<TranscodeExecution.Builder>)
-                execution -> {
-                  execution.getAdvertisedEndBuilder().setSeconds(24);
-                  return execution;
-                }));
+        Arguments.of("with the advertised end at 24 s", advertisedEndAt(24)));
   }
 
   // The rising-tone sources' video in Matroska, beside the rising tone as AAC for 18 s.
@@ -7053,27 +7047,25 @@ class WorkerMediaSmokeTest {
   // last, reads no copied audio before or inside that segment, and drops the audio after the
   // advertised end when the output ends (ADR 0037). So segment 3 comes before the copied audio's
   // first sample, which ADR 0060 refuses whether the video is copied or encoded.
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_VIDEO_TRANSCODE"})
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("copiedAndEncodedVideoBesideAudioAfterIt")
   @DisplayName(
       "Should report copied audio that ran short and upload no media segment when an attempt's last"
           + " segment comes before the copied audio's first sample")
   void shouldReportCopiedAudioThatRanShortWhenTheLastSegmentComesBeforeTheCopiedAudiosFirstSample(
-      TranscodeMode mode) throws Exception {
+      TranscodeMode mode, UnaryOperator<TranscodeExecution.Builder> withAdvertisedEnd)
+      throws Exception {
     var source = aacAfterTheVideoSource();
     var job = seekableSourceJob(source, mode);
     job.getDecisionBuilder().getAudioBuilder().setStreamIndex(1);
-    job.getExecutionBuilder()
-        .setTargetSegmentDurationSeconds(6)
-        .setMediaSegmentCount(RISING_TONE_SOURCE_SEGMENT_COUNT)
-        .addAllSegmentStartTicks(List.of(0L, 6L, 12L, 18L))
-        .setSegmentStartTimeBase(WHOLE_SECONDS)
-        .setStartSequenceNumber(3)
-        .setSeekPositionSeconds(18)
-        .getAdvertisedEndBuilder()
-        .setSeconds(24);
+    withAdvertisedEnd.apply(
+        job.getExecutionBuilder()
+            .setTargetSegmentDurationSeconds(6)
+            .setMediaSegmentCount(RISING_TONE_SOURCE_SEGMENT_COUNT)
+            .addAllSegmentStartTicks(List.of(0L, 6L, 12L, 18L))
+            .setSegmentStartTimeBase(WHOLE_SECONDS)
+            .setStartSequenceNumber(3)
+            .setSeekPositionSeconds(18));
 
     var failed =
         executeExpectingFailure(engine(softwareCapabilities()), source.getParent(), job.build());
@@ -7084,6 +7076,24 @@ class WorkerMediaSmokeTest {
     assertThat(failed.failure().getFailure())
         .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPIED_AUDIO_RAN_SHORT);
     assertThat(failed.uploads().names()).containsExactly("init.mp4");
+  }
+
+  static Stream<Arguments> copiedAndEncodedVideoBesideAudioAfterIt() {
+    return Stream.of(
+            TranscodeMode.TRANSCODE_MODE_REMUX, TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
+        .flatMap(
+            mode ->
+                Stream.of(
+                        Named.<UnaryOperator<TranscodeExecution.Builder>>of(
+                            "with the advertised end at 24 s", advertisedEndAt(24)))
+                    .map(advertisedEnd -> Arguments.of(mode, advertisedEnd)));
+  }
+
+  private static UnaryOperator<TranscodeExecution.Builder> advertisedEndAt(long seconds) {
+    return execution -> {
+      execution.getAdvertisedEndBuilder().setSeconds(seconds);
+      return execution;
+    };
   }
 
   // The rising-tone sources' video in Matroska, beside 5 s of the rising tone as AAC from 25 s.
