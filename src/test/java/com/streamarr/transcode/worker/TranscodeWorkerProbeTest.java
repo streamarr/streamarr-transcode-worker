@@ -49,6 +49,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -294,10 +295,11 @@ class TranscodeWorkerProbeTest {
           + " server stated")
   void shouldSendTheProbeReportWhenItsEncodingFitsWithinTheLengthLimitThatTheServerStated(
       int bytesFromLimit) throws Exception {
+    var runtime = acceptingReportsWithinTheLengthLimit();
     var request = requestBuilder().build();
     var language = languageFillingReport(request, REPORT_LENGTH_LIMIT_BYTES + bytesFromLimit);
 
-    assertThat(probeResults(request, ffprobeOutput(1, language)))
+    assertThat(probeResults(runtime, request, ffprobeOutput(1, language)))
         .containsExactly(resultWithOneVideoStream(request, language).build());
   }
 
@@ -307,10 +309,11 @@ class TranscodeWorkerProbeTest {
           + " limit that the server stated")
   void shouldReportTheProbeAsTooLargeWhenItsReportIsOneByteLongerThanTheStatedLengthLimit()
       throws Exception {
+    var runtime = acceptingReportsWithinTheLengthLimit();
     var request = requestBuilder().build();
     var language = languageFillingReport(request, REPORT_LENGTH_LIMIT_BYTES + 1);
 
-    assertThat(probeResults(request, ffprobeOutput(1, language)))
+    assertThat(probeResults(runtime, request, ffprobeOutput(1, language)))
         .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
   }
 
@@ -320,9 +323,10 @@ class TranscodeWorkerProbeTest {
           + " the stated length limit can carry")
   void shouldReportTheProbeAsTooLargeWhenTheFileHasMoreStreamsThanAReportWithinTheLimitCarries()
       throws Exception {
+    var runtime = acceptingReportsWithinTheLengthLimit();
     var request = requestBuilder().build();
 
-    assertThat(probeResults(request, ffprobeOutput(20_000, "")))
+    assertThat(probeResults(runtime, request, ffprobeOutput(20_000, "")))
         .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
   }
 
@@ -403,11 +407,10 @@ class TranscodeWorkerProbeTest {
             .setProbeReportLengthLimitBytes(REPORT_LENGTH_LIMIT_BYTES));
   }
 
-  // The results that a worker sends when the server stated the length limit.
-  private List<ProbeAttemptResult> probeResults(ProbeRequest request, String ffprobeOutput)
-      throws Exception {
+  // The results that a worker sends when the runtime's server stated its limits.
+  private List<ProbeAttemptResult> probeResults(
+      ScriptedWorkerRuntime runtime, ProbeRequest request, String ffprobeOutput) throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), ffprobeOutput);
-    var runtime = acceptingReportsWithinTheLengthLimit();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
@@ -464,12 +467,19 @@ class TranscodeWorkerProbeTest {
   // The language tag that makes the probe report holding the result take exactly the given number
   // of bytes.
   private static String languageFillingReport(ProbeRequest request, int bytes) {
+    return languageFilling(
+        bytes,
+        language ->
+            ProbeReports.resultOnly(resultWithOneVideoStream(request, language).build())
+                .getSerializedSize());
+  }
+
+  // The language tag that makes an encoding that holds it take exactly the given number of bytes.
+  private static String languageFilling(int bytes, ToIntFunction<String> encodedLengthWith) {
     var length = 0;
     for (var attempt = 0; attempt < 3; attempt++) {
       var language = "a".repeat(length);
-      var size =
-          ProbeReports.resultOnly(resultWithOneVideoStream(request, language).build())
-              .getSerializedSize();
+      var size = encodedLengthWith.applyAsInt(language);
       if (size == bytes) {
         return language;
       }
@@ -477,7 +487,7 @@ class TranscodeWorkerProbeTest {
       length += bytes - size;
     }
 
-    throw new AssertionError("No language tag fills a probe report of " + bytes + " bytes");
+    throw new AssertionError("No language tag fills an encoding of " + bytes + " bytes");
   }
 
   @Test
