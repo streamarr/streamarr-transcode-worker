@@ -48,7 +48,8 @@ import org.junit.jupiter.params.provider.EnumSource;
  * height of 240, because NVENC refuses a frame smaller than 144x144. NVDEC refuses such a picture
  * too, so the hevc_nvenc tests of the reshape read a 256x144 profile 5 source, which libx265
  * encodes from the fixture's pictures with their RPUs. The seek test reads an open-GOP source of
- * testsrc2 pictures with those RPUs; its software chain runs on every host.
+ * testsrc2 pictures with those RPUs; its software chain runs on every host. The tests of pictures
+ * without an RPU read the same testsrc2 pictures as a closed GOP.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")
@@ -499,11 +500,53 @@ class HdrEncodeSmokeTest {
   void shouldDeliverEveryPictureWhenHevcNvencReshapesOnTheGpuPicturesWithoutAnRpu(
       SourceWithoutAnRpu withoutAnRpu) throws Exception {
     assumeHevcNvencReshapesOnTheGpu();
-    var source = profile5SourceWith(withoutAnRpu);
+    var source = profile5SourceWith(withoutAnRpu.missing, withoutAnRpu.matrixCoefficients);
 
     var delivered = encoded(source, onHevcNvenc(profile5EncodeBuilder()).build(), 0);
 
     assertThat(pictureCount(delivered.acceptedBytes())).isEqualTo(pictureCount(source));
+  }
+
+  // ADR 0013: the reshape applies each picture's own RPU, and the encode keeps every picture. A
+  // picture without its RPU comes out unreshaped: the same as that picture of a source without
+  // RPUs. The fps filter of the chain fills a lost picture's time with a copy of its neighbour, so
+  // only each picture's MD5 shows a loss.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(SourceWithoutAnRpu.class)
+  @DisplayName(
+      "Should hand hevc_nvenc every picture, reshaped with its own RPU or unreshaped without one,"
+          + " when the GPU reshapes a profile 5 source whose decoder hands the reshape pictures"
+          + " without an RPU")
+  void shouldHandHevcNvencEveryPictureReshapedWithItsOwnRpuWhenTheGpuReshapesPicturesWithoutAnRpu(
+      SourceWithoutAnRpu withoutAnRpu) throws Exception {
+    assumeHevcNvencReshapesOnTheGpu();
+    var matrix = withoutAnRpu.matrixCoefficients;
+    var reshaped = picturesFromTheGpuReshape(MissingRpus.NONE, matrix);
+    var unreshaped = picturesFromTheGpuReshape(MissingRpus.EVERY, matrix);
+    var stripped =
+        IntStream.range(0, reshaped.size()).filter(withoutAnRpu.missing::strips).boxed().toList();
+    var expected = new ArrayList<>(reshaped);
+    stripped.forEach(picture -> expected.set(picture, unreshaped.get(picture)));
+
+    var handed = picturesFromTheGpuReshape(withoutAnRpu.missing, matrix);
+
+    assertThat(reshaped)
+        .as("the source's pictures, reshaped with their RPUs")
+        .hasSize(Math.toIntExact(pictureCount(testPatternProfile5Source())))
+        .extracting(Picture::md5)
+        .doesNotHaveDuplicates();
+    assertThat(stripped)
+        .as("the pictures without an RPU, which their RPUs change")
+        .isNotEmpty()
+        .allSatisfy(
+            picture ->
+                assertThat(reshaped.get(picture).md5())
+                    .isNotEqualTo(unreshaped.get(picture).md5()));
+    assertThat(handed)
+        .as("the pictures handed to hevc_nvenc, none of them lost")
+        .extracting(Picture::md5)
+        .doesNotHaveDuplicates();
+    assertThat(handed).as("the pictures handed to hevc_nvenc").isEqualTo(expected);
   }
 
   // ADR 0037 drops the leading pictures of a hardware decode's first keyframe with a bitstream
@@ -568,8 +611,18 @@ class HdrEncodeSmokeTest {
   }
 
   private enum MissingRpus {
+    NONE,
     THE_ELEVENTH,
-    EVERY
+    EVERY;
+
+    // Whether the picture at the index in presentation order reaches the reshape without its RPU.
+    boolean strips(int picture) {
+      return switch (this) {
+        case NONE -> false;
+        case THE_ELEVENTH -> picture == 10;
+        case EVERY -> true;
+      };
+    }
   }
 
   /** How the worker decodes and reshapes a profile 5 source for hevc_nvenc. */
@@ -785,10 +838,26 @@ class HdrEncodeSmokeTest {
             written.toString()));
   }
 
-  // The 256x144 source with the pictures that reach the reshape without an RPU. The stream declares
-  // no colour primaries or transfer, as a profile 5 stream usually does.
-  private static Path profile5SourceWith(SourceWithoutAnRpu source) throws Exception {
-    var elementary = root.resolve("dolby-vision-5-" + source + ".hevc");
+  // testsrc2 pictures, each one different, with the fixture's RPUs, as a closed GOP without
+  // B-pictures: the nth RPU in decode order belongs to the nth picture in presentation order.
+  private static Path testPatternProfile5Source() throws Exception {
+    var source = root.resolve("dolby-vision-5-test-pattern.mp4");
+    if (Files.exists(source)) {
+      return source;
+    }
+
+    var written = root.resolve("dolby-vision-5-test-pattern-written.mp4");
+    writeTestPatternProfile5Source(written, "keyint=24:min-keyint=24:scenecut=0:bframes=0");
+    return Files.move(written, source);
+  }
+
+  // The test-pattern source with the pictures that reach the reshape without an RPU, under the
+  // matrix. The stream declares no colour primaries or transfer, as a profile 5 stream usually
+  // does.
+  private static Path profile5SourceWith(MissingRpus missing, int matrixCoefficients)
+      throws Exception {
+    var name = "dolby-vision-5-without-" + missing + "-under-matrix-" + matrixCoefficients;
+    var elementary = root.resolve(name + ".hevc");
     runToCompletion(
         List.of(
             "ffmpeg",
@@ -797,7 +866,7 @@ class HdrEncodeSmokeTest {
             "error",
             "-y",
             "-i",
-            profile5SourceThatNvdecDecodes().toString(),
+            testPatternProfile5Source().toString(),
             "-map",
             "0:v:0",
             "-c",
@@ -811,12 +880,13 @@ class HdrEncodeSmokeTest {
     Files.write(
         elementary,
         concatenated(
-            switch (source.missing) {
+            switch (missing) {
+              case NONE -> nalUnits;
               case THE_ELEVENTH -> withTheEleventhRpuUnreadable(nalUnits);
               case EVERY ->
                   nalUnits.stream().filter(unit -> nalUnitType(unit) != UNSPEC62).toList();
             }));
-    var written = root.resolve("dolby-vision-5-" + source + ".mp4");
+    var written = root.resolve(name + ".mp4");
     runToCompletion(
         List.of(
             "ffmpeg",
@@ -832,7 +902,7 @@ class HdrEncodeSmokeTest {
             "copy",
             "-bsf:v",
             "hevc_metadata=colour_primaries=2:transfer_characteristics=2:matrix_coefficients="
-                + source.matrixCoefficients,
+                + matrixCoefficients,
             "-tag:v",
             "dvh1",
             "-strict",
@@ -981,6 +1051,16 @@ class HdrEncodeSmokeTest {
       ReshapeChain chain, TranscodeRequest request) throws Exception {
     var command = workerCommand(chain, request);
     return pictures(command, command.get(command.indexOf("-vf") + 1) + downloadOf(chain));
+  }
+
+  // The pictures that the GPU chain of an attempt from the start hands hevc_nvenc from the
+  // test-pattern source without the RPUs, under the matrix.
+  private static List<Picture> picturesFromTheGpuReshape(
+      MissingRpus missing, int matrixCoefficients) throws Exception {
+    var source = profile5SourceWith(missing, matrixCoefficients);
+    return picturesHandedToTheEncoder(
+        ReshapeChain.NVDEC_AND_CUDA_FILTERS,
+        request(source, onHevcNvenc(profile5EncodeBuilder()).build(), 0));
   }
 
   private static Duration firstDecodedPicture(ReshapeChain chain, TranscodeRequest request)
