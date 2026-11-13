@@ -232,6 +232,10 @@ class TranscodeWorkerHdrEncodeTest {
           + " the contract forbids")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsEncodeAsksForAForbiddenOutput(
       String output, VariantJob.Builder job) throws Exception {
+    assertRefusedAsAnInvalidSpecification(job);
+  }
+
+  private void assertRefusedAsAnInvalidSpecification(VariantJob.Builder job) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
 
     try (var worker = worker(launcher)) {
