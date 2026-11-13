@@ -25,23 +25,45 @@ import com.google.rpc.Code;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import com.streamarr.transcode.worker.WorkerRuntime;
 import io.grpc.CallOptions;
+import io.grpc.Channel;
 import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ConnectivityState;
+import io.grpc.Context;
+import io.grpc.Contexts;
+import io.grpc.ForwardingClientCall;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
+import io.grpc.Server;
+import io.grpc.ServerCall;
+import io.grpc.ServerCallHandler;
+import io.grpc.ServerInterceptor;
+import io.grpc.ServerInterceptors;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import io.grpc.inprocess.InProcessChannelBuilder;
+import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.protobuf.StatusProto;
+import io.grpc.stub.ServerCallStreamObserver;
+import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -52,6 +74,10 @@ import java.util.function.IntSupplier;
 import java.util.function.Predicate;
 
 public final class ScriptedWorkerRuntime implements WorkerRuntime {
+
+  private static final Metadata.Key<String> CALL_ID_HEADER =
+      Metadata.Key.of("scripted-call-id", Metadata.ASCII_STRING_MARSHALLER);
+  private static final Context.Key<String> CALL_ID = Context.key("scripted-call-id");
 
   private final WorkerSessionAccepted limits;
   private Connection connection;
@@ -142,14 +168,61 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final UploadReadiness reportReadiness = new UploadReadiness();
     private final OpenUploads openReportCalls = new OpenUploads();
     private final ReportThreads reportThreads = new ReportThreads();
+    // The scripted server's upload and report calls, by the id that each of the worker's calls
+    // carries in its headers.
+    private final Map<String, ScriptedUpload<?, ?>> callsById = new ConcurrentHashMap<>();
+    private final Server server;
+    private final ManagedChannel uploadChannel;
     private volatile boolean refusingAtTheWorkersLimit;
     private volatile boolean acknowledgementsWithheld;
     private volatile boolean reportAnswersWithheld;
     private volatile boolean refusingNextReport;
     private boolean shutdown;
 
+    // The worker's upload calls and report calls run on gRPC's in-process transport, against a
+    // scripted server that runs every callback on the thread that causes it.
     private Connection(WorkerSessionAccepted limits) {
       call = new SessionCall(limits);
+      var name = InProcessServerBuilder.generateName();
+      server =
+          started(
+              InProcessServerBuilder.forName(name)
+                  .directExecutor()
+                  .addService(
+                      ServerInterceptors.intercept(new ScriptedServer(), new CallIdReader()))
+                  .build());
+      uploadChannel =
+          InProcessChannelBuilder.forName(name)
+              .directExecutor()
+              .intercept(new WorkerCallInstrumentation())
+              .build();
+      awaitReady(uploadChannel);
+    }
+
+    private static Server started(Server server) {
+      try {
+        return server.start();
+      } catch (IOException failure) {
+        throw new UncheckedIOException(failure);
+      }
+    }
+
+    // A call that the worker opens on a ready channel reaches the scripted server before its start
+    // returns, so the server records the worker's calls in the order the worker opened them.
+    private static void awaitReady(ManagedChannel channel) {
+      var state = channel.getState(true);
+      while (state != ConnectivityState.READY) {
+        var changed = new CountDownLatch(1);
+        channel.notifyWhenStateChanged(state, changed::countDown);
+        try {
+          changed.await();
+        } catch (InterruptedException _) {
+          Thread.currentThread().interrupt();
+          throw new AssertionError("Interrupted while the in-process channel connected");
+        }
+
+        state = channel.getState(true);
+      }
     }
 
     /** The id of the worker session that the scripted server accepted. */
@@ -208,7 +281,6 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** Lets the worker send one more upload message. */
     public void grantUploadMessage() {
       readiness.grant();
-      uploads.forEach(UploadCall::signalReady);
     }
 
     /** From now on an upload that the worker half-closes is never acknowledged. */
@@ -374,7 +446,6 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** Lets the worker send one more message on a report call. */
     public void grantReportMessage() {
       reportReadiness.grant();
-      reportCalls().forEach(ReportCall::signalReady);
     }
 
     /** From now on a report call that the worker half-closes is not answered. */
@@ -422,19 +493,19 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     @Override
     public <Q, R> ClientCall<Q, R> newCall(MethodDescriptor<Q, R> method, CallOptions options) {
-      if (method.equals(TranscodeWorkerServiceGrpc.getUploadSegmentMethod())) {
-        var upload = new UploadCall(readiness, openUploads, () -> acknowledgementsWithheld);
-        nextRefusal().ifPresent(upload::refuseOnTheFirstMessage);
-        uploads.add(upload);
-        return typed(upload);
-      }
-
-      if (method.equals(TranscodeWorkerServiceGrpc.getReportProbeAttemptMethod())) {
-        return typed(newReportCall());
+      if (method.equals(TranscodeWorkerServiceGrpc.getUploadSegmentMethod())
+          || method.equals(TranscodeWorkerServiceGrpc.getReportProbeAttemptMethod())) {
+        return uploadChannel.newCall(method, options);
       }
 
       assertThat(method).isEqualTo(TranscodeWorkerServiceGrpc.getEstablishWorkerSessionMethod());
       return typed(call);
+    }
+
+    private UploadCall newUploadCall() {
+      var upload = new UploadCall(readiness, openUploads, () -> acknowledgementsWithheld);
+      nextRefusal().ifPresent(upload::refuseOnTheFirstMessage);
+      return upload;
     }
 
     private ReportCall newReportCall() {
@@ -445,12 +516,14 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         report.refuseOnTheFirstMessage(reportRefusal());
       }
 
+      return report;
+    }
+
+    private void recordReportCall(ReportCall report) {
       synchronized (reportCalls) {
         reportCalls.add(report);
         reportCalls.notifyAll();
       }
-
-      return report;
     }
 
     private Optional<StatusRuntimeException> nextRefusal() {
@@ -459,6 +532,80 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       }
 
       return Optional.ofNullable(refusals.poll());
+    }
+
+    // Takes the worker's call as the server's call with the id that the call carries, and counts it
+    // as open before the server records it, so a test that sees the call sees it counted.
+    private <U extends ScriptedUpload<Q, R>, Q, R> U accept(U call, StreamObserver<R> responses) {
+      ScriptedUpload<Q, R> upload = call;
+      callsById.put(CALL_ID.get(), upload);
+      upload.start((ServerCallStreamObserver<R>) responses);
+      return call;
+    }
+
+    private UploadReadiness readinessOf(MethodDescriptor<?, ?> method) {
+      if (method.equals(TranscodeWorkerServiceGrpc.getUploadSegmentMethod())) {
+        return readiness;
+      }
+
+      return reportReadiness;
+    }
+
+    private final class ScriptedServer
+        extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase {
+
+      @Override
+      public StreamObserver<UploadSegmentRequest> uploadSegment(
+          StreamObserver<UploadSegmentResponse> responses) {
+        var upload = accept(newUploadCall(), responses);
+        uploads.add(upload);
+        return upload;
+      }
+
+      @Override
+      public StreamObserver<ReportProbeAttemptRequest> reportProbeAttempt(
+          StreamObserver<ReportProbeAttemptResponse> responses) {
+        var report = accept(newReportCall(), responses);
+        recordReportCall(report);
+        return report;
+      }
+    }
+
+    // Names each of the worker's calls in its headers, counts the messages that the worker sends
+    // while its call is not ready for them, and runs a call's hooks on the worker's thread when the
+    // worker cancels the call.
+    private final class WorkerCallInstrumentation implements ClientInterceptor {
+
+      @Override
+      public <Q, R> ClientCall<Q, R> interceptCall(
+          MethodDescriptor<Q, R> method, CallOptions options, Channel next) {
+        var id = UUID.randomUUID().toString();
+        var readinessOfCall = readinessOf(method);
+        return new ForwardingClientCall.SimpleForwardingClientCall<>(
+            next.newCall(method, options)) {
+
+          @Override
+          public void start(Listener<R> responseListener, Metadata headers) {
+            headers.put(CALL_ID_HEADER, id);
+            super.start(responseListener, headers);
+          }
+
+          @Override
+          public void sendMessage(Q message) {
+            if (!isReady()) {
+              readinessOfCall.violated();
+            }
+
+            super.sendMessage(message);
+          }
+
+          @Override
+          public void cancel(String message, Throwable cause) {
+            Optional.ofNullable(callsById.get(id)).ifPresent(ScriptedUpload::cancelledByTheWorker);
+            super.cancel(message, cause);
+          }
+        };
+      }
     }
 
     @SuppressWarnings("unchecked")
@@ -472,9 +619,13 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       return "scripted-control-plane";
     }
 
+    // The worker opens no call once it has shut its channel down, and a call that it opened earlier
+    // ends as the test scripts it.
     @Override
     public ManagedChannel shutdown() {
       shutdown = true;
+      uploadChannel.shutdown();
+      server.shutdown();
       return this;
     }
 
@@ -555,6 +706,17 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public void halfClose() {
       // Server completion is controlled independently from the client's half-close.
+    }
+  }
+
+  // Hands each server call the id that the worker's call carries in its headers.
+  private static final class CallIdReader implements ServerInterceptor {
+
+    @Override
+    public <Q, R> ServerCall.Listener<Q> interceptCall(
+        ServerCall<Q, R> call, Metadata headers, ServerCallHandler<Q, R> next) {
+      return Contexts.interceptCall(
+          Context.current().withValue(CALL_ID, headers.get(CALL_ID_HEADER)), call, headers, next);
     }
   }
 
@@ -672,10 +834,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
   }
 
-  // Whether an upload call is ready for another message: always, unless the test withholds
-  // readiness and grants it one message at a time.
+  // Whether the scripted server reads another message of an open call: at once, unless the test
+  // withholds readiness and grants one message at a time. A grant goes to the earliest open call
+  // that waits for one, or waits itself for the next call that asks.
   private static final class UploadReadiness {
 
+    private final Deque<ScriptedUpload<?, ?>> waiting = new ArrayDeque<>();
     private boolean withheld;
     private int grants;
     private int violations;
@@ -684,23 +848,45 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       withheld = true;
     }
 
-    private synchronized void grant() {
-      grants++;
-    }
-
-    private synchronized boolean isReady() {
-      return !withheld || grants > 0;
-    }
-
-    private synchronized void consume() {
-      if (!isReady()) {
-        violations++;
-        return;
+    private void grant() {
+      Optional<ScriptedUpload<?, ?>> next;
+      synchronized (this) {
+        next = Optional.ofNullable(waiting.pollFirst());
+        if (next.isEmpty()) {
+          grants++;
+        }
       }
 
-      if (withheld) {
-        grants--;
+      next.ifPresent(ScriptedUpload::requestOne);
+    }
+
+    // The call reads one more message once readiness lets it; the request runs outside this
+    // monitor, because gRPC can deliver the call's half-close inside it.
+    private void readOneMoreOf(ScriptedUpload<?, ?> upload) {
+      synchronized (this) {
+        if (withheld && grants == 0) {
+          waiting.addLast(upload);
+          return;
+        }
+
+        if (withheld) {
+          grants--;
+        }
       }
+
+      upload.requestOne();
+    }
+
+    // A grant that an ended call never used goes to the next call.
+    private synchronized void ended(ScriptedUpload<?, ?> upload, boolean requestedUnread) {
+      waiting.remove(upload);
+      if (withheld && requestedUnread) {
+        grants++;
+      }
+    }
+
+    private synchronized void violated() {
+      violations++;
     }
 
     private synchronized int violations() {
@@ -729,24 +915,25 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
   }
 
   /**
-   * A client-streaming upload that records what the worker sent and acknowledges every byte. Like a
-   * gRPC call, a cancelled upload closes with {@code CANCELLED} and is never acknowledged. A
-   * refused upload closes with the refusal's status and trailers once the worker's first message,
-   * which names what the call uploads, arrives.
+   * The scripted server's side of a client-streaming upload, which records what the worker sent and
+   * acknowledges every byte. A call that the worker cancels, or that outlives its deadline, ends
+   * without an answer. A refused upload closes with the refusal's status and trailers once the
+   * worker's first message, which names what the call uploads, arrives.
    *
    * @param <Q> the messages that the worker sends on the call
    * @param <R> the server's single answer
    */
-  public abstract static class ScriptedUpload<Q, R> extends ClientCall<Q, R> {
+  public abstract static class ScriptedUpload<Q, R> implements StreamObserver<Q> {
 
     private final UploadReadiness readiness;
     private final OpenUploads openUploads;
     private final BooleanSupplier acknowledgementsWithheld;
     private final List<Q> messages = new CopyOnWriteArrayList<>();
-    private volatile Listener<R> responses;
-    private Optional<StatusRuntimeException> refusal = Optional.empty();
     private final CompletableFuture<Void> sentWhole = new CompletableFuture<>();
     private final CompletableFuture<Void> cancelledByTheWorker = new CompletableFuture<>();
+    private ServerCallStreamObserver<R> responses;
+    private Optional<StatusRuntimeException> refusal = Optional.empty();
+    private boolean requestedUnread;
     private boolean closed;
     private boolean cancelled;
     private boolean halfClosed;
@@ -766,6 +953,32 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     /** The server's answer to an upload of this many bytes. */
     abstract R acknowledgementOf(long acceptedLengthBytes);
 
+    // Runs inside the server's method, which alone may turn gRPC's own reads off.
+    private void start(ServerCallStreamObserver<R> calls) {
+      calls.disableAutoRequest();
+      calls.setOnCancelHandler(this::endedByTheWorker);
+      synchronized (this) {
+        responses = calls;
+      }
+
+      openUploads.opened();
+      readiness.readOneMoreOf(this);
+    }
+
+    private void requestOne() {
+      ServerCallStreamObserver<R> calls;
+      synchronized (this) {
+        if (closed) {
+          return;
+        }
+
+        requestedUnread = true;
+        calls = responses;
+      }
+
+      calls.request(1);
+    }
+
     synchronized void refuseOnTheFirstMessage(StatusRuntimeException refusal) {
       this.refusal = Optional.of(refusal);
     }
@@ -784,7 +997,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         return;
       }
 
-      responses.onClose(status, new Metadata());
+      responses().onError(status.asRuntimeException());
     }
 
     /** Whether the server refused the upload. */
@@ -826,21 +1039,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       return content.toByteArray();
     }
 
-    void signalReady() {
-      var listener = responses;
-      if (listener != null && readiness.isReady()) {
-        listener.onReady();
-      }
-    }
-
-    @Override
-    public void start(Listener<R> listener, Metadata headers) {
-      responses = listener;
-      openUploads.opened();
-    }
-
     private synchronized Optional<StatusRuntimeException> refusal() {
       return refusal;
+    }
+
+    private synchronized ServerCallStreamObserver<R> responses() {
+      return responses;
     }
 
     private void refuse(StatusRuntimeException refusal) {
@@ -848,29 +1052,34 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         return;
       }
 
-      var trailers = Optional.ofNullable(refusal.getTrailers()).orElseGet(Metadata::new);
-      responses.onClose(refusal.getStatus(), trailers);
+      responses().onError(refusal);
     }
 
     @Override
-    public void request(int messages) {
-      // The single acknowledgement is delivered when the worker half-closes the upload.
-    }
+    public void onNext(Q message) {
+      synchronized (this) {
+        requestedUnread = false;
+      }
 
-    @Override
-    public boolean isReady() {
-      return readiness.isReady();
-    }
-
-    @Override
-    public void sendMessage(Q message) {
-      readiness.consume();
       synchronized (messages) {
         messages.add(message);
         messages.notifyAll();
       }
 
-      refusal().ifPresent(this::refuse);
+      var refused = refusal();
+      if (refused.isPresent()) {
+        refuse(refused.get());
+        return;
+      }
+
+      readiness.readOneMoreOf(this);
+    }
+
+    // gRPC reports the worker's cancel and an expired deadline here as well as to the cancel
+    // handler.
+    @Override
+    public void onError(Throwable failure) {
+      endedByTheWorker();
     }
 
     public synchronized boolean wasCancelled() {
@@ -897,7 +1106,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
 
     @Override
-    public void halfClose() {
+    public void onCompleted() {
       synchronized (this) {
         halfClosed = true;
       }
@@ -925,8 +1134,9 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         return;
       }
 
-      responses.onMessage(answer);
-      responses.onClose(Status.OK, new Metadata());
+      var calls = responses();
+      calls.onNext(answer);
+      calls.onCompleted();
     }
 
     /**
@@ -937,9 +1147,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       cancelledByTheWorker.thenRun(action);
     }
 
-    @Override
-    public void cancel(String message, Throwable cause) {
+    private void cancelledByTheWorker() {
       cancelledByTheWorker.complete(null);
+    }
+
+    private void endedByTheWorker() {
       if (!tryClose()) {
         return;
       }
@@ -947,17 +1159,21 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       synchronized (this) {
         cancelled = true;
       }
-
-      responses.onClose(Status.CANCELLED.withDescription(message).withCause(cause), new Metadata());
     }
 
-    private synchronized boolean tryClose() {
-      if (closed) {
-        return false;
+    private boolean tryClose() {
+      boolean unread;
+      synchronized (this) {
+        if (closed) {
+          return false;
+        }
+
+        closed = true;
+        unread = requestedUnread;
       }
 
-      closed = true;
       openUploads.closed();
+      readiness.ended(this, unread);
       return true;
     }
   }
