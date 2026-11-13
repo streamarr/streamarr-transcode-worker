@@ -491,13 +491,14 @@ class HdrEncodeSmokeTest {
   }
 
   // ADR 0013: the encode keeps every picture, also a picture that reaches the reshape without its
-  // RPU. Such a picture comes out unreshaped.
+  // RPU, so the attempt completes through hevc_nvenc.
   @ParameterizedTest(name = "{0}")
   @EnumSource(SourceWithoutAnRpu.class)
   @DisplayName(
-      "Should deliver every picture when hevc_nvenc reshapes on the GPU a profile 5 source that"
-          + " declares no transfer and whose decoder hands the reshape pictures without an RPU")
-  void shouldDeliverEveryPictureWhenHevcNvencReshapesOnTheGpuPicturesWithoutAnRpu(
+      "Should complete the attempt with as many pictures as the source when hevc_nvenc reshapes on"
+          + " the GPU a profile 5 source that declares no transfer and whose decoder hands the"
+          + " reshape pictures without an RPU")
+  void shouldCompleteTheAttemptWithAsManyPicturesAsTheSourceWhenTheGpuReshapesPicturesWithoutAnRpu(
       SourceWithoutAnRpu withoutAnRpu) throws Exception {
     assumeHevcNvencReshapesOnTheGpu();
     var source = profile5SourceWith(withoutAnRpu.missing, withoutAnRpu.matrixCoefficients);
