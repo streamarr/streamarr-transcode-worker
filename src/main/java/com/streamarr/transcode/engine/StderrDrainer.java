@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -67,17 +68,19 @@ final class StderrDrainer implements AutoCloseable {
   }
 
   /**
-   * Names the exited process and its exit code, followed by the end of its error output, where
-   * FFmpeg reports why it failed.
+   * The failure of a process that exited with an error. Its detail names the process and its exit
+   * code, followed by the end of its error output, where FFmpeg reports why it failed.
    */
-  String exitDetail(String process, int exitCode) {
+  Failed exitFailure(String process, int exitCode) {
     var recentErrorOutput = String.join("\n", awaitRecentOutput(EXIT_DETAIL_WAIT));
     var tailStart = Math.max(0, recentErrorOutput.length() - EXIT_DETAIL_LIMIT);
-    return process
-        + " exited with exit code "
-        + exitCode
-        + ": "
-        + recentErrorOutput.substring(tailStart);
+    return new Failed(
+        ProducerFailure.PROCESS_EXITED_WITH_ERROR,
+        process
+            + " exited with exit code "
+            + exitCode
+            + ": "
+            + recentErrorOutput.substring(tailStart));
   }
 
   @Override
