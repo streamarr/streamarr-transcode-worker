@@ -6900,7 +6900,7 @@ class WorkerMediaSmokeTest {
         .isLessThanOrEqualTo(advertisedEndBytes + FLAC_SAMPLES_PAST_THE_END_AT_MOST * 2);
   }
 
-  // ADR 0058 lets copied audio end up to one frame before encoded video. The copy changes nothing:
+  // ADR 0060 lets copied audio end up to one frame before encoded video. The copy changes nothing:
   // every packet keeps its bytes and its time, and the last 30 ms of the picture have no audio.
   @Test
   @DisplayName(
@@ -7049,7 +7049,7 @@ class WorkerMediaSmokeTest {
     return Long.parseLong(last[0]) + Long.parseLong(last[1]);
   }
 
-  // The recovery of ADR 0058 encodes the audio and pads it. The encode must move no sample: a
+  // The recovery of ADR 0060 encodes the audio and pads it. The encode must move no sample: a
   // rising tone repeats no value pattern, so a sample at another time would not compare equal.
   @Test
   @DisplayName(
