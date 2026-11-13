@@ -139,6 +139,7 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
@@ -177,6 +178,13 @@ class WorkerMediaSmokeTest {
   private static final Fraction WHOLE_SECONDS =
       Fraction.newBuilder().setNumerator(1).setDenominator(1).build();
   private static final int REPLACEMENT_START_SEQUENCE_NUMBER = 2;
+  // The DVD PCM source's 12 s of video and counted audio, in four 3 s segments.
+  private static final int DVD_PCM_SOURCE_SEGMENT_COUNT = 4;
+  private static final int DVD_PCM_SAMPLE_RATE = 48_000;
+  private static final int DVD_PCM_SOURCE_SAMPLES =
+      DVD_PCM_SOURCE_SEGMENT_COUNT * SLOT_SECONDS * DVD_PCM_SAMPLE_RATE;
+  // A FLAC encode codes the sample rate divided by 20 a frame (ADR 0043).
+  private static final int FLAC_FRAME_SAMPLES_AT_48_KHZ = 2_400;
   // The seekable sources' 6 s period in their 48 kHz audio timescale.
   private static final long SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS = 6L * 48_000;
 
@@ -4191,6 +4199,158 @@ class WorkerMediaSmokeTest {
     assertThat(videoSamplesOf(replacementUploads, "segment2.m4s"))
         .isNotEmpty()
         .isEqualTo(videoSamplesOf(fromStartUploads, "segment2.m4s"));
+  }
+
+  // DVD-Video carries 24-bit PCM in MPEG-PS, and FFmpeg's DVD PCM decoder reads it in blocks of
+  // four samples. The replacement attempt for segment 2 seeks 3 s into the source, one segment
+  // before its first, so its decoder starts at the first audio packet after the seek, and the
+  // attempt keeps the packets' timestamps. FLAC keeps every sample's value, so each delivered
+  // sample must be the source sample of its own time.
+  @Test
+  @Disabled(
+      "Red on the pinned FFmpeg, v8.1.3-2-streamarr.1. Its MPEG-PS muxer starts most audio packets"
+          + " of this source inside a block of the DVD PCM decoder, so the attempt decodes noise"
+          + " after its seek, and its demuxer stamps each packet up to 3.5 ms after its first"
+          + " sample. Enable this test with the fork release that carries"
+          + " streamarr/streamarr-ffmpeg#6 and streamarr/streamarr-ffmpeg#7.")
+  @DisplayName(
+      "Should deliver every source sample at its own time, from the first one, when a replacement"
+          + " attempt for segment 2 encodes the 24-bit DVD PCM of an MPEG-PS source")
+  void shouldDeliverEverySourceSampleAtItsOwnTimeWhenAReplacementEncodesDvdPcmOfAnMpegPsSource()
+      throws Exception {
+    var source = dvdPcmSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setStreamIndex(firstStreamIndexOf(source, "v"));
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(1)
+        .setStreamIndex(firstStreamIndexOf(source, "a"))
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(DVD_PCM_SOURCE_SEGMENT_COUNT)
+        .setStartSequenceNumber(REPLACEMENT_START_SEQUENCE_NUMBER);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names()).containsExactly("init.mp4", "segment2.m4s", "segment3.m4s");
+    var delivered = TimedSamples.of(playable(uploads.contentOf(uploads.names())));
+    var segmentStart = REPLACEMENT_START_SEQUENCE_NUMBER * SLOT_SECONDS * DVD_PCM_SAMPLE_RATE;
+    var first = delivered.firstTime();
+    assertThat(first)
+        .as("the first delivered sample's time, less than one FLAC frame after segment 2's start")
+        .isBetween(segmentStart, segmentStart + FLAC_FRAME_SAMPLES_AT_48_KHZ - 1);
+    assertThat(delivered.notTheSourceSampleOfTheirTime())
+        .as("delivered samples that are not the source sample of their own time")
+        .isZero();
+    assertThat(delivered.times())
+        .as("the delivered samples' times: each time from the first to the source's end, once")
+        .isEqualTo(IntStream.range(first, DVD_PCM_SOURCE_SAMPLES).toArray());
+  }
+
+  // 12 s of H.264 at 64x36 and 24 fps with a keyframe every 2 s and no B-frames, beside 12 s of
+  // 24-bit mono DVD PCM at 48 kHz whose sample n holds n + 1, in the VOB that FFmpeg's MPEG-PS
+  // muxer writes. Every decoded sample names the source sample it came from.
+  private static synchronized Path dvdPcmSource() throws Exception {
+    var source = seekableSources.resolve("counted-dvd-pcm.vob");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var samples = seekableSources.resolve("counted-dvd-pcm.s32le");
+    var counted =
+        ByteBuffer.allocate(DVD_PCM_SOURCE_SAMPLES * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+    IntStream.rangeClosed(1, DVD_PCM_SOURCE_SAMPLES).forEach(count -> counted.putInt(count << 8));
+    Files.write(samples, counted.array());
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24:duration=" + DVD_PCM_SOURCE_SEGMENT_COUNT * SLOT_SECONDS,
+            "-f",
+            "s32le",
+            "-ar",
+            String.valueOf(DVD_PCM_SAMPLE_RATE),
+            "-ac",
+            "1",
+            "-i",
+            samples.toString(),
+            "-c:v",
+            "libx264",
+            "-g",
+            "48",
+            "-bf",
+            "0",
+            "-c:a",
+            "pcm_dvd",
+            "-f",
+            "vob"),
+        source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  // The index of the source's first stream of the type that an ffprobe stream specifier names. An
+  // MPEG-PS demuxer numbers the streams in the order of their first packets.
+  private static int firstStreamIndexOf(Path source, String streamType) throws Exception {
+    var streams =
+        ffprobe(
+            List.of("-select_streams", streamType + ":0", "-show_entries", "stream=index"), source);
+    return Integer.parseInt(streams.lines().findFirst().orElseThrow());
+  }
+
+  // The delivered audio's decoded samples and the time each one plays at, in samples: a decoded
+  // frame's samples follow its presentation time.
+  private static final class TimedSamples {
+
+    private final int[] times;
+    private final int[] values;
+
+    private TimedSamples(int[] times, int[] values) {
+      this.times = times;
+      this.values = values;
+    }
+
+    static TimedSamples of(Path media) throws Exception {
+      var decoded = media.resolveSibling(media.getFileName() + ".s32le");
+      runFfmpeg(List.of("-i", media.toString(), "-map", "0:a:0", "-f", "s32le"), decoded);
+      var buffer =
+          ByteBuffer.wrap(Files.readAllBytes(decoded)).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+      var values = new int[buffer.remaining()];
+      buffer.get(values);
+      var times =
+          ffprobe(List.of("-select_streams", "a:0", "-show_entries", "frame=pts,nb_samples"), media)
+              .lines()
+              .flatMapToInt(TimedSamples::timesOfFrame)
+              .toArray();
+      assertThat(times).as("the sample times of the decoded frames").hasSameSizeAs(values);
+      return new TimedSamples(times, values);
+    }
+
+    // The times of the samples of the frame that ffprobe prints as "pts,nb_samples".
+    private static IntStream timesOfFrame(String ptsAndSampleCount) {
+      var fields = ptsAndSampleCount.split(",");
+      var start = Integer.parseInt(fields[0]);
+      return IntStream.range(start, start + Integer.parseInt(fields[1]));
+    }
+
+    int firstTime() {
+      assertThat(times).as("the delivered samples").isNotEmpty();
+      return times[0];
+    }
+
+    int[] times() {
+      return times.clone();
+    }
+
+    // The counted source's sample at time n holds n + 1 in its upper 24 bits.
+    long notTheSourceSampleOfTheirTime() {
+      return IntStream.range(0, times.length)
+          .filter(index -> values[index] != (times[index] + 1) << 8)
+          .count();
+    }
   }
 
   @ParameterizedTest(name = "{0}")
