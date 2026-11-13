@@ -42,6 +42,12 @@ final class KeyframePacketScan {
    */
   private static final String DEMUXING_ERROR = "Error during demuxing";
 
+  /**
+   * Matroska rounds each packet's time to a whole millisecond, so an audio stream's last sample can
+   * end up to 1 ms after the latest end that the stream's packets give.
+   */
+  private static final BigDecimal AUDIO_END_MARGIN_SECONDS = new BigDecimal("0.001");
+
   @NonNull private final PacketScanRunner ffmpeg;
 
   @FunctionalInterface
@@ -163,28 +169,37 @@ final class KeyframePacketScan {
     return arguments;
   }
 
-  // FFmpeg's output stream 0 is the chosen video stream, and each later one an audio stream.
+  // FFmpeg's output stream 0 is the chosen video stream, and each later one an audio stream. An
+  // audio stream's last packet can state less time than its samples last: Matroska states each
+  // packet's duration in whole milliseconds. So the last audio packet counts at the stream's
+  // longest packet duration, and the audio ends 1 ms after that (ADR 0032, probe version 9).
   private static List<ScannedStreamEnd> streamEnds(
       List<ScannedStream> scanned, PacketKeyframes packets) {
     var ends = new ArrayList<ScannedStreamEnd>();
     packets
         .streamEnd(0)
         .latestPacketEnd()
-        .ifPresent(ticks -> ends.add(endOf(scanned.getFirst(), ticks)));
+        .ifPresent(
+            ticks ->
+                ends.add(endOf(scanned.getFirst(), BigInteger.valueOf(ticks), BigDecimal.ZERO)));
     for (var output = 1; output < scanned.size(); output++) {
       var audio = scanned.get(output);
-      packets.streamEnd(output).latestPacketEnd().ifPresent(ticks -> ends.add(endOf(audio, ticks)));
+      packets
+          .streamEnd(output)
+          .lastPacketAtLongestDuration()
+          .ifPresent(ticks -> ends.add(endOf(audio, ticks, AUDIO_END_MARGIN_SECONDS)));
     }
 
     return ends;
   }
 
-  private static ScannedStreamEnd endOf(ScannedStream stream, long ticks) {
+  private static ScannedStreamEnd endOf(
+      ScannedStream stream, BigInteger ticks, BigDecimal marginSeconds) {
     return ScannedStreamEnd.builder()
         .streamIndex(stream.index())
         .timeBase(stream.timeBase())
-        .ticks(BigInteger.valueOf(ticks))
-        .marginSeconds(BigDecimal.ZERO)
+        .ticks(ticks)
+        .marginSeconds(marginSeconds)
         .build();
   }
 
@@ -341,18 +356,17 @@ final class KeyframePacketScan {
   }
 
   /**
-   * Where one stream's packets end: the latest sum of a packet's time and its duration. A packet's
-   * time is its presentation time. FFmpeg's stream copy passes a packet without a presentation time
-   * on with its decode time, which FFmpeg fills from the packets before it, and the fMP4 muxer
-   * writes the packet at that time, so the packet counts at its decode time. The end is unknown
-   * when a packet has neither time, when a packet's end exceeds the long range, or when the packet
-   * that presents last has no positive duration: that packet's end is then unknown, and the scan
-   * never guesses one.
+   * Where one stream's packets end. A packet's time is its presentation time. FFmpeg's stream copy
+   * passes a packet without a presentation time on with its decode time, which FFmpeg fills from
+   * the packets before it, and the fMP4 muxer writes the packet at that time, so the packet counts
+   * at its decode time. The end is unknown when a packet has neither time or when a packet's end
+   * exceeds the long range.
    */
   private static final class StreamEnd {
 
     private long latestEnd = Long.MIN_VALUE;
     private long latestTime = Long.MIN_VALUE;
+    private long longestDuration;
     private boolean latestPacketHasDuration;
     private boolean isUnknown;
 
@@ -370,15 +384,34 @@ final class KeyframePacketScan {
       }
 
       latestEnd = Math.max(latestEnd, time.getAsLong() + duration);
+      longestDuration = Math.max(longestDuration, duration);
     }
 
-    /** The latest packet end, in ticks from the demuxer's zero, when known. */
+    /**
+     * The latest sum of a packet's time and its duration, in ticks from the demuxer's zero, when
+     * known. It is also unknown when the packet that presents last has no positive duration: that
+     * packet's end is then unknown.
+     */
     OptionalLong latestPacketEnd() {
       if (isUnknown || !latestPacketHasDuration) {
         return OptionalLong.empty();
       }
 
       return OptionalLong.of(latestEnd);
+    }
+
+    /**
+     * The time of the packet that presents last plus the stream's longest packet duration, in ticks
+     * from the demuxer's zero, when known. That packet then counts as long as the stream's longest
+     * packet, whatever duration it states. It is also unknown when no packet has a positive
+     * duration.
+     */
+    Optional<BigInteger> lastPacketAtLongestDuration() {
+      if (isUnknown || longestDuration == 0) {
+        return Optional.empty();
+      }
+
+      return Optional.of(BigInteger.valueOf(latestTime).add(BigInteger.valueOf(longestDuration)));
     }
   }
 

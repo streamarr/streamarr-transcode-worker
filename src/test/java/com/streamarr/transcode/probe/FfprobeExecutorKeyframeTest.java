@@ -135,6 +135,15 @@ class FfprobeExecutorKeyframeTest {
        "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
                    "time_base":"1/24","has_b_frames":0}]}
       """;
+  private static final String MATROSKA_FLAC_STREAMS =
+      """
+      {"format":{"format_name":"matroska,webm","start_time":"0.000000"},
+       "streams":[
+        {"index":0,"codec_type":"video","codec_name":"h264","time_base":"1/1000",
+         "has_b_frames":2},
+        {"index":1,"codec_type":"audio","codec_name":"flac","sample_rate":"44100",
+         "time_base":"1/1000"}]}
+      """;
   private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
   private static final String MPEG_TS_OPTION = "-scan_all_pmts";
   private static final List<String> READ_LIMIT_OPTIONS =
@@ -869,8 +878,9 @@ class FfprobeExecutorKeyframeTest {
   }
 
   // The source's streams 1 and 3 are audio and stream 2 is a subtitle, so FFmpeg's output streams
-  // 1 and 2 are the source's streams 1 and 3. The video ends at 4 s, the first audio stream at
-  // 6.016 s and the second at 5.015 s, each in its own time base.
+  // 1 and 2 are the source's streams 1 and 3. The video ends at 4 s. Each audio stream's last
+  // packet ends 1 ms before the stream's reported end, in the stream's own time base: the first
+  // audio stream's at 6.016 s and the second's at 5.015 s (ADR 0032, probe version 9).
   @Test
   @DisplayName(
       "Should report where the chosen video stream and each audio stream ends when a packet scan"
@@ -898,8 +908,8 @@ class FfprobeExecutorKeyframeTest {
     assertThat(scannedEnds(report))
         .containsExactly(
             entry(0, Duration.ofSeconds(4)),
-            entry(1, Duration.ofMillis(6_016)),
-            entry(3, Duration.ofMillis(5_015)));
+            entry(1, Duration.ofMillis(6_017)),
+            entry(3, Duration.ofMillis(5_016)));
     assertThat(ffprobe.packetScanArguments())
         .containsSubsequence("-map", "0:0", "-map", "0:1", "-map", "0:3", "-c", "copy");
     assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
@@ -1158,7 +1168,84 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(scannedEnds(report)).containsExactly(entry(1, Duration.ofMillis(6_016)));
+    assertThat(scannedEnds(report)).containsExactly(entry(1, Duration.ofMillis(6_017)));
+  }
+
+  // The FLAC encoder writes 4,608 samples a frame at 44.1 kHz, and Matroska states each frame's
+  // duration in whole milliseconds: 104 ms. The source holds 180,810 samples, so the last frame
+  // holds 1,098 samples, 24.9 ms, and states 24 ms. Its samples end at 4.100 s, after the 4.099 s
+  // that the packet states. Counted at the stream's longest packet duration, 104 ms, plus 1 ms, the
+  // last packet starts at 4.075 s and the stream ends at 4.180 s (ADR 0032, probe version 9).
+  @Test
+  @DisplayName(
+      "Should count an audio stream's last packet at the stream's longest packet duration plus"
+          + " 1 ms when that packet states less time than the others")
+  void shouldCountAnAudioStreamsLastPacketAtItsLongestPacketDurationWhenThatPacketStatesLess() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_FLAC_STREAMS)
+            .packetScan(
+                """
+                0,    0,    0,  42, 100, 0x00000000
+                1,    0,    0, 104, 100, 0x00000000
+                1, 3971, 3971, 104, 100, 0x00000000
+                0, 3958, 3958,  42, 100, 0x00000000, F=0x0
+                1, 4075, 4075,  24, 100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(scannedEnds(report))
+        .containsExactly(entry(0, Duration.ofSeconds(4)), entry(1, Duration.ofMillis(4_180)));
+  }
+
+  // FFmpeg's Matroska demuxer prints 0 for a block without a duration. The audio stream's last
+  // packet still counts at the stream's longest packet duration: 287,744 + 1,024 ticks of
+  // 1/48000 s is 6.016 s, and 1 ms more is 6.017 s. The video's own rule leaves no end for a packet
+  // that presents last without a duration.
+  @Test
+  @DisplayName(
+      "Should count an audio stream's last packet at the stream's longest packet duration when"
+          + " that packet states no duration")
+  void shouldCountAnAudioStreamsLastPacketAtTheStreamsLongestPacketDurationWhenItStatesNone() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(TWO_AUDIO_STREAMS)
+            .packetScan(
+                """
+                0,          0,          0,     3750,      100, 0x00000000
+                1,          0,          0,     1024,      100, 0x00000000
+                1,     287744,     287744,        0,      100, 0x00000000
+                0,       3750,       3750,        0,      100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsExactly(entry(1, Duration.ofMillis(6_017)));
+  }
+
+  // Without a positive duration on any packet, the scan cannot count the last packet's samples.
+  @Test
+  @DisplayName(
+      "Should report no end for an audio stream when none of the stream's packets states a"
+          + " duration")
+  void shouldReportNoEndForAnAudioStreamWhenNoneOfTheStreamsPacketsStatesADuration() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(TWO_AUDIO_STREAMS)
+            .packetScan(
+                """
+                0,          0,          0,     3750,      100, 0x00000000
+                1,          0,          0,        0,      100, 0x00000000
+                1,       1024,       1024,      -42,      100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(scannedEnds(report)).containsOnlyKeys(0);
   }
 
   // The container starts at 10 s and the stream's only packet ends at 3,750 ticks of 1/90000 s,
@@ -1630,13 +1717,16 @@ class FfprobeExecutorKeyframeTest {
             });
   }
 
-  // The AVI file's video ends at 97 ticks of 1/24 s, as its duration_ts states, and its audio at
-  // 155 ticks of 32/1225 s. The raw HEVC stream's last packet presents at 216,000 ticks of
-  // 1/1200000 s for 24,000 ticks.
+  // The AVI file's video ends at 97 ticks of 1/24 s, as its duration_ts states. Every audio packet
+  // lasts one tick of 32/1225 s, so the audio's last packet ends at 155 ticks, and the audio 1 ms
+  // later. The raw HEVC stream's last packet presents at 216,000 ticks of 1/1200000 s for 24,000
+  // ticks.
   @ParameterizedTest(name = "{0}")
   @MethodSource("recordedStreamEnds")
-  @DisplayName("Should end each scanned stream where the recorded packet scan's last packet ends")
-  void shouldEndEachScannedStreamWhereTheRecordedPacketScansLastPacketEnds(
+  @DisplayName(
+      "Should end each scanned stream from its recorded packets when a packet scan reads a"
+          + " recording")
+  void shouldEndEachScannedStreamFromItsRecordedPacketsWhenAPacketScanReadsARecording(
       String recording, Map<Integer, Duration> expectedEnds) {
     var report = recordedScan(recording).executor().probe(Path.of(recording), packetScanRequest());
 
@@ -1647,7 +1737,7 @@ class FfprobeExecutorKeyframeTest {
     return Stream.of(
         arguments(
             "avi.avi",
-            Map.of(0, Duration.ofNanos(4_041_666_667L), 1, Duration.ofNanos(4_048_979_592L))),
+            Map.of(0, Duration.ofNanos(4_041_666_667L), 1, Duration.ofNanos(4_049_979_592L))),
         arguments("hevc-pir.hevc", Map.of(0, Duration.ofMillis(200))));
   }
 
