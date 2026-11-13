@@ -320,6 +320,11 @@ class WorkerMediaSmokeTest {
   private static final int LOSSY_FRAME_REACH_SAMPLES = 4_800;
   // A 32-bit sample at -60 dBFS.
   private static final long SIXTY_DECIBELS_BELOW_FULL_SCALE = (1L << 31) / 1_000;
+  private static final int SAMPLES_PER_MILLISECOND = COUNTED_AUDIO_SAMPLE_RATE / 1_000;
+  // A 1 kHz tone crosses zero twice in each millisecond.
+  private static final int TONE_ZERO_CROSSINGS_PER_MILLISECOND = 2;
+  // The gap fill passes a step of 2 ms or less through, and fills a longer one with silence.
+  private static final int LONGEST_STEP_THAT_THE_FILL_PASSES = 2 * SAMPLES_PER_MILLISECOND;
   // The long-gap source's 36 s in twelve segments of 3 s, and its counted samples on both sides of
   // its gap from 3.09 s to 33.03 s.
   private static final int LONG_GAP_SEGMENT_COUNT = 12;
@@ -6147,6 +6152,11 @@ class WorkerMediaSmokeTest {
       return decodedWith(media, List.of());
     }
 
+    // The front left channel of delivered audio with more than one channel.
+    static DeliveredAudio ofFrontLeft(Path media) throws Exception {
+      return decodedWith(media, List.of("-af", "pan=mono|c0=FL"));
+    }
+
     // The decode options must leave one channel of the delivered audio's first stream, and must
     // keep its frames.
     private static DeliveredAudio decodedWith(Path media, List<String> decodeOptions)
@@ -6293,6 +6303,41 @@ class WorkerMediaSmokeTest {
       return IntStream.range(from, until)
           .filter(delivered::get)
           .filter(time -> Math.abs((long) byTime[time]) > level)
+          .count();
+    }
+
+    // The longest stretch of times from one time up to another that no delivered sample holds, in
+    // samples.
+    int longestAbsence(int from, int until) {
+      var longest = 0;
+      var run = 0;
+      for (var time = from; time < until; time++) {
+        run = delivered.get(time) ? 0 : run + 1;
+        longest = Math.max(longest, run);
+      }
+
+      return longest;
+    }
+
+    // At the levels of these sources' 1 kHz tones, only the sample nearest a zero crossing can lie
+    // within -60 dBFS of zero. So while the tone sounds, a millisecond at 48 kHz holds no more such
+    // delivered samples than the tone's zero crossings. The milliseconds from one time up to
+    // another, in samples, that hold more, each as its start in milliseconds.
+    List<Integer> millisecondsWithoutTheTone(int from, int until) {
+      return IntStream.range(
+              Math.ceilDiv(from, SAMPLES_PER_MILLISECOND), until / SAMPLES_PER_MILLISECOND)
+          .filter(
+              millisecond ->
+                  quietSamples(millisecond * SAMPLES_PER_MILLISECOND)
+                      > TONE_ZERO_CROSSINGS_PER_MILLISECOND)
+          .boxed()
+          .toList();
+    }
+
+    private long quietSamples(int from) {
+      return IntStream.range(from, from + SAMPLES_PER_MILLISECOND)
+          .filter(delivered::get)
+          .filter(time -> Math.abs((long) byTime[time]) <= SIXTY_DECIBELS_BELOW_FULL_SCALE)
           .count();
     }
 
@@ -6825,10 +6870,10 @@ class WorkerMediaSmokeTest {
   @ParameterizedTest(name = "{0}")
   @ValueSource(strings = {"flac", "alac"})
   @DisplayName(
-      "Should play none of the audio before a gap inside or after the gap when a lossless encode's"
-          + " source changes its sample rate before the gap")
-  void shouldPlayNoneOfTheAudioBeforeAGapInsideOrAfterItWhenTheSourceChangesItsSampleRate(
-      String codec) throws Exception {
+      "Should play the audio before a gap up to the gap's start and none of it inside or after the"
+          + " gap when a lossless encode's source changes its sample rate before the gap")
+  void shouldPlayTheAudioBeforeAGapOnlyBeforeItWhenTheSourceChangesItsSampleRate(String codec)
+      throws Exception {
     var source = sampleRateChangeSource();
     var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     job.getDecisionBuilder().getAudioBuilder().setCodec(codec);
@@ -6837,7 +6882,15 @@ class WorkerMediaSmokeTest {
 
     var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
     var gap = SampleRange.ofMillis(6_000, 6_600);
-    var afterTheRinging = gap.from() + 3 * COUNTED_AUDIO_SAMPLE_RATE / 1_000;
+    assertThat(delivered.silentSamples(0, GAPPED_SOURCE_END_SAMPLES).absent())
+        .as("times from zero to the advertised end at 12 s that no delivered sample holds")
+        .isZero();
+    assertThat(delivered.millisecondsWithoutTheTone(0, gap.from()))
+        .as(
+            "the milliseconds from zero to the gap's start at 6 s, across the rate change at 4 s, in"
+                + " which the tone does not sound")
+        .isEmpty();
+    var afterTheRinging = gap.from() + 3 * SAMPLES_PER_MILLISECOND;
     assertThat(
             delivered.samplesBeyond(
                 SIXTY_DECIBELS_BELOW_FULL_SCALE, afterTheRinging, GAPPED_SOURCE_END_SAMPLES))
@@ -6915,15 +6968,18 @@ class WorkerMediaSmokeTest {
   }
 
   // A FLAC or ALAC encode that sums channels runs them through the downmix's limiters (ADR 0050),
-  // which keep the audio's timing. The drifting sources' timestamps step 1 ms at 2.5 s or 2.6 s,
-  // and again at 7.5 s or 7.6 s. Each step is 2 ms or less, so the gap fills pass it through. A
-  // tone that never stops leaves no millisecond of digital silence in any channel.
+  // which keep the audio's timing and every sample. The drifting sources' timestamps step 1 ms at
+  // 2.5 s or 2.6 s, and again at 7.5 s or 7.6 s. Each step is 2 ms or less, so the gap fills pass
+  // it through, and no longer stretch of the timeline is left without a sample. The tone in every
+  // channel never stops before its last sample, so the left channel sounds in every millisecond
+  // up to the time that the source's timestamps give that sample.
   @ParameterizedTest(name = "{0}, {1}")
   @MethodSource("summedDriftingAudio")
   @DisplayName(
-      "Should write no digital silence inside the sound when a lossless encode sums the channels of"
-          + " 5.1 audio whose timestamps drift by 0.02 %")
-  void shouldWriteNoSilenceInsideTheSoundWhenALosslessEncodeSumsTheChannelsOfDriftingAudio(
+      "Should play the tone in every millisecond up to its end and leave no time longer than 2 ms"
+          + " without a sample when a lossless encode sums the channels of 5.1 audio whose"
+          + " timestamps drift by 0.02 %")
+  void shouldPlayTheToneInEveryMillisecondWhenALosslessEncodeSumsTheChannelsOfDriftingAudio(
       String codec, StampError error) throws Exception {
     var source = drifting51ToneSource(error);
     var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
@@ -6935,12 +6991,19 @@ class WorkerMediaSmokeTest {
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
-    var left = leftChannelOf(playable(uploads.contentOf(uploads.names())));
-    var tone = SampleRange.ofMillis(100, 9_900);
-    assertThat(longestSilentRun(left, tone.from(), tone.until()))
+    var left = DeliveredAudio.ofFrontLeft(playable(uploads.contentOf(uploads.names())));
+    assertThat(left.longestAbsence(0, GAPPED_SOURCE_END_SAMPLES))
         .as(
-            "the longest run of digital silence in the left channel from 0.1 s to 9.9 s, in samples")
-        .isLessThan(COUNTED_AUDIO_SAMPLE_RATE / 1_000);
+            "the longest stretch from zero to the advertised end at 12 s that no delivered sample"
+                + " holds, in samples")
+        .isLessThanOrEqualTo(LONGEST_STEP_THAT_THE_FILL_PASSES);
+    var toneEnd = COUNTED_AUDIO_SAMPLES + error.lastSampleOffset;
+    assertThat(left.millisecondsWithoutTheTone(0, toneEnd))
+        .as(
+            "the milliseconds of the left channel from zero to the tone's end at sample %d, across"
+                + " both steps, in which the tone does not sound",
+            toneEnd)
+        .isEmpty();
   }
 
   static Stream<Arguments> summedDriftingAudio() {
@@ -6986,31 +7049,6 @@ class WorkerMediaSmokeTest {
     }
 
     return source;
-  }
-
-  // The left channel's decoded samples of the delivered stereo audio, in the order they play.
-  private static int[] leftChannelOf(Path media) throws Exception {
-    var decoded = media.resolveSibling(media.getFileName() + ".left.s32le");
-    runFfmpeg(
-        List.of("-i", media.toString(), "-map", "0:a:0", "-af", "pan=mono|c0=FL", "-f", "s32le"),
-        decoded);
-    var samples =
-        ByteBuffer.wrap(Files.readAllBytes(decoded)).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
-    var left = new int[samples.remaining()];
-    samples.get(left);
-    return left;
-  }
-
-  // The longest run of digital silence among the samples from one index up to another.
-  private static int longestSilentRun(int[] samples, int from, int until) {
-    var longest = 0;
-    var run = 0;
-    for (var index = from; index < Math.min(until, samples.length); index++) {
-      run = samples[index] == 0 ? run + 1 : 0;
-      longest = Math.max(longest, run);
-    }
-
-    return longest;
   }
 
   @Test
