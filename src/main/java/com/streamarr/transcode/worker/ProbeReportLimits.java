@@ -50,9 +50,17 @@ record ProbeReportLimits(long keyframes, long measuredKeyframeIntervals, long re
    */
   ProbeAttemptReport apply(ProbeRequest request, ProbeAttemptReport report) {
     var withinEntryLimits = withinIntervalLimit(request, withinKeyframeLimit(request, report));
-    var length = withinEntryLimits.getSerializedSize();
+    if (longerThanTheLengthLimit(request, withinEntryLimits)) {
+      return ProbeReports.failed(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
+    }
+
+    return withinEntryLimits;
+  }
+
+  private boolean longerThanTheLengthLimit(ProbeRequest request, ProbeAttemptReport report) {
+    var length = report.getSerializedSize();
     if (!exceeds(length, reportLengthBytes)) {
-      return withinEntryLimits;
+      return false;
     }
 
     log.warn(
@@ -60,7 +68,7 @@ record ProbeReportLimits(long keyframes, long measuredKeyframeIntervals, long re
         fromProto(request.getProbeAttemptId()),
         length,
         Long.toUnsignedString(reportLengthBytes));
-    return ProbeReports.failed(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
+    return true;
   }
 
   // The server encodes the video of a file whose keyframes are unavailable, so the file still
