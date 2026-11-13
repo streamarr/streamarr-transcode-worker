@@ -81,7 +81,13 @@ class RequiredComponentTest {
             "closedSegments",
             (ThrowingCallable) () -> new SegmentAssembler.Closing(null, Optional.empty())),
         Arguments.of(
-            "failure", (ThrowingCallable) () -> new SegmentAssembler.Closing(List.of(), null)));
+            "failure", (ThrowingCallable) () -> new SegmentAssembler.Closing(List.of(), null)),
+        Arguments.of(
+            "copyCommand",
+            (ThrowingCallable) () -> new FfmpegPipeline.RpuMovingPipe(null, List.of(), true)),
+        Arguments.of(
+            "encodeCommand",
+            (ThrowingCallable) () -> new FfmpegPipeline.RpuMovingPipe(List.of(), null, true)));
   }
 
   private static Fragment.FragmentBuilder fragment() {
