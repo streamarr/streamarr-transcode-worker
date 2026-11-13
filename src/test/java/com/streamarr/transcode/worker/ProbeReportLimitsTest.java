@@ -54,14 +54,15 @@ class ProbeReportLimitsTest {
 
   @Test
   @DisplayName(
-      "Should read the three limits on a probe report as unsigned values when the server accepts"
+      "Should read the four limits on a probe report as unsigned values when the server accepts"
           + " the worker session")
-  void shouldReadTheThreeLimitsOnAProbeReportAsUnsignedValuesWhenTheServerAcceptsTheSession() {
+  void shouldReadTheFourLimitsOnAProbeReportAsUnsignedValuesWhenTheServerAcceptsTheSession() {
     var accepted =
         WorkerSessionAccepted.newBuilder()
             .setKeyframeLimit(150_000)
             .setMeasuredKeyframeIntervalLimit(-1)
             .setProbeReportLengthLimitBytes(16L << 20)
+            .setProbeResultLengthLimitBytes(128L << 10)
             .build();
 
     assertThat(ProbeReportLimits.of(accepted))
@@ -71,6 +72,7 @@ class ProbeReportLimitsTest {
                 // The contract's 32-bit limits are unsigned.
                 .measuredKeyframeIntervals(4_294_967_295L)
                 .reportLengthBytes(16L << 20)
+                .resultLengthBytes(128L << 10)
                 .build());
   }
 

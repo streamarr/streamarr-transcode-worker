@@ -23,10 +23,16 @@ import lombok.extern.slf4j.Slf4j;
  * @param measuredKeyframeIntervals the most measured keyframe intervals in one probe report, added
  *     up over its measured streams
  * @param reportLengthBytes the length of the longest encoded probe report that the server accepts
+ * @param resultLengthBytes the length of the longest encoded result that the server accepts in a
+ *     probe report
  */
 @Slf4j
 @Builder
-record ProbeReportLimits(long keyframes, long measuredKeyframeIntervals, long reportLengthBytes) {
+record ProbeReportLimits(
+    long keyframes,
+    long measuredKeyframeIntervals,
+    long reportLengthBytes,
+    long resultLengthBytes) {
 
   static final ProbeReportLimits NONE = builder().build();
 
@@ -37,6 +43,7 @@ record ProbeReportLimits(long keyframes, long measuredKeyframeIntervals, long re
         .measuredKeyframeIntervals(
             Integer.toUnsignedLong(accepted.getMeasuredKeyframeIntervalLimit()))
         .reportLengthBytes(accepted.getProbeReportLengthLimitBytes())
+        .resultLengthBytes(accepted.getProbeResultLengthLimitBytes())
         .build();
   }
 
