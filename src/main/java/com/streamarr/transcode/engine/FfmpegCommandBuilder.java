@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.NonNull;
@@ -43,7 +44,7 @@ public class FfmpegCommandBuilder {
    * planar 10-bit BT.2020 PQ. tonemapx reshapes only from planar 10-bit input, and aborts FFmpeg
    * for PQ in an 8-bit format.
    */
-  static final String DOLBY_VISION_TO_PQ_RESHAPE_FILTERS =
+  private static final String DOLBY_VISION_TO_PQ_RESHAPE_FILTERS =
       FORMAT_FILTER
           + PLANAR_TEN_BIT_PIXEL_FORMAT
           + ",tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format="
@@ -63,8 +64,22 @@ public class FfmpegCommandBuilder {
           .takesNvencPreset(true)
           .fixedGop(true)
           .tenBitPixelFormat(P010)
+          .writesStaticHdrMetadataOfFrames(true)
           .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
           .codecProfileForcing(CodecProfileForcing.NVENC)
+          .build();
+  // hevc_nvenc's Main 10 recordings from 10-bit BT.709, PQ and HLG sources show the same keyframes
+  // (src/test/resources/nvenc). The reshape of Dolby Vision into PQ runs on the CPU before the
+  // encoder, which then takes the arguments of a PQ encode. The features are named one by one, so
+  // a later feature joins only with recordings of its own.
+  private static final EncoderTraits HEVC_NVENC =
+      NVENC.toBuilder()
+          .testedEncodeFeatures(
+              Set.of(
+                  EncodeFeature.TEN_BIT,
+                  EncodeFeature.PQ,
+                  EncodeFeature.HLG,
+                  EncodeFeature.DOLBY_VISION_TO_PQ))
           .build();
   // QSV and VAAPI take nv12 from system memory and refuse yuv420p.
   private static final String NV12 = "nv12";
@@ -95,6 +110,7 @@ public class FfmpegCommandBuilder {
                   .takesSvtAv1PresetNumber(true)
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
+                  .testedEncodeFeatures(Set.of(EncodeFeature.values()))
                   .codecProfileForcing(CodecProfileForcing.LIBSVTAV1)
                   .build()),
           Map.entry(
@@ -103,10 +119,11 @@ public class FfmpegCommandBuilder {
                   .keyframeVerified(true)
                   .takesPresetName(true)
                   .closesGopsByX265Parameters(true)
+                  .testedEncodeFeatures(Set.of(EncodeFeature.values()))
                   .codecProfileForcing(CodecProfileForcing.LIBX265)
                   .build()),
           Map.entry("h264_nvenc", NVENC),
-          Map.entry("hevc_nvenc", NVENC),
+          Map.entry("hevc_nvenc", HEVC_NVENC),
           Map.entry("av1_nvenc", FIXED_GOP),
           Map.entry("h264_qsv", QSV),
           Map.entry("hevc_qsv", QSV),
@@ -1332,23 +1349,49 @@ public class FfmpegCommandBuilder {
   }
 
   private static String videoFormat(TranscodeJob job) {
-    return switch (pictureConversion(job)) {
+    return videoFormat(job.videoEncoder(), job.request().transcodeDecision().videoDecision());
+  }
+
+  /**
+   * The filters that turn a scaled picture into the format and range that the encoder takes for the
+   * decision's output, as a job's command passes them. The worker's own test encode of each encode
+   * feature runs them.
+   */
+  static String videoFormat(String encoder, VideoDecision decision) {
+    return switch (pictureConversion(decision)) {
       case TONE_MAP_TO_SDR ->
           "tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:format="
-              + planarFormat(job)
+              + planarFormat(decision)
               + ",sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT";
       case RESHAPE_DOLBY_VISION_TO_PQ ->
           DOLBY_VISION_TO_PQ_RESHAPE_FILTERS
-              + encoderFormatAfterThePlanarOne(job)
-              + hdrColourParameters(job);
+              + encoderFormatAfterThePlanarOne(encoder, decision)
+              + hdrColourParameters(encoder, decision);
       case KEEP_THE_SOURCES_RANGE ->
-          FORMAT_FILTER + encoderPixelFormat(job) + hdrColourParameters(job);
-      case CONVERT_TO_BT709 -> FORMAT_FILTER + encoderPixelFormat(job);
+          FORMAT_FILTER
+              + encoderPixelFormat(encoder, decision)
+              + hdrColourParameters(encoder, decision);
+      case CONVERT_TO_BT709 -> FORMAT_FILTER + encoderPixelFormat(encoder, decision);
     };
   }
 
-  private static String hdrColourParameters(TranscodeJob job) {
-    return hdrTransferOf(job).map(transfer -> "," + frameColourFilter(transfer)).orElse("");
+  private static String hdrColourParameters(String encoder, VideoDecision decision) {
+    return hdrTransferOf(decision)
+        .map(transfer -> "," + frameColourFilter(transfer) + staticHdrMetadataDeletion(encoder))
+        .orElse("");
+  }
+
+  // NVENC writes the mastering display and content light level of each keyframe's frame into the
+  // samples, and takes no values from the command. A source's values can differ from the job's,
+  // which the producer writes into the initialization segment, so the frames reach NVENC without
+  // them.
+  private static String staticHdrMetadataDeletion(String encoder) {
+    if (!traitsOf(encoder).writesStaticHdrMetadataOfFrames()) {
+      return "";
+    }
+
+    return ",sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA"
+        + ",sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL";
   }
 
   /**
@@ -1357,7 +1400,7 @@ public class FfmpegCommandBuilder {
    * every frame as the job's output whatever the source's own tags say: without it, FFmpeg writes
    * no colr box for an untagged source.
    */
-  static String frameColourFilter(HdrTransfer transfer) {
+  private static String frameColourFilter(HdrTransfer transfer) {
     return "setparams=color_primaries=bt2020:color_trc="
         + transfer.ffmpegName()
         + ":colorspace=bt2020nc:range=tv";
@@ -1389,16 +1432,16 @@ public class FfmpegCommandBuilder {
     return List.copyOf(arguments);
   }
 
-  private static String planarFormat(TranscodeJob job) {
-    if (outputPictureFormat(job).bitDepth() > 8) {
+  private static String planarFormat(VideoDecision decision) {
+    if (outputPictureFormat(decision).bitDepth() > 8) {
       return PLANAR_TEN_BIT_PIXEL_FORMAT;
     }
 
     return DEFAULT_EIGHT_BIT_PIXEL_FORMAT;
   }
 
-  private static String encoderFormatAfterThePlanarOne(TranscodeJob job) {
-    var format = encoderPixelFormat(job);
+  private static String encoderFormatAfterThePlanarOne(String encoder, VideoDecision decision) {
+    var format = encoderPixelFormat(encoder, decision);
     if (format.equals(PLANAR_TEN_BIT_PIXEL_FORMAT)) {
       return "";
     }
@@ -1406,16 +1449,16 @@ public class FfmpegCommandBuilder {
     return "," + FORMAT_FILTER + format;
   }
 
-  private static String encoderPixelFormat(TranscodeJob job) {
-    if (outputPictureFormat(job).bitDepth() > 8) {
-      return traitsOf(job).tenBitPixelFormat();
+  private static String encoderPixelFormat(String encoder, VideoDecision decision) {
+    if (outputPictureFormat(decision).bitDepth() > 8) {
+      return traitsOf(encoder).tenBitPixelFormat();
     }
 
-    return traitsOf(job).eightBitPixelFormat();
+    return traitsOf(encoder).eightBitPixelFormat();
   }
 
-  private static PictureFormat outputPictureFormat(TranscodeJob job) {
-    return switch (job.request().transcodeDecision().videoDecision()) {
+  private static PictureFormat outputPictureFormat(VideoDecision decision) {
+    return switch (decision) {
       case VideoDecision.Copy _ -> PictureFormat.EIGHT_BIT_420;
       case VideoDecision.Encode encode -> encode.outputPictureFormat();
     };
@@ -1434,8 +1477,11 @@ public class FfmpegCommandBuilder {
   }
 
   private static PictureConversion pictureConversion(TranscodeJob job) {
-    if (!(job.request().transcodeDecision().videoDecision()
-        instanceof VideoDecision.Encode encode)) {
+    return pictureConversion(job.request().transcodeDecision().videoDecision());
+  }
+
+  private static PictureConversion pictureConversion(VideoDecision decision) {
+    if (!(decision instanceof VideoDecision.Encode encode)) {
       return PictureConversion.CONVERT_TO_BT709;
     }
 
@@ -1476,8 +1522,11 @@ public class FfmpegCommandBuilder {
   }
 
   private static Optional<HdrTransfer> hdrTransferOf(TranscodeJob job) {
-    if (!(job.request().transcodeDecision().videoDecision()
-        instanceof VideoDecision.Encode encode)) {
+    return hdrTransferOf(job.request().transcodeDecision().videoDecision());
+  }
+
+  private static Optional<HdrTransfer> hdrTransferOf(VideoDecision decision) {
+    if (!(decision instanceof VideoDecision.Encode encode)) {
       return Optional.empty();
     }
 
@@ -1622,6 +1671,15 @@ public class FfmpegCommandBuilder {
     return traitsOf(encoder).frameTypeOptions();
   }
 
+  /**
+   * The encode features that the worker runs its own test encode of with the encoder, and lists
+   * once the encoder passes. A hardware encoder joins for a feature only once its recordings show
+   * the keyframes that ADR 0037 asks of a keyframe-verified encoder in that output.
+   */
+  static Set<EncodeFeature> testedEncodeFeatures(String encoder) {
+    return traitsOf(encoder).testedEncodeFeatures();
+  }
+
   /** Whether the command forces the job's codec profile, tier and level on the encoder. */
   static boolean forcesCodecProfile(String encoder) {
     return traitsOf(encoder).codecProfileForcing() != CodecProfileForcing.NONE;
@@ -1647,7 +1705,7 @@ public class FfmpegCommandBuilder {
             STANDARD_OUTPUT));
   }
 
-  @Builder
+  @Builder(toBuilder = true)
   private record EncoderTraits(
       boolean keyframeVerified,
       boolean takesPresetName,
@@ -1657,9 +1715,11 @@ public class FfmpegCommandBuilder {
       boolean disablesSceneCutsByThreshold,
       boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
+      boolean writesStaticHdrMetadataOfFrames,
       @NonNull String eightBitPixelFormat,
       @NonNull String tenBitPixelFormat,
       @NonNull List<String> frameTypeOptions,
+      @NonNull Set<EncodeFeature> testedEncodeFeatures,
       @NonNull CodecProfileForcing codecProfileForcing) {}
 
   private static EncoderTraits.EncoderTraitsBuilder traits() {
@@ -1667,6 +1727,7 @@ public class FfmpegCommandBuilder {
         .eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT)
         .tenBitPixelFormat(PLANAR_TEN_BIT_PIXEL_FORMAT)
         .frameTypeOptions(List.of())
+        .testedEncodeFeatures(Set.of())
         .codecProfileForcing(CodecProfileForcing.NONE);
   }
 

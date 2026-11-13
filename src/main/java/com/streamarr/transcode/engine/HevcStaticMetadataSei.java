@@ -39,8 +39,19 @@ final class HevcStaticMetadataSei {
     return List.copyOf(units);
   }
 
-  // The SEI message lists the primaries as green, blue and red (ITU-T H.265 D.3.28).
   private static byte[] masteringDisplay(PlannedCopyOutput.MasteringDisplay display) {
+    return nalUnit(MASTERING_DISPLAY, masteringDisplayPayload(display));
+  }
+
+  private static byte[] contentLightLevel(PlannedCopyOutput.ContentLightLevel level) {
+    return nalUnit(CONTENT_LIGHT_LEVEL, contentLightLevelPayload(level));
+  }
+
+  /**
+   * The mastering display color volume as the SEI message holds it: the green, blue and red
+   * primaries and the white point, then the maximum and the minimum luminance (ITU-T H.265 D.3.28).
+   */
+  static byte[] masteringDisplayPayload(PlannedCopyOutput.MasteringDisplay display) {
     var payload = ByteBuffer.allocate(MASTERING_DISPLAY_BYTES);
     for (var primary :
         List.of(display.green(), display.blue(), display.red(), display.whitePoint())) {
@@ -48,15 +59,15 @@ final class HevcStaticMetadataSei {
     }
 
     payload.putInt((int) display.maxLuminance()).putInt((int) display.minLuminance());
-    return nalUnit(MASTERING_DISPLAY, payload.array());
+    return payload.array();
   }
 
-  private static byte[] contentLightLevel(PlannedCopyOutput.ContentLightLevel level) {
-    var payload =
-        ByteBuffer.allocate(CONTENT_LIGHT_LEVEL_BYTES)
-            .putShort((short) level.maxContentLightLevel())
-            .putShort((short) level.maxFrameAverageLightLevel());
-    return nalUnit(CONTENT_LIGHT_LEVEL, payload.array());
+  /** The content light level as the SEI message holds it: MaxCLL and then MaxFALL. */
+  static byte[] contentLightLevelPayload(PlannedCopyOutput.ContentLightLevel level) {
+    return ByteBuffer.allocate(CONTENT_LIGHT_LEVEL_BYTES)
+        .putShort((short) level.maxContentLightLevel())
+        .putShort((short) level.maxFrameAverageLightLevel())
+        .array();
   }
 
   // Each payload type and size is below 255, so each takes one byte.

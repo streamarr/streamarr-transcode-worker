@@ -16,6 +16,7 @@ import {
   outputCheck,
   planOf,
   recordingFacts,
+  seiPayloadTypes,
   summary,
 } from './nvenc-recordings.mjs';
 import { temporaryDirectory } from './temporary-directories.mjs';
@@ -75,12 +76,26 @@ function hvcC({ spaceTierAndProfile = 0x01, constraints = [0x90, 0, 0, 0, 0, 0],
   return box('hvcC', fields, Buffer.from([arrays.length]), ...nalUnits);
 }
 
-function initializationSegment(sampleEntryType, record) {
-  const sampleEntry = box(sampleEntryType, Buffer.alloc(78), ...(record === null ? [] : [record]));
+/** An nclx colr box with the primaries, transfer and matrix, in limited range unless full. */
+function colr(primaries, transfer, matrix, fullRange = false) {
+  return box('colr', Buffer.from('nclx', 'latin1'), u16(primaries), u16(transfer), u16(matrix), Buffer.from([fullRange ? 0x80 : 0]));
+}
+
+function initializationSegment(sampleEntryType, record, ...otherBoxes) {
+  const sampleEntry = box(sampleEntryType, Buffer.alloc(78), ...(record === null ? [] : [record]), ...otherBoxes);
   return Buffer.concat([ftyp(), moov(track({ trackId: 2, handler: 'soun', timescale: 48000 }), track({ ...VIDEO, sampleEntry }))]);
 }
 
 const HEVC = { IDR_N_LP: [0x28, 0x01], IDR_W_RADL: [0x26, 0x01], CRA: [0x2a, 0x01], RADL_N: [0x0e, 0x01], TRAIL_R: [0x02, 0x01] };
+const PREFIX_SEI = [0x4e, 0x01];
+const MASTERING_DISPLAY = 137;
+const CONTENT_LIGHT_LEVEL = 144;
+const RBSP_TRAILING_BITS = 0x80;
+
+/** A prefix SEI NAL unit that holds one message per [payload type, payload bytes]. */
+function sei(...messages) {
+  return [...PREFIX_SEI, ...messages.flatMap(([type, payload]) => [type, payload.length, ...payload]), RBSP_TRAILING_BITS];
+}
 
 /** Facts for frames given in decode order as [presentation frame, sync, NAL unit type of a keyframe]. */
 function facts(frames, sampleEntry = 'hvc1') {
@@ -137,7 +152,54 @@ describe('recording facts', () => {
         { presentationTime: 0, nalUnitType: 20 },
         { presentationTime: 3 * FRAME, nalUnitType: 21 },
       ],
+      staticHdrMetadataSamples: 0,
     });
+  });
+
+  it('Should count the samples that carry a mastering display or content light level message when the track is HEVC', () => {
+    const units = [
+      [accessUnit(sei([MASTERING_DISPLAY, [1, 2]]), HEVC.IDR_N_LP), true],
+      [accessUnit(sei([1, [0]]), HEVC.TRAIL_R), false],
+      [accessUnit(sei([1, [0]], [CONTENT_LIGHT_LEVEL, [3, 232, 1, 144]]), HEVC.IDR_N_LP), true],
+    ];
+    const run = {
+      samples: units.map(([bytes, sync]) => ({ duration: FRAME, size: bytes.length, flags: sync ? SYNC_SAMPLE_FLAGS : NON_SYNC_SAMPLE_FLAGS })),
+      payload: units.flatMap(([bytes]) => bytes),
+    };
+    const stream = readStream(
+      Buffer.concat([initializationSegment('hvc1', hvcC()), fragment({ trackId: VIDEO.trackId, decodeTime: 0, runs: [run] })]),
+    );
+
+    assert.equal(recordingFacts(stream).staticHdrMetadataSamples, 2);
+  });
+
+  it('Should count no static HDR metadata samples when the track is not HEVC', () => {
+    const stream = readStream(
+      Buffer.concat([
+        initializationSegment('vp09', null),
+        fragment({ trackId: VIDEO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: FRAME, size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS }] }),
+      ]),
+    );
+
+    assert.equal(recordingFacts(stream).staticHdrMetadataSamples, null);
+  });
+});
+
+describe('SEI payload types', () => {
+  it('Should read the payload type of every message when an SEI NAL unit holds several', () => {
+    assert.deepEqual(seiPayloadTypes(Buffer.from(sei([1, [9, 9]], [MASTERING_DISPLAY, [7]], [CONTENT_LIGHT_LEVEL, []]))), [1, MASTERING_DISPLAY, CONTENT_LIGHT_LEVEL]);
+  });
+
+  it('Should skip a payload by its size without emulation prevention bytes when the payload holds a start code prefix', () => {
+    const escaped = [...PREFIX_SEI, MASTERING_DISPLAY, 4, 0, 0, 3, 0, 50, CONTENT_LIGHT_LEVEL, 0, RBSP_TRAILING_BITS];
+
+    assert.deepEqual(seiPayloadTypes(Buffer.from(escaped)), [MASTERING_DISPLAY, CONTENT_LIGHT_LEVEL]);
+  });
+
+  it('Should add each 0xFF byte to the payload type and size when a message extends them', () => {
+    const payload = Array.from({ length: 256 }, () => 1);
+
+    assert.deepEqual(seiPayloadTypes(Buffer.from([...PREFIX_SEI, 0xff, 2, 0xff, 1, ...payload, RBSP_TRAILING_BITS])), [257]);
   });
 
   it('Should keep no picture types when the track is neither H.264 nor HEVC', () => {
@@ -378,6 +440,21 @@ describe('initialization segment facts', () => {
     assert.equal(facts.holdsParameterSets, false);
   });
 
+  it('Should read the colour description when the sample entry holds an nclx colr box, and none without one', () => {
+    assert.deepEqual(initializationSegmentFacts(initializationSegment('hvc1', hvcC(), colr(9, 16, 9))).colourDescription, {
+      primaries: 9,
+      transfer: 16,
+      matrix: 9,
+      fullRange: false,
+    });
+    assert.equal(initializationSegmentFacts(initializationSegment('hvc1', hvcC(), colr(1, 1, 1, true))).colourDescription.fullRange, true);
+    assert.equal(initializationSegmentFacts(initializationSegment('hvc1', hvcC())).colourDescription, null);
+    assert.equal(
+      initializationSegmentFacts(initializationSegment('hvc1', hvcC(), box('colr', Buffer.from('prof', 'latin1'), Buffer.alloc(7)))).colourDescription,
+      null,
+    );
+  });
+
   it('Should refuse an initialization segment without a video track', () => {
     const audioOnly = Buffer.concat([ftyp(), moov(track({ trackId: 2, handler: 'soun', timescale: 48000 }))]);
 
@@ -386,18 +463,46 @@ describe('initialization segment facts', () => {
 });
 
 describe('output check', () => {
-  const passing = { codecString: 'avc1.640028', pictureFormat: { bitDepth: 8, chroma: '4:2:0' }, holdsParameterSets: true };
+  const passing = { codecString: 'avc1.640028', pictureFormat: { bitDepth: 8, chroma: '4:2:0' }, holdsParameterSets: true, colourDescription: null };
+  const job = { expectedCodecString: 'avc1.640028', bitDepth: 8, range: 'sdr' };
+  const pq = { primaries: 9, transfer: 16, matrix: 9, fullRange: false };
+  const main10 = { codecString: 'hvc1.2.4.L120.90', pictureFormat: { bitDepth: 10, chroma: '4:2:0' }, holdsParameterSets: true, colourDescription: pq };
+  const pqJob = { expectedCodecString: 'hvc1.2.4.L120.90', bitDepth: 10, range: 'pq' };
 
   it('Should pass when the codec string matches the job and the record holds 8-bit 4:2:0 and its parameter sets', () => {
-    assert.deepEqual(outputCheck(passing, 'avc1.640028'), { expectedCodecString: 'avc1.640028', codecString: 'avc1.640028', passes: true });
+    assert.deepEqual(outputCheck(passing, job), {
+      expectedCodecString: 'avc1.640028',
+      codecString: 'avc1.640028',
+      expectedBitDepth: 8,
+      expectedColourDescription: null,
+      passes: true,
+    });
   });
 
   it('Should fail when the codec string, the picture format or the parameter sets differ from what the job needs', () => {
-    assert.equal(outputCheck(passing, 'avc1.64001F').passes, false);
-    assert.equal(outputCheck({ ...passing, pictureFormat: { bitDepth: 10, chroma: '4:2:0' } }, 'avc1.640028').passes, false);
-    assert.equal(outputCheck({ ...passing, pictureFormat: { bitDepth: 8, chroma: '4:4:4' } }, 'avc1.640028').passes, false);
-    assert.equal(outputCheck({ ...passing, pictureFormat: null }, 'avc1.640028').passes, false);
-    assert.equal(outputCheck({ ...passing, holdsParameterSets: false }, 'avc1.640028').passes, false);
+    assert.equal(outputCheck(passing, { ...job, expectedCodecString: 'avc1.64001F' }).passes, false);
+    assert.equal(outputCheck({ ...passing, pictureFormat: { bitDepth: 10, chroma: '4:2:0' } }, job).passes, false);
+    assert.equal(outputCheck({ ...passing, pictureFormat: { bitDepth: 8, chroma: '4:4:4' } }, job).passes, false);
+    assert.equal(outputCheck({ ...passing, pictureFormat: null }, job).passes, false);
+    assert.equal(outputCheck({ ...passing, holdsParameterSets: false }, job).passes, false);
+  });
+
+  it('Should pass a 10-bit job when the record holds 10 bits, and compare no colour description when its range is BT.709', () => {
+    const sdr10Job = { ...pqJob, range: 'sdr10' };
+
+    assert.equal(outputCheck({ ...main10, colourDescription: null }, sdr10Job).passes, true);
+    assert.equal(outputCheck({ ...main10, pictureFormat: { bitDepth: 8, chroma: '4:2:0' } }, sdr10Job).passes, false);
+  });
+
+  it('Should pass a PQ or HLG job only when the colr box declares limited-range BT.2020 with the transfer of its range', () => {
+    assert.deepEqual(outputCheck(main10, pqJob).expectedColourDescription, pq);
+    assert.equal(outputCheck(main10, pqJob).passes, true);
+    assert.equal(outputCheck({ ...main10, colourDescription: { ...pq, transfer: 18 } }, { ...pqJob, range: 'hlg' }).passes, true);
+    assert.equal(outputCheck(main10, { ...pqJob, range: 'hlg' }).passes, false);
+    assert.equal(outputCheck({ ...main10, colourDescription: null }, pqJob).passes, false);
+    assert.equal(outputCheck({ ...main10, colourDescription: { ...pq, primaries: 1 } }, pqJob).passes, false);
+    assert.equal(outputCheck({ ...main10, colourDescription: { ...pq, matrix: 1 } }, pqJob).passes, false);
+    assert.equal(outputCheck({ ...main10, colourDescription: { ...pq, fullRange: true } }, pqJob).passes, false);
   });
 });
 
@@ -421,6 +526,8 @@ describe('plan', () => {
       'encoder=hevc_nvenc',
       'rung=360p',
       'preset=p6',
+      'range=pq',
+      'bitDepth=10',
       'recipe=extended',
       'level=21',
       'tier=main',
@@ -437,6 +544,8 @@ describe('plan', () => {
       encoder: 'hevc_nvenc',
       rung: '360p',
       preset: 'p6',
+      range: 'pq',
+      bitDepth: 10,
       recipe: 'extended',
       startSequenceNumber: 0,
       gopFrames: 145,
@@ -466,6 +575,8 @@ describe('analysis and offline check', () => {
     return [
       'encoder=hevc_nvenc',
       'rung=1080p',
+      'range=sdr',
+      'bitDepth=8',
       'recipe=worker',
       'level=40',
       'tier=main',
@@ -555,8 +666,8 @@ describe('analysis and offline check', () => {
     assert.deepEqual(
       summary(document).map((line) => line.replace(/\s+/g, ' ')),
       [
-        'hevc_nvenc-1080p-first sync=true closed-gop=true extra=0 gop-restart=- gop-restart-closed-gop=- init-identical=- output-check=true (hvc1.1.6.L120.90)',
-        'hevc_nvenc-1080p-replacement sync=true closed-gop=true extra=0 gop-restart=- gop-restart-closed-gop=- init-identical=true output-check=true (hvc1.1.6.L120.90)',
+        'hevc_nvenc-1080p-first sync=true closed-gop=true extra=0 gop-restart=- gop-restart-closed-gop=- init-identical=- output-check=true (hvc1.1.6.L120.90) static-hdr-samples=0',
+        'hevc_nvenc-1080p-replacement sync=true closed-gop=true extra=0 gop-restart=- gop-restart-closed-gop=- init-identical=true output-check=true (hvc1.1.6.L120.90) static-hdr-samples=0',
       ],
     );
   });

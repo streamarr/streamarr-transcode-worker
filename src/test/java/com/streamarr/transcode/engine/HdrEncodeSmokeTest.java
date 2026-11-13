@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.within;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.fixtures.DetectedCapabilities;
@@ -35,7 +36,9 @@ import org.junit.jupiter.api.io.TempDir;
  * keyframe every second. The profile 5 source is the synthetic {@code dolby-vision-5-dvh1.mp4}
  * sample-entry fixture, whose RPUs come from dovi_tool's generator: these tests check the reshape's
  * plumbing, not its colours. Each job asks for the software encoder, which carries the encode
- * features also on a host whose codec family resolves to a hardware encoder.
+ * features also on a host whose codec family resolves to a hardware encoder. The hevc_nvenc tests
+ * run only on a host whose HEVC encoder is hevc_nvenc with the encode feature they need, at a
+ * height of 240, because NVENC refuses a frame smaller than 144x144.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")
@@ -53,6 +56,10 @@ class HdrEncodeSmokeTest {
   // SVT-AV1 at 64x36 in the Main profile, 10-bit, at level 2.0 in the Main tier.
   private static final String AV1_TEN_BIT_CODEC_STRING = "av01.0.00M.10";
   private static final int AV1_LEVEL = 20;
+  // hevc_nvenc at a height of 240 in Main 10 at level 3.0 in the Main tier.
+  private static final String NVENC_MAIN_10_CODEC_STRING = "hvc1.2.4.L90.90";
+  private static final int NVENC_HEVC_LEVEL = 30;
+  private static final int NVENC_HEIGHT = 240;
 
   /** A P3 D65 display of 1000 cd/m² and 0.005 cd/m², with MaxCLL 1000 and MaxFALL 400. */
   private static final StaticHdrMetadata SOURCE_METADATA =
@@ -65,6 +72,14 @@ class HdrEncodeSmokeTest {
    */
   private static final StaticHdrMetadata FALLBACK_METADATA =
       new StaticHdrMetadata(display(10_000_000, 1), new PlannedCopyOutput.ContentLightLevel(0, 0));
+
+  // The P3 D65 display and its white point as an mdcv box holds them (ISO/IEC 14496-12 12.1.6), and
+  // each metadata's luminances and clli box (12.1.5).
+  private static final String P3_D65_PRIMARIES = "33C286C41D4C0BB884D03E803D134042";
+  private static final String SOURCE_MDCV = P3_D65_PRIMARIES + "0098968000000032";
+  private static final String SOURCE_CLLI = "03E80190";
+  private static final String FALLBACK_MDCV = P3_D65_PRIMARIES + "0098968000000001";
+  private static final String FALLBACK_CLLI = "00000000";
 
   @TempDir static Path root;
   private static Path hdr10;
@@ -106,6 +121,8 @@ class HdrEncodeSmokeTest {
 
     var probed = probed(delivered.acceptedBytes());
 
+    assertStaticHdrMetadataBoxes(delivered, List.of(SOURCE_MDCV), List.of(SOURCE_CLLI));
+
     assertThat(probed)
         .contains(
             "profile=Main 10",
@@ -145,8 +162,10 @@ class HdrEncodeSmokeTest {
             .staticHdrMetadata(Optional.of(SOURCE_METADATA))
             .build();
 
-    var probed = probed(encoded(hdr10, encode, 0).acceptedBytes());
+    var delivered = encoded(hdr10, encode, 0);
+    var probed = probed(delivered.acceptedBytes());
 
+    assertStaticHdrMetadataBoxes(delivered, List.of(SOURCE_MDCV), List.of(SOURCE_CLLI));
     // AV1 stores the chromaticities in units of 1/65536 and the peak in units of 1/256 cd/m².
     assertThat(probed)
         .contains(
@@ -298,7 +317,115 @@ class HdrEncodeSmokeTest {
         .isEqualTo(staticMetadataLines(probed(fromStart.acceptedBytes())));
   }
 
+  @Test
+  @DisplayName(
+      "Should deliver HEVC Main 10 with the BT.2020 PQ colour description and only the job's"
+          + " static HDR metadata when hevc_nvenc encodes an HDR10 source whose own metadata"
+          + " differs")
+  void shouldDeliverMain10WithThePqColourAndOnlyTheJobsMetadataWhenHevcNvencEncodesHdr10()
+      throws Exception {
+    assumeHevcNvencLists(EncodeFeature.PQ);
+    var encode =
+        onHevcNvenc(hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ)))
+            .staticHdrMetadata(Optional.of(FALLBACK_METADATA))
+            .build();
+
+    var delivered = encoded(hdr10, encode, 0);
+    var probed = probed(delivered.acceptedBytes());
+
+    assertStaticHdrMetadataBoxes(delivered, List.of(FALLBACK_MDCV), List.of(FALLBACK_CLLI));
+
+    assertThat(probed)
+        .contains(
+            "profile=Main 10",
+            "pix_fmt=yuv420p10le",
+            "color_range=tv",
+            "color_space=bt2020nc",
+            "color_transfer=smpte2084",
+            "color_primaries=bt2020",
+            "white_point_x=15635/50000",
+            "min_luminance=1/10000",
+            "max_content=0",
+            "max_average=0")
+        .doesNotContain("min_luminance=50/10000", "max_content=1000", "max_average=400");
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver HEVC Main 10 with the BT.2020 HLG colour description when hevc_nvenc encodes"
+          + " an HLG source")
+  void shouldDeliverMain10WithTheHlgColourDescriptionWhenHevcNvencEncodesAnHlgSource()
+      throws Exception {
+    assumeHevcNvencLists(EncodeFeature.HLG);
+    var encode =
+        onHevcNvenc(hevcEncode(range(VideoDynamicRange.CompatibleBase.HLG)))
+            .staticHdrMetadata(Optional.empty())
+            .build();
+
+    var delivered = encoded(hlg, encode, 0);
+    var probed = probed(delivered.acceptedBytes());
+
+    assertStaticHdrMetadataBoxes(delivered, List.of(), List.of());
+
+    assertThat(probed)
+        .contains(
+            "profile=Main 10",
+            "pix_fmt=yuv420p10le",
+            "color_range=tv",
+            "color_space=bt2020nc",
+            "color_transfer=arib-std-b67",
+            "color_primaries=bt2020")
+        .doesNotContain("Mastering display metadata", "Content light level metadata");
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the same initialization segment and the fallback static HDR metadata from"
+          + " attempts that start at different keyframes when hevc_nvenc encodes a profile 5"
+          + " source reshaped into PQ")
+  void shouldDeliverTheSameInitializationFromAttemptsAtDifferentKeyframesWhenHevcNvencReshapes()
+      throws Exception {
+    assumeHevcNvencLists(EncodeFeature.DOLBY_VISION_TO_PQ);
+    var encode = onHevcNvenc(profile5EncodeBuilder()).build();
+
+    var fromStart = encoded(profile5Source(), encode, 0);
+    var fromSegment2 = encoded(profile5Source(), encode, 2);
+
+    assertThat(fromSegment2.contentOf("init.mp4")).isEqualTo(fromStart.contentOf("init.mp4"));
+    assertStaticHdrMetadataBoxes(fromSegment2, List.of(FALLBACK_MDCV), List.of(FALLBACK_CLLI));
+    assertThat(probed(fromSegment2.acceptedBytes()))
+        .contains(
+            "profile=Main 10", "color_transfer=smpte2084", "min_luminance=1/10000", "max_content=0")
+        .doesNotContain("Dolby Vision", "DOVI");
+  }
+
+  // The tests of a hardware encoder need the host's GPU, so they run only where the worker would
+  // send the job to hevc_nvenc.
+  private static void assumeHevcNvencLists(EncodeFeature feature) {
+    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
+    capabilities.detectCapabilities();
+    assumeTrue(
+        capabilities.workerVerifiedEncoders().stream()
+            .anyMatch(
+                encoder ->
+                    encoder.backend().encoder().equals("hevc_nvenc")
+                        && encoder.encodeFeatures().contains(feature)),
+        "this host's HEVC encoder is not hevc_nvenc with " + feature);
+  }
+
+  private static VideoDecision.Encode.EncodeBuilder onHevcNvenc(
+      VideoDecision.Encode.EncodeBuilder encode) {
+    return encode
+        .softwareEncoder(false)
+        .level(NVENC_HEVC_LEVEL)
+        .codecString(NVENC_MAIN_10_CODEC_STRING);
+  }
+
   private static VideoDecision.Encode profile5Encode() {
+    return profile5EncodeBuilder().build();
+  }
+
+  private static VideoDecision.Encode.EncodeBuilder profile5EncodeBuilder() {
     var profile5 =
         new VideoDynamicRange(
             VideoDynamicRange.CompatibleBase.NONE,
@@ -309,8 +436,7 @@ class HdrEncodeSmokeTest {
                 VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
     return hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ))
         .sourceDynamicRange(profile5)
-        .staticHdrMetadata(Optional.of(FALLBACK_METADATA))
-        .build();
+        .staticHdrMetadata(Optional.of(FALLBACK_METADATA));
   }
 
   private static VideoDecision.Encode.EncodeBuilder hevcEncode(VideoDynamicRange output) {
@@ -346,6 +472,14 @@ class HdrEncodeSmokeTest {
         .maxLuminance(maxLuminance)
         .minLuminance(minLuminance)
         .build();
+  }
+
+  private static void assertStaticHdrMetadataBoxes(
+      RecordingSegmentSink delivered, List<String> masteringDisplay, List<String> lightLevel) {
+    var initialization = new InitializationSegment(delivered.contentOf("init.mp4"));
+
+    assertThat(SampleEntryBoxes.bodiesOf(initialization, "mdcv")).isEqualTo(masteringDisplay);
+    assertThat(SampleEntryBoxes.bodiesOf(initialization, "clli")).isEqualTo(lightLevel);
   }
 
   private static List<String> staticMetadataLines(String probed) {
@@ -384,7 +518,8 @@ class HdrEncodeSmokeTest {
         encode.sourceDynamicRange().compatibleBase() == VideoDynamicRange.CompatibleBase.NONE;
     var period = profile5 ? PROFILE_5_PERIOD_SECONDS : PERIOD_SECONDS;
     var seconds = profile5 ? PROFILE_5_SOURCE_SECONDS : SOURCE_SECONDS;
-    var height = profile5 ? 64 : 36;
+    var softwareHeight = profile5 ? 64 : 36;
+    var height = encode.softwareEncoder() ? softwareHeight : NVENC_HEIGHT;
     var codecFamily = encode.codecProfile() == VideoCodecProfile.AV1_MAIN ? "av1" : "hevc";
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())

@@ -153,6 +153,70 @@ class NvencRecordingsTest {
     assertHoldsTheExtendedRecordingsOf(required);
   }
 
+  @Test
+  @DisplayName(
+      "Should hold the Main 10 extended recordings at every default-ladder rung of each encode"
+          + " feature's range when the worker tests an NVENC encoder for that feature")
+  void
+      shouldHoldTheMain10ExtendedRecordingsAtEveryDefaultLadderRungOfEachEncodeFeaturesRangeWhenTheWorkerTestsAnNvencEncoderForThatFeature() {
+    var required =
+        NVENC_ENCODERS.stream()
+            .flatMap(
+                encoder ->
+                    FfmpegCommandBuilder.testedEncodeFeatures(encoder).stream()
+                        .map(NvencRecordingsTest::recordedRangeOf)
+                        .distinct()
+                        .flatMap(
+                            range ->
+                                DEFAULT_LADDER_RUNGS.stream()
+                                    .map(rung -> encoder + "-" + rung + "-" + range)))
+            .toList();
+
+    assertThat(required).as("the tested NVENC encoders' rungs and ranges").hasSize(12);
+    assertHoldsTheExtendedRecordingsOf(required);
+  }
+
+  @Test
+  @DisplayName(
+      "Should declare 10 bits and carry static HDR metadata in no sample of any Main 10 recording"
+          + " when the worker deletes the frames' static HDR metadata before NVENC")
+  void
+      shouldDeclareTenBitsAndCarryStaticHdrMetadataInNoSampleOfAnyMain10RecordingWhenTheWorkerDeletesTheFramesStaticHdrMetadataBeforeNvenc() {
+    var tenBit = new ArrayList<JsonNode>();
+    for (var recording : committedRecordings().get("recordings")) {
+      if (recording.get("plan").get("bitDepth").asInt() == 10) {
+        tenBit.add(recording);
+      }
+    }
+
+    assertThat(tenBit).as("the Main 10 recordings").isNotEmpty();
+    var softly = new SoftAssertions();
+    for (var recording : tenBit) {
+      var name = recording.get("name").asString();
+      softly
+          .assertThat(
+              recording.get("initializationSegment").get("pictureFormat").get("bitDepth").asInt())
+          .as("the bit depth that %s declares", name)
+          .isEqualTo(10);
+      softly
+          .assertThat(recording.get("facts").get("staticHdrMetadataSamples").asInt())
+          .as("the samples of %s that carry static HDR metadata", name)
+          .isZero();
+    }
+
+    softly.assertAll();
+  }
+
+  // The range whose recordings show the encoder's keyframes for the feature. The reshape of Dolby
+  // Vision into PQ runs before the encoder, which takes the arguments of a PQ encode.
+  private static String recordedRangeOf(EncodeFeature feature) {
+    return switch (feature) {
+      case TEN_BIT -> "sdr10";
+      case PQ, DOLBY_VISION_TO_PQ -> "pq";
+      case HLG -> "hlg";
+    };
+  }
+
   // Each prefix needs its extended recording from the start, its replacement pair and its
   // missed-keyframe recording's GOP restart.
   private static void assertHoldsTheExtendedRecordingsOf(List<String> prefixes) {
@@ -192,7 +256,10 @@ class NvencRecordingsTest {
             RESULTS.resolve(recording.get("initializationSegment").get("file").asString()));
     var decision = encodeDecidedFor(recording.get("plan"));
     try {
-      VideoOutputCheck.requireMatch(decision, new InitializationSegment(bytes));
+      // The producer checks the initialization segment that it delivers, after its rewrite.
+      VideoOutputCheck.requireMatch(
+          decision,
+          InitializationSegmentRewrite.rewrite(decision, new InitializationSegment(bytes)));
       return true;
     } catch (FragmentedMp4Exception _) {
       return false;
@@ -200,18 +267,14 @@ class NvencRecordingsTest {
   }
 
   private static VideoDecision.Encode encodeDecidedFor(JsonNode plan) {
-    var hevc = plan.get("encoder").asString().startsWith("hevc");
     var tier = Optional.<VideoCodecTier>empty();
     if (!plan.get("tier").isNull()) {
       tier =
           Optional.of(VideoCodecTier.valueOf(plan.get("tier").asString().toUpperCase(Locale.ROOT)));
     }
 
-    return VideoDecision.Encode.builder()
-        .sourceCodecFamily(Optional.of(CodecFamily.H264))
-        .sourceDynamicRange(VideoDynamicRange.sdr())
-        .outputDynamicRange(VideoDynamicRange.sdr())
-        .codecProfile(hevc ? VideoCodecProfile.HEVC_MAIN : VideoCodecProfile.H264_HIGH)
+    return NvencRecordedEncodes.encodeOf(
+            plan.get("encoder").asString(), plan.get("range").asString())
         .tier(tier)
         .level(plan.get("level").asInt())
         .codecString(plan.get("expectedCodecString").asString())

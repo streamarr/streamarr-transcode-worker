@@ -93,6 +93,7 @@ class NvencRecorderCommandsTest {
 
     assertThat(plannedRecordings())
         .filteredOn(recording -> recording.job().get("preset").equals("p4"))
+        .filteredOn(recording -> recording.job().get("range").equals("sdr"))
         .extracting(PlannedRecording::name)
         .isEqualTo(
             Stream.of("h264_nvenc", "hevc_nvenc")
@@ -132,6 +133,38 @@ class NvencRecorderCommandsTest {
                                     variants.stream()
                                         .map(v -> encoder + "-1080p-" + preset + "-" + v)))
                 .toList());
+  }
+
+  @Test
+  @DisplayName(
+      "Should plan hevc_nvenc in Main 10 at every default-ladder rung from 10-bit BT.709, PQ and HLG"
+          + " sources with the extended GOP when the recorder runs with its defaults")
+  void
+      shouldPlanHevcNvencInMain10AtEveryDefaultLadderRungFromTenBitBt709PqAndHlgSourcesWithTheExtendedGopWhenTheRecorderRunsWithItsDefaults() {
+    var variants = List.of("extended-first", "extended-replacement", "extended-missed");
+    var tenBit =
+        plannedRecordings().stream()
+            .filter(recording -> !recording.job().get("range").equals("sdr"))
+            .toList();
+
+    assertThat(tenBit)
+        .extracting(PlannedRecording::name)
+        .isEqualTo(
+            Stream.of("1080p", "720p", "480p", "360p")
+                .flatMap(
+                    rung ->
+                        Stream.of("sdr10", "pq", "hlg")
+                            .flatMap(
+                                range ->
+                                    variants.stream()
+                                        .map(v -> "hevc_nvenc-" + rung + "-" + range + "-" + v)))
+                .toList());
+    assertThat(tenBit)
+        .allSatisfy(
+            recording -> {
+              assertThat(recording.job()).containsEntry("bitDepth", "10");
+              assertThat(recording.job().get("expectedCodecString")).startsWith("hvc1.2.4.L");
+            });
   }
 
   @Test
@@ -176,7 +209,7 @@ class NvencRecorderCommandsTest {
     return switch (pipeline) {
       case FfmpegPipeline.SingleProcess(var command) -> command;
       case FfmpegPipeline.RpuMovingPipe _ ->
-          throw new AssertionError("An SDR H.264 source needs one FFmpeg, not " + pipeline);
+          throw new AssertionError("A recorded source needs one FFmpeg, not " + pipeline);
     };
   }
 
@@ -184,14 +217,7 @@ class NvencRecorderCommandsTest {
     var job = recording.job();
     var encoder = job.get("encoder");
     var encode =
-        VideoDecision.Encode.builder()
-            .sourceCodecFamily(Optional.of(CodecFamily.H264))
-            .sourceDynamicRange(VideoDynamicRange.sdr())
-            .outputDynamicRange(VideoDynamicRange.sdr())
-            .codecProfile(
-                encoder.startsWith("hevc")
-                    ? VideoCodecProfile.HEVC_MAIN
-                    : VideoCodecProfile.H264_HIGH)
+        NvencRecordedEncodes.encodeOf(encoder, job.get("range"))
             .tier(tierOf(job.get("tier")))
             .level(Integer.parseInt(job.get("level")))
             .codecString(job.get("expectedCodecString"))
@@ -207,7 +233,7 @@ class NvencRecorderCommandsTest {
     var request =
         TranscodeRequest.builder()
             .sessionId(UUID.randomUUID())
-            .sourcePath(Path.of("/work/source.mp4"))
+            .sourcePath(Path.of(sourceOf(job.get("range"))))
             .startSequenceNumber(Integer.parseInt(job.get("startSequenceNumber")))
             .mediaSegmentCount(Integer.parseInt(job.get("mediaSegmentCount")))
             // The recorder lists each segment's start as a 6 s slot, so one tick lasts a slot.
@@ -221,6 +247,11 @@ class NvencRecorderCommandsTest {
             .bitrate(Long.parseLong(job.get("bitrate")))
             .build();
     return TranscodeJob.builder().request(request).videoEncoder(encoder).build();
+  }
+
+  // The recorder's H.264 source, or its HEVC source of a 10-bit range.
+  private static String sourceOf(String range) {
+    return range.equals("sdr") ? "/work/source.mp4" : "/work/source-" + range + ".mp4";
   }
 
   // The first scale name whose NVENC preset the recording takes.

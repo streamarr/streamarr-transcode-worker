@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -49,6 +50,11 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
   private static final int FAILED_EXIT_CODE = 187;
   private static final String HEVC_NVENC_LISTING =
       "V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)\n";
+  private static final String H264_NVENC_LISTING =
+      "V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n";
+  private static final String STATIC_METADATA_DELETION =
+      ",sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA"
+          + ",sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL";
 
   @Test
   @DisplayName(
@@ -288,30 +294,178 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
 
   @Test
   @DisplayName(
-      "Should list the software HEVC encoder's encode features when the worker offers a hardware"
-          + " HEVC encoder, and offer them once that encoder is withdrawn")
-  void shouldListTheSoftwareEncodersFeaturesWhenTheWorkerOffersAHardwareEncoderOfItsFamily() {
+      "Should list every encode feature of hevc_nvenc when each feature's test encode with it"
+          + " writes its picture format and colour description")
+  void shouldListEveryEncodeFeatureOfHevcNvencWhenEachFeaturesTestEncodeWithItPasses() {
+    var service = serviceWithHardware(HEVC_NVENC_LISTING, TestEncodeOutput::faithful);
+
+    service.detectCapabilities();
+
+    assertThat(featuresByEncoder(service))
+        .containsEntry("hevc_nvenc", Set.of(EncodeFeature.values()))
+        .doesNotContainKey("libx265");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("failedFeatureTests")
+  @DisplayName(
+      "Should leave an encode feature out of hevc_nvenc's list and keep the software HEVC"
+          + " encoder's own results when the feature's test encode with hevc_nvenc fails or"
+          + " writes another output")
+  void shouldLeaveAnEncodeFeatureOutOfHevcNvencsListWhenItsTestEncodeWithHevcNvencFails(
+      String failure, EncodeFeature failedFeature, TestEncodeOutput failedOutput) {
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                test.encoder().equals("hevc_nvenc") && test.feature() == failedFeature
+                    ? failedOutput
+                    : TestEncodeOutput.faithful(test));
+
+    service.detectCapabilities();
+
+    var everyOtherFeature =
+        Stream.of(EncodeFeature.values()).filter(feature -> feature != failedFeature).toList();
+    assertThat(featuresByEncoder(service))
+        .containsEntry("hevc_nvenc", Set.copyOf(everyOtherFeature));
+    assertThat(featuresOfSoftwareEncoder(service, "libx265"))
+        .isEqualTo(Set.of(EncodeFeature.values()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should run no feature test encode with h264_nvenc and list no encode feature for it when"
+          + " the worker offers it, because H.264 encodes only 8-bit SDR")
+  void shouldRunNoFeatureTestEncodeWithH264NvencAndListNoEncodeFeatureForItWhenTheWorkerOffersIt() {
+    var testedEncoders = new HashSet<String>();
+    var service =
+        serviceWithHardware(
+            H264_NVENC_LISTING,
+            test -> {
+              testedEncoders.add(test.encoder());
+              return TestEncodeOutput.faithful(test);
+            });
+
+    service.detectCapabilities();
+
+    assertThat(featuresByEncoder(service)).containsEntry("h264_nvenc", Set.of());
+    assertThat(testedEncoders).containsExactlyInAnyOrder("libx265", "libsvtav1");
+  }
+
+  @Test
+  @DisplayName(
+      "Should hand hevc_nvenc biplanar p010 in Main 10 at a frame size and level that NVENC"
+          + " accepts when a feature's test encode runs with it")
+  void shouldHandHevcNvencP010InMain10AtAFrameSizeAndLevelThatNvencAcceptsWhenAFeatureTestRuns() {
+    var commands = new ArrayList<List<String>>();
     var service =
         new TranscodeCapabilityService(
             "ffmpeg",
-            command ->
-                command.command().contains("-encoders")
-                    ? new FakeProcess(HEVC_NVENC_LISTING, 0)
-                    : resolve(command, test -> TestEncodeOutput.faithful(test).process()));
+            command -> {
+              commands.add(List.copyOf(command.command()));
+              return command.command().contains("-encoders")
+                  ? new FakeProcess(HEVC_NVENC_LISTING, 0)
+                  : resolve(command, test -> TestEncodeOutput.faithful(test).process());
+            });
 
     service.detectCapabilities();
-    var offeredWithTheHardwareEncoder = featuresByEncoder(service);
-    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
 
-    assertThat(offeredWithTheHardwareEncoder)
-        .containsEntry("hevc_nvenc", Set.of())
+    var testsWithNvenc =
+        commands.stream()
+            .filter(command -> command.contains("hevc_nvenc") && command.contains("pipe:1"))
+            .toList();
+    assertThat(testsWithNvenc)
+        .hasSize(EncodeFeature.values().length)
+        .allSatisfy(
+            command ->
+                assertThat(command)
+                    .containsSubsequence("-profile:v", "main10", "-level:v", "3.0")
+                    .containsSequence("-bf", "3", "-rc-lookahead", "20"));
+    assertThat(testsWithNvenc)
+        .extracting(command -> command.get(command.indexOf("-vf") + 1))
+        .containsExactlyInAnyOrder(
+            "scale=-2:240,format=p010le",
+            "scale=-2:240,format=p010le," + frameColour("smpte2084") + STATIC_METADATA_DELETION,
+            "scale=-2:240,format=p010le," + frameColour("arib-std-b67") + STATIC_METADATA_DELETION,
+            "scale=-2:240,format=yuv420p10le,"
+                + "tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=yuv420p10le,format=p010le,"
+                + frameColour("smpte2084")
+                + STATIC_METADATA_DELETION);
+  }
+
+  @Test
+  @DisplayName(
+      "Should offer each HEVC encoder with its own encode features when hevc_nvenc is withdrawn"
+          + " and then passes its test encode again")
+  void shouldOfferEachHevcEncoderWithItsOwnEncodeFeaturesWhenHevcNvencIsWithdrawnAndRestored() {
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                test.encoder().equals("hevc_nvenc") && test.feature() == HLG
+                    ? TestEncodeOutput.of(new byte[0])
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+    var offeredWhileWithdrawn = featuresByEncoder(service);
+    service.recheckWithdrawnEncoders();
+
+    assertThat(offeredWhileWithdrawn)
+        .containsEntry("libx265", Set.of(EncodeFeature.values()))
+        .doesNotContainKey("hevc_nvenc");
+    assertThat(featuresByEncoder(service))
+        .containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, DOLBY_VISION_TO_PQ))
         .doesNotContainKey("libx265");
-    assertThat(service.softwareEncoders())
-        .filteredOn(encoder -> encoder.backend().encoder().equals("libx265"))
-        .singleElement()
-        .extracting(WorkerVerifiedEncoder::encodeFeatures)
-        .isEqualTo(Set.of(EncodeFeature.values()));
-    assertThat(featuresByEncoder(service)).containsEntry("libx265", Set.of(EncodeFeature.values()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should offer hevc_nvenc again without an encode feature when that feature's test encode"
+          + " with it fails at the recheck after it passed at startup")
+  void shouldOfferHevcNvencAgainWithoutAnEncodeFeatureWhenItsTestEncodeFailsAtTheRecheck() {
+    var main10Fails = new AtomicBoolean();
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                main10Fails.get() && test.encoder().equals("hevc_nvenc")
+                    ? TestEncodeOutput.of(new byte[0])
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+    var offeredAtStartup = featuresByEncoder(service);
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+    main10Fails.set(true);
+
+    var offeredAgain = service.recheckWithdrawnEncoders();
+
+    assertThat(offeredAtStartup)
+        .containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, HLG, DOLBY_VISION_TO_PQ));
+    assertThat(offeredAgain).isTrue();
+    assertThat(featuresByEncoder(service)).containsEntry("hevc_nvenc", Set.of());
+  }
+
+  @Test
+  @DisplayName(
+      "Should offer hevc_nvenc again with an encode feature when that feature's test encode with"
+          + " it passes at the recheck after it failed at startup")
+  void shouldOfferHevcNvencAgainWithAnEncodeFeatureWhenItsTestEncodePassesAtTheRecheck() {
+    var hlgFails = new AtomicBoolean(true);
+    var service =
+        serviceWithHardware(
+            HEVC_NVENC_LISTING,
+            test ->
+                hlgFails.get() && test.encoder().equals("hevc_nvenc") && test.feature() == HLG
+                    ? TestEncodeOutput.of(new byte[0])
+                    : TestEncodeOutput.faithful(test));
+    service.detectCapabilities();
+    service.withdraw(service.resolveEncoder("hevc").orElseThrow());
+    hlgFails.set(false);
+
+    service.recheckWithdrawnEncoders();
+
+    assertThat(featuresByEncoder(service))
+        .containsEntry("hevc_nvenc", Set.of(TEN_BIT, PQ, HLG, DOLBY_VISION_TO_PQ));
   }
 
   @Test
@@ -375,6 +529,32 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
     return new TranscodeCapabilityService("ffmpeg", command -> resolve(command, featureTests));
   }
 
+  // A worker whose FFmpeg lists the hardware encoders, each of which passes its 8-bit test encode.
+  private static TranscodeCapabilityService serviceWithHardware(
+      String encoderListing, Function<FeatureTest, TestEncodeOutput> outputs) {
+    return new TranscodeCapabilityService(
+        "ffmpeg",
+        command ->
+            command.command().contains("-encoders")
+                ? new FakeProcess(encoderListing, 0)
+                : resolve(command, test -> outputs.apply(test).process()));
+  }
+
+  private static Set<EncodeFeature> featuresOfSoftwareEncoder(
+      TranscodeCapabilityService service, String encoder) {
+    return service.softwareEncoders().stream()
+        .filter(software -> software.backend().encoder().equals(encoder))
+        .findFirst()
+        .map(WorkerVerifiedEncoder::encodeFeatures)
+        .orElseThrow();
+  }
+
+  private static String frameColour(String transfer) {
+    return "setparams=color_primaries=bt2020:color_trc="
+        + transfer
+        + ":colorspace=bt2020nc:range=tv";
+  }
+
   private static Map<String, Set<EncodeFeature>> featuresByEncoder(
       TranscodeCapabilityService service) {
     var features = new HashMap<String, Set<EncodeFeature>>();
@@ -422,7 +602,7 @@ class TranscodeCapabilityServiceEncodeFeatureTest {
         return Optional.of(new FeatureTest(encoder, EncodeFeature.PQ, Optional.empty()));
       }
 
-      if (filters.equals("format=yuv420p10le")) {
+      if (filters.endsWith("format=yuv420p10le") || filters.endsWith("format=p010le")) {
         return Optional.of(new FeatureTest(encoder, EncodeFeature.TEN_BIT, Optional.empty()));
       }
 
