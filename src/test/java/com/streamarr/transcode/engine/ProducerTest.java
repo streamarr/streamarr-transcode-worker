@@ -64,6 +64,7 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
+import lombok.Singular;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.DisplayName;
@@ -1215,32 +1216,42 @@ class ProducerTest {
    * A copy whose output ends with segment 1 and whose audio ends where segment 1 starts. Each
    * interval lasts this many seconds. Segment 0 holds pictures of 1/24 s and audio for its whole
    * interval. Segment 1 holds no audio, and its pictures run back to back from its start: the
-   * opening ones, the first of them a keyframe, then the closing ones.
+   * opening ones, the first of them a keyframe, then each run of closing ones in turn.
    */
   @Builder
-  private record SilentLastSegment(int intervalSeconds, Pictures opening, Pictures closing) {
+  private record SilentLastSegment(
+      int intervalSeconds, Pictures opening, @Singular List<Pictures> closings) {
 
     byte[] output() {
       var start = 24_000L * intervalSeconds;
-      return IsoBoxes.concat(
-          IsoBoxes.ftyp(),
-          IsoBoxes.videoAndAudioMoov(),
+      var parts = new ArrayList<byte[]>();
+      parts.add(IsoBoxes.ftyp());
+      parts.add(IsoBoxes.videoAndAudioMoov());
+      parts.add(
           TimedFragment.keyframeAt(0)
               .videoDuration(1_000)
               .videoSampleCount(24 * intervalSeconds)
               .audioFrom(0, audioSamples(48 * intervalSeconds, 1_000))
               .build()
-              .bytes(),
+              .bytes());
+      parts.add(
           TimedFragment.keyframeAt(start)
               .videoDuration(opening.ticks())
               .videoSampleCount(opening.count())
               .build()
-              .bytes(),
-          TimedFragment.frameAt(start + opening.length())
-              .videoDuration(closing.ticks())
-              .videoSampleCount(closing.count())
-              .build()
               .bytes());
+      var runStart = start + opening.length();
+      for (var closing : closings) {
+        parts.add(
+            TimedFragment.frameAt(runStart)
+                .videoDuration(closing.ticks())
+                .videoSampleCount(closing.count())
+                .build()
+                .bytes());
+        runStart += closing.length();
+      }
+
+      return IsoBoxes.concat(parts.toArray(byte[][]::new));
     }
   }
 
