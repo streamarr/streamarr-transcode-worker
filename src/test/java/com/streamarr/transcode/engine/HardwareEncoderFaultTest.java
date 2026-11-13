@@ -242,9 +242,10 @@ class HardwareEncoderFaultTest {
   @Test
   @DisplayName("Should read no hardware fault when the producer failed for a reason of its own")
   void shouldReadNoHardwareFaultWhenTheProducerFailedForAReasonOfItsOwn() {
+    var noCapableDevice = "[h264_nvenc @ 0x5581] No capable devices found";
     var stalled =
         new AttemptOutcome.Failed(
-            ProducerFailure.ENCODER_STALLED, "[h264_nvenc @ 0x5581] No capable devices found");
+            ProducerFailure.ENCODER_STALLED, noCapableDevice, noCapableDevice);
 
     assertThat(HardwareEncoderFault.of(H264_NVENC, stalled)).isEmpty();
   }
@@ -252,6 +253,7 @@ class HardwareEncoderFaultTest {
   private static AttemptOutcome exitedWith(String errorOutput) {
     return new AttemptOutcome.Failed(
         ProducerFailure.PROCESS_EXITED_WITH_ERROR,
-        "FFmpeg exited with exit code 1: " + errorOutput);
+        "FFmpeg exited with exit code 1: " + errorOutput,
+        errorOutput);
   }
 }

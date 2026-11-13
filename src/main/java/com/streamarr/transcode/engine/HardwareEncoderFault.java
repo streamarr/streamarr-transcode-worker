@@ -53,24 +53,24 @@ public enum HardwareEncoderFault {
       @NonNull EncoderBackend backend, @NonNull AttemptOutcome outcome) {
     if (!backend.hardware()
         || !backend.encoder().endsWith("_nvenc")
-        || !(outcome instanceof AttemptOutcome.Failed(var reason, var detail))
+        || !(outcome instanceof AttemptOutcome.Failed(var reason, _, var errorOutput))
         || reason != ProducerFailure.PROCESS_EXITED_WITH_ERROR) {
       return Optional.empty();
     }
 
-    if (NVENC_ERROR.matcher(withoutBusyDeviceLines(detail)).find()) {
+    if (NVENC_ERROR.matcher(withoutBusyDeviceLines(errorOutput)).find()) {
       return Optional.of(FAILED);
     }
 
-    if (OUT_OF_DEVICE_MEMORY.matcher(detail).find()) {
+    if (OUT_OF_DEVICE_MEMORY.matcher(errorOutput).find()) {
       return Optional.of(DEVICE_OUT_OF_MEMORY);
     }
 
-    if (SESSION_REFUSAL.matcher(detail).find()) {
+    if (SESSION_REFUSAL.matcher(errorOutput).find()) {
       return Optional.of(SESSION_REFUSED);
     }
 
-    if (GPU_FILTERS_GOT_NO_GPU_FRAME.matcher(detail).find()) {
+    if (GPU_FILTERS_GOT_NO_GPU_FRAME.matcher(errorOutput).find()) {
       return Optional.of(DECODER_REFUSED);
     }
 
@@ -80,9 +80,9 @@ public enum HardwareEncoderFault {
   // FFmpeg tries each GPU in turn and, once none opened a session, adds "No capable devices
   // found". Neither line means that an encoder failed, nor does a GPU out of memory, but any other
   // NVENC or CUDA error does, even after another GPU refused its session.
-  private static String withoutBusyDeviceLines(String detail) {
-    var sessionRefused = SESSION_REFUSAL.matcher(detail).find();
-    return detail
+  private static String withoutBusyDeviceLines(String errorOutput) {
+    var sessionRefused = SESSION_REFUSAL.matcher(errorOutput).find();
+    return errorOutput
         .lines()
         .filter(line -> !SESSION_REFUSAL.matcher(line).find())
         .filter(line -> !OUT_OF_DEVICE_MEMORY.matcher(line).find())

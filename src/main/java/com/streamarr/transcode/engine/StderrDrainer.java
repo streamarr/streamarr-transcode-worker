@@ -69,7 +69,9 @@ final class StderrDrainer implements AutoCloseable {
 
   /**
    * The failure of a process that exited with an error. Its detail names the process and its exit
-   * code, followed by the end of its error output, where FFmpeg reports why it failed.
+   * code, followed by the end of its error output, where FFmpeg reports why it failed. Its error
+   * output holds every line that the drain kept: FFmpeg can print the hardware decoder's reason
+   * more than 2000 characters before the end.
    */
   Failed exitFailure(String process, int exitCode) {
     var recentErrorOutput = String.join("\n", awaitRecentOutput(EXIT_DETAIL_WAIT));
@@ -80,7 +82,8 @@ final class StderrDrainer implements AutoCloseable {
             + " exited with exit code "
             + exitCode
             + ": "
-            + recentErrorOutput.substring(tailStart));
+            + recentErrorOutput.substring(tailStart),
+        recentErrorOutput);
   }
 
   @Override

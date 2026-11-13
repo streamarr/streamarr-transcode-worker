@@ -69,17 +69,75 @@ class TranscodeWorkerHardwareEncoderFailureTest {
       (no details)
       [h264_nvenc @ 0x55d0c8a4e1c0] No capable devices found
       """;
-  // The end of FFmpeg's error output when NVDEC refuses the source's picture and the GPU filters
-  // then get frames from system memory.
-  private static final String DECODER_REFUSAL =
+  // FFmpeg's error output after the stream mapping when NVDEC fails to start, from the pinned
+  // FFmpeg
+  // on an RTX 5090, with NVDEC's reason in place of %s. FFmpeg then decodes in software, and the
+  // GPU
+  // filters, which take only CUDA frames, fail. The list of pixel formats pushes NVDEC's reason
+  // more than 2000 characters before the end.
+  private static final String NVDEC_START_FAILURE =
       """
-          src: yuv420p yuv420p10le p010le p016le
+      Stream mapping:
+        Stream #0:0 -> #0:0 (hevc (native) -> hevc (hevc_nvenc))
+      %s
+      [hevc @ 0x56489279cf00] Failed setup for format cuda: hwaccel initialisation returned \
+      error.
+      Impossible to convert between the formats supported by the filter 'graph -1 input from \
+      stream 0:0' and the filter 'auto_scale_0'
+      Link 'graph -1 input from stream 0:0.default' -> 'auto_scale_0.default':
+        Pixel formats:
+          src: yuv420p10le
+          dst: yuv420p10le
+      Link 'auto_scale_0.default' -> 'Parsed_scale_cuda_0.default':
+        Pixel formats:
+          src: yuv420p yuyv422 rgb24 bgr24 yuv422p yuv444p yuv410p yuv411p gray monow monob \
+      pal8 yuvj420p yuvj422p yuvj444p uyvy422 bgr8 bgr4 bgr4_byte rgb8 rgb4 rgb4_byte nv12 \
+      nv21 argb rgba abgr bgra gray16be gray16le yuv440p yuvj440p yuva420p rgb48be rgb48le \
+      rgb565be rgb565le rgb555be rgb555le bgr565be bgr565le bgr555be bgr555le yuv420p16le \
+      yuv420p16be yuv422p16le yuv422p16be yuv444p16le yuv444p16be rgb444le rgb444be bgr444le \
+      bgr444be ya8 bgr48be bgr48le yuv420p9be yuv420p9le yuv420p10be yuv420p10le yuv422p10be \
+      yuv422p10le yuv444p9be yuv444p9le yuv444p10be yuv444p10le yuv422p9be yuv422p9le gbrp \
+      gbrp9be gbrp9le gbrp10be gbrp10le gbrp16be gbrp16le yuva422p yuva444p yuva420p9be \
+      yuva420p9le yuva422p9be yuva422p9le yuva444p9be yuva444p9le yuva420p10be yuva420p10le \
+      yuva422p10be yuva422p10le yuva444p10be yuva444p10le yuva420p16be yuva420p16le \
+      yuva422p16be yuva422p16le yuva444p16be yuva444p16le xyz12le xyz12be nv16 nv20le nv20be \
+      rgba64be rgba64le bgra64be bgra64le yvyu422 ya16be ya16le gbrap gbrap16be gbrap16le 0rgb \
+      rgb0 0bgr bgr0 yuv420p12be yuv420p12le yuv420p14be yuv420p14le yuv422p12be yuv422p12le \
+      yuv422p14be yuv422p14le yuv444p12be yuv444p12le yuv444p14be yuv444p14le gbrp12be \
+      gbrp12le gbrp14be gbrp14le yuvj411p yuv440p10le yuv440p10be yuv440p12le yuv440p12be \
+      ayuv64le ayuv64be p010le p010be gbrap12be gbrap12le gbrap10be gbrap10le gray12be \
+      gray12le gray10be gray10le p016le p016be gray9be gray9le gbrpf32be gbrpf32le gbrapf32be \
+      gbrapf32le gray14be gray14le grayf32be grayf32le yuva422p12be yuva422p12le yuva444p12be \
+      yuva444p12le nv24 nv42 y210le x2rgb10le x2bgr10le p210be p210le p410be p410le p216be \
+      p216le p416be p416le vuya vuyx p012le p012be y212le xv30le xv36be xv36le p212be p212le \
+      p412be p412le gbrap14be gbrap14le ayuv uyva vyu444 v30xle y216le xv48be xv48le \
+      yuv444p10msbbe yuv444p10msble yuv444p12msbbe yuv444p12msble gbrp10msbbe gbrp10msble \
+      gbrp12msbbe gbrp12msble
           dst: cuda
-      [vf#0:0 @ 0x5613beacf940] Error reinitializing filters!
-      [vost#0:0/h264_nvenc @ 0x5613beaf3780] [enc:h264_nvenc @ 0x5613beaf3a40] Could not open \
+      [vf#0:0 @ 0x5648916cac80] Error reinitializing filters!
+      [vf#0:0 @ 0x5648916cac80] Task finished with error code: -38 (Function not implemented)
+      [vf#0:0 @ 0x5648916cac80] Terminating thread with return code -38 (Function not \
+      implemented)
+      [vost#0:0/hevc_nvenc @ 0x5648916ef040] [enc:hevc_nvenc @ 0x5648916ef2c0] Could not open \
       encoder before EOF
+      [vost#0:0/hevc_nvenc @ 0x5648916ef040] Task finished with error code: -22 (Invalid \
+      argument)
+      [vost#0:0/hevc_nvenc @ 0x5648916ef040] Terminating thread with return code -22 (Invalid \
+      argument)
+      [out#0/null @ 0x5648916ca280] Nothing was written into output file, because at least one \
+      of its streams received no packets.
       Conversion failed!
       """;
+  // NVDEC refuses a picture smaller than 144x144.
+  private static final String DECODER_REFUSAL =
+      NVDEC_START_FAILURE.formatted(
+          "[hevc @ 0x56489279cf00] Video width 64 not within range from 144 to 8192");
+  // The line that FFmpeg's CHECK_CU prints when cuvidCreateDecoder fails, as after a driver reset
+  // that takes the hardware decoder down.
+  private static final String DECODER_FAILURE =
+      NVDEC_START_FAILURE.formatted(
+          "[hevc @ 0x56489279cf00] decoder->cvdl->cuvidCreateDecoder(&decoder->decoder, params)"
+              + " failed -> CUDA_ERROR_UNKNOWN: unknown error");
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
 
   @TempDir Path tempDir;
@@ -198,6 +256,34 @@ class TranscodeWorkerHardwareEncoderFailureTest {
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_HARDWARE_ENCODER_FAILED);
       assertThat(eventsOf(connection)).doesNotContain(EventCase.VIDEO_ENCODERS_CHANGED);
       assertThat(started(connection, next).getEncoder()).isEqualTo("h264_nvenc");
+    }
+  }
+
+  // ADR 0044: a driver reset that takes down the hardware encoder can take down the hardware
+  // decoder on the same device too, so the worker withdraws the encoder before it reports the
+  // failure.
+  @Test
+  @DisplayName(
+      "Should stop offering NVENC before it reports the hardware encoder failure when a CUDA error"
+          + " stops the hardware decoder from starting")
+  void shouldStopOfferingNvencBeforeItReportsTheFailureWhenACudaErrorStopsTheHardwareDecoder()
+      throws Exception {
+    var launcher = launcherFailingNvencWith(DECODER_FAILURE);
+    var failed = encodeJob();
+
+    try (var worker = worker(launcher, Duration.ofHours(1))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, failed);
+
+      awaitEvents(
+          connection,
+          EventCase.JOB_ATTEMPT_STARTED,
+          EventCase.VIDEO_ENCODERS_CHANGED,
+          EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEncodersChange(connection)).contains("libx264").doesNotContain("h264_nvenc");
+      assertThat(event(connection, EventCase.JOB_ATTEMPT_FAILED).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_HARDWARE_ENCODER_FAILED);
     }
   }
 

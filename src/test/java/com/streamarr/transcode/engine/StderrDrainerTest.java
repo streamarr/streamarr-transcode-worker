@@ -117,6 +117,32 @@ class StderrDrainerTest {
     }
   }
 
+  // The worker reads an attempt's hardware fault from the error output of its failure, and FFmpeg
+  // can print the hardware decoder's reason more than 2000 characters before the end (ADR 0044).
+  @Test
+  @DisplayName(
+      "Should hold every line the drain kept in the failure's error output and the end of it in the"
+          + " detail when the error output is longer than 2000 characters")
+  void shouldHoldEveryKeptLineInTheErrorOutputAndItsEndInTheDetailWhenTheOutputIsLong() {
+    var lines =
+        IntStream.range(0, StderrDrainer.CAPACITY)
+            .mapToObj(index -> "line " + index + " " + "x".repeat(20))
+            .toList();
+    var errorOutput = String.join("\n", lines);
+    var input = new ByteArrayInputStream((errorOutput + "\n").getBytes(StandardCharsets.UTF_8));
+
+    try (var drainer = new StderrDrainer(input)) {
+      var failure = drainer.exitFailure("FFmpeg", 1);
+
+      assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
+      assertThat(failure.errorOutput()).isEqualTo(errorOutput);
+      assertThat(failure.detail())
+          .isEqualTo(
+              "FFmpeg exited with exit code 1: "
+                  + errorOutput.substring(errorOutput.length() - 2000));
+    }
+  }
+
   @Test
   @DisplayName("Should allow idempotent close")
   void shouldAllowIdempotentClose() {
