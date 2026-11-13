@@ -25,8 +25,10 @@ import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.ScriptedProcess;
+import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures;
+import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -37,7 +39,9 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -78,6 +82,7 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   // withdrawn.
   private final AtomicBoolean nvencPassesItsTestEncode = new AtomicBoolean(true);
   private final AtomicInteger failedNvencTestEncodes = new AtomicInteger();
+  private final HangingTestEncode hangingNvencTestEncode = new HangingTestEncode();
 
   @BeforeEach
   void setUp() throws Exception {
@@ -233,13 +238,50 @@ class TranscodeWorkerHardwareEncoderFailureTest {
     }
   }
 
+  // The hanging test encode runs until the test ends it, as a test encode on a hung GPU runs until
+  // its 10 s deadline. The server replaces an attempt when no report of its advancing output
+  // arrives within the stall threshold (ADR 0037). So the attempt's progress report must not wait
+  // for the recheck.
+  @Test
+  @DisplayName(
+      "Should report a libx264 attempt's progress when a test encode of the withdrawn NVENC has not"
+          + " exited")
+  void shouldReportALibx264AttemptsProgressWhenATestEncodeOfTheWithdrawnNvencHasNotExited()
+      throws Exception {
+    var launcher =
+        launcherFailingNvencAndPausingSoftwareAfter(endOfFirstFragment(bytesOf(ENCODED_RECORDING)));
+    var software = encodeJob();
+
+    try (var worker = worker(launcher, Duration.ofMillis(10))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      nvencPassesItsTestEncode.set(false);
+      startVariant(connection, encodeJob());
+      awaitEventCount(connection, EventCase.VIDEO_ENCODERS_CHANGED, 1);
+      var testEncode = hangingNvencTestEncode.hangNext();
+
+      startVariant(connection, software);
+
+      await("the libx264 attempt's first progress report")
+          .atMost(EVENT_LIMIT)
+          .until(() -> progressReportsOf(connection, software) >= 1);
+      assertThat(testEncode.isAlive()).as("the hanging test encode has not exited").isTrue();
+      testEncode.exit();
+    }
+  }
+
   private TranscodeWorker worker(ScriptedProcessLauncher launcher, Duration recheckInterval) {
     var capabilities =
         new TranscodeCapabilityService(
             "ffmpeg",
             command ->
-                new FinishedFfmpeg(
-                    stdoutOf(command.command()), testEncodeExitCode(command.command())));
+                hangingNvencTestEncode
+                    .take(command.command())
+                    .orElseGet(
+                        () ->
+                            new FinishedFfmpeg(
+                                stdoutOf(command.command()),
+                                testEncodeExitCode(command.command()))));
     capabilities.detectCapabilities();
     var engine =
         FfmpegTranscodeEngine.builder()
@@ -316,6 +358,31 @@ class TranscodeWorkerHardwareEncoderFailureTest {
         });
   }
 
+  // Every NVENC encode fails as the device was lost; every software encode writes the recording up
+  // to the pause and runs until the worker stops it.
+  private static ScriptedProcessLauncher launcherFailingNvencAndPausingSoftwareAfter(int pause) {
+    return ScriptedProcessLauncher.forCommands(
+        (command, _) -> {
+          if (command.contains("h264_nvenc")) {
+            return ScriptedProcess.builder()
+                .output(new byte[0])
+                .exitCode(1)
+                .stderr(DEVICE_LOST)
+                .build();
+          }
+
+          return ScriptedProcessLauncher.runningProcessBuilder().pauseAfter(pause).build();
+        });
+  }
+
+  private static int endOfFirstFragment(byte[] output) {
+    return TopLevelBoxes.of(output).stream()
+        .filter(box -> box.type().equals("mdat"))
+        .findFirst()
+        .orElseThrow()
+        .end();
+  }
+
   private static VariantJob encodeJob() {
     return variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
         .setJobAttemptId(toProto(UUID.randomUUID()))
@@ -372,6 +439,15 @@ class TranscodeWorkerHardwareEncoderFailureTest {
         .toList();
   }
 
+  private static long progressReportsOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return connection.events().stream()
+        .filter(EstablishWorkerSessionRequest::hasJobAttemptProgress)
+        .filter(
+            event -> event.getJobAttemptProgress().getJobAttemptId().equals(job.getJobAttemptId()))
+        .count();
+  }
+
   private static void awaitEvents(
       ScriptedWorkerRuntime.Connection connection, EventCase... expected) {
     await()
@@ -387,6 +463,34 @@ class TranscodeWorkerHardwareEncoderFailureTest {
             () ->
                 assertThat(eventsOf(connection).stream().filter(eventCase::equals))
                     .hasSizeGreaterThanOrEqualTo(count));
+  }
+
+  // Once the test asks, the next NVENC test encode runs until the test ends it, and then fails.
+  private static final class HangingTestEncode {
+
+    private final AtomicBoolean requested = new AtomicBoolean();
+    private final CompletableFuture<ScriptedProcess> started = new CompletableFuture<>();
+
+    // Returns the hanging test encode once a recheck has started it.
+    ScriptedProcess hangNext() throws Exception {
+      requested.set(true);
+      return started.get(EVENT_LIMIT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    Optional<Process> take(List<String> arguments) {
+      if (!arguments.contains("h264_nvenc") || !requested.compareAndSet(true, false)) {
+        return Optional.empty();
+      }
+
+      var testEncode =
+          ScriptedProcess.builder()
+              .output(new byte[0])
+              .exitCode(1)
+              .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+              .build();
+      started.complete(testEncode);
+      return Optional.of(testEncode);
+    }
   }
 
   // An FFmpeg run that has already exited with the exit code after writing the standard output.
