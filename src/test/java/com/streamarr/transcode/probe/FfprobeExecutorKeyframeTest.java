@@ -171,6 +171,7 @@ class FfprobeExecutorKeyframeTest {
                 .mediaTimescale(1_000)
                 .sampleDurations(6, 500)
                 .syncSamples(List.of(1L))
+                .randomAccessDescription(true)
                 .sampleToGroup(
                     SampleToGroup.builder()
                         .groupingType(SyntheticMp4.RANDOM_ACCESS)

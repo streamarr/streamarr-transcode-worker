@@ -17,8 +17,8 @@ import lombok.Singular;
  * an mdat between the ftyp and the moov, or a co64 of that chunk with {@code largeChunkOffsets}. A
  * track with a {@code largeChunkOffset} has a co64 of one chunk at that offset instead. With {@code
  * compactSampleSizes}, the sizes take fields of {@code compactFieldBits} bits in an stz2, 8 unless
- * set. A track writes each of its {@code sampleToGroups} as an sbgp after its stss, and a track
- * with a 'rap ' sbgp also has an sgpd that holds one 'rap ' description.
+ * set. A track writes each of its {@code sampleToGroups} as an sbgp after its stss. With {@code
+ * randomAccessDescription}, an sgpd that holds one 'rap ' description precedes them.
  */
 @Builder
 record SyntheticMp4(
@@ -37,6 +37,7 @@ record SyntheticMp4(
     @Singular List<CompositionRun> compositionRuns,
     List<Long> syncSamples,
     @Singular List<SampleToGroup> sampleToGroups,
+    boolean randomAccessDescription,
     int editListVersion,
     @Singular List<Edit> edits,
     boolean fragmented,
@@ -163,7 +164,7 @@ record SyntheticMp4(
       sampleTable.add(fullBox("stss", 0, entries.toArray(byte[][]::new)));
     }
 
-    if (sampleToGroups.stream().anyMatch(group -> RANDOM_ACCESS.equals(group.groupingType()))) {
+    if (randomAccessDescription) {
       // Version 1, default length 1: one description whose leading-sample fields are 0.
       sampleTable.add(fullBox("sgpd", 1, ascii(RANDOM_ACCESS), int32(1), int32(1), new byte[] {0}));
     }

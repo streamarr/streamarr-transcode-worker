@@ -613,6 +613,7 @@ class Mp4StreamMeasurerTest {
                 .sampleDurations(6, 100)
                 .sampleSizes(6, 10)
                 .syncSamples(List.of(1L))
+                .randomAccessDescription(true)
                 .sampleToGroup(
                     SampleToGroup.builder()
                         .groupingType(SyntheticMp4.RANDOM_ACCESS)

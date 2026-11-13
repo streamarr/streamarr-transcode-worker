@@ -559,6 +559,25 @@ class Mp4SyncSampleReaderTest {
       assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 300));
     }
 
+    // ISO/IEC 14496-12 defines versions 0 and 1. FFmpeg reads a box of any other version as
+    // version 0.
+    @Test
+    @DisplayName("Should read no grouping type parameter when the sample-to-group box is version 2")
+    void shouldReadNoGroupingTypeParameterWhenSampleToGroupBoxIsVersionTwo() throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .sampleToGroup(
+                      randomAccessGroup()
+                          .version(2)
+                          .run(new GroupRun(3, 0))
+                          .run(new GroupRun(1, 1))
+                          .build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 300));
+    }
+
     @Test
     @DisplayName(
         "Should list only the sync samples when the sample-to-group box has another grouping type")
@@ -619,21 +638,20 @@ class Mp4SyncSampleReaderTest {
           .isEqualTo(keyframesAt(0, 600, 700, 800));
     }
 
-    // Inside a movie fragment, an index above 65,536 names a description of that fragment. The
-    // track's one description has index 1, and FFmpeg checks neither.
+    // The index is an unsigned 32-bit number. This one is above 2^31, and also above 65,536, where
+    // an index inside a movie fragment names a description of that fragment.
     @Test
     @DisplayName(
-        "Should list a random-access sample as a keyframe when its group description index names"
-            + " no description of the track")
-    void shouldListRandomAccessSampleAsKeyframeWhenItsDescriptionIndexNamesNoDescription()
-        throws Exception {
+        "Should list a random-access sample as a keyframe when the track has no group description")
+    void shouldListRandomAccessSampleAsKeyframeWhenTrackHasNoGroupDescription() throws Exception {
       var source =
           write(
               nineSamplesSyncingFirst()
+                  .randomAccessDescription(false)
                   .sampleToGroup(
                       randomAccessGroup()
                           .run(new GroupRun(3, 0))
-                          .run(new GroupRun(1, 65_537))
+                          .run(new GroupRun(1, 0x8001_0001))
                           .build())
                   .build());
 
@@ -692,12 +710,16 @@ class Mp4SyncSampleReaderTest {
       assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
     }
 
-    /** Nine samples of 100 ms each, of which the stss lists only the first. */
+    /**
+     * Nine samples of 100 ms each, of which the stss lists only the first, and one 'rap ' group
+     * description.
+     */
     private static SyntheticMp4.SyntheticMp4Builder nineSamplesSyncingFirst() {
       return SyntheticMp4.builder()
           .mediaTimescale(1_000)
           .sampleDurations(9, 100)
-          .syncSamples(List.of(1L));
+          .syncSamples(List.of(1L))
+          .randomAccessDescription(true);
     }
 
     private static SampleToGroup.SampleToGroupBuilder randomAccessGroup() {
