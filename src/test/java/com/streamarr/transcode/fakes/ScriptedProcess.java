@@ -103,11 +103,10 @@ public final class ScriptedProcess extends Process {
   private long bytesRead;
   // How long after the count before it the next count comes at the soonest; 0 for no delay.
   private long nextCountDelayNanos;
-  // On System.nanoTime: the latest count, the count that found the last byte read, the count
-  // before that one, and the first request to terminate; 0 until it happens.
+  // On System.nanoTime: the latest count, the count that found the last byte read, and the first
+  // request to terminate; 0 until it happens.
   private long countedAtNanos;
   private long lastReadCountedAtNanos;
-  private long countBeforeTheLastReadAtNanos;
   private long terminatedAtNanos;
   private boolean quitArrivedWhilePausedBySignal;
   private boolean quitPendingUntilResumed;
@@ -242,7 +241,6 @@ public final class ScriptedProcess extends Process {
     var now = System.nanoTime();
     if (reading) {
       bytesRead++;
-      countBeforeTheLastReadAtNanos = countedAtNanos;
       lastReadCountedAtNanos = now;
     }
 
@@ -268,14 +266,6 @@ public final class ScriptedProcess extends Process {
   /** When the count that found the last byte that the process read was made, on System.nanoTime. */
   public synchronized long lastReadCountedAtNanos() {
     return lastReadCountedAtNanos;
-  }
-
-  /**
-   * When the count before the one that found the last byte read was made, on System.nanoTime: the
-   * process read that byte after this count.
-   */
-  public synchronized long countBeforeTheLastReadAtNanos() {
-    return countBeforeTheLastReadAtNanos;
   }
 
   /** When the process was first asked to terminate, on System.nanoTime. */

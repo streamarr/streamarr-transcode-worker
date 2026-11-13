@@ -15,13 +15,12 @@ import java.util.function.Supplier;
  * no longer needs watching. Pauses may overlap, and watching resumes once every pause has ended.
  *
  * <p>A watchdog that also watches FFmpeg's reading counts the bytes that FFmpeg reads as progress:
- * such an FFmpeg has stalled once it has neither written nor read for the stall timeout. The
- * watchdog samples the bytes read only while it watches, several times within the stall timeout,
- * and dates bytes that a sample finds to the sample before it, the earliest moment they can have
- * been read at. An FFmpeg that stops reading therefore stalls within the stall timeout of its last
- * read, as one that stops writing does of its last byte. A sample that the system delays dates them
- * no earlier than one sample interval before itself, so an FFmpeg that a sample finds reading never
- * stalls sooner than the stall timeout less that interval after it.
+ * such an FFmpeg has stalled once it has neither written nor, as far as the samples show, read for
+ * the stall timeout. The watchdog samples the bytes read only while it watches, several times
+ * within the stall timeout, and dates bytes that a sample finds to that sample. So an FFmpeg that a
+ * sample finds reading never stalls sooner than the stall timeout after that sample, even when the
+ * system runs the sample late. An FFmpeg that stops reading stalls within the stall timeout plus
+ * one sample interval of its last read.
  */
 final class StallWatchdog {
 
@@ -42,7 +41,6 @@ final class StallWatchdog {
   // Guarded by this monitor.
   private int pauses;
   private boolean ended;
-  private long sampledAtNanos = lastOutputNanos;
   private long lastReadNanos = lastOutputNanos;
 
   StallWatchdog(Duration stallTimeout) {
@@ -133,18 +131,13 @@ final class StallWatchdog {
     return Math.min(now - lastOutputNanos, now - lastReadNanos);
   }
 
-  // Holds this monitor. Bytes read since the sample before were read at or after that sample. When
-  // the system ran the watchdog late, the time it did not look is its own delay, not FFmpeg's
-  // silence, so the bytes are dated no earlier than one interval before this sample.
+  // Holds this monitor.
   private void sampleBytesRead() {
     var sampled = bytesRead.get().orElse(sampledBytesRead);
-    var now = System.nanoTime();
     if (sampled > sampledBytesRead) {
       sampledBytesRead = sampled;
-      lastReadNanos = now - Math.min(now - sampledAtNanos, readSampleIntervalNanos);
+      lastReadNanos = System.nanoTime();
     }
-
-    sampledAtNanos = now;
   }
 
   // Holds this monitor. False when interrupted.
