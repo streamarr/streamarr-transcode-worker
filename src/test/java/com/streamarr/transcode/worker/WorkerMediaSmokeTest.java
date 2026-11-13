@@ -7051,6 +7051,37 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  // The pipes stop 7 s into the read after the audio's end and stay open, as a mount that hangs
+  // does, so the encoding FFmpeg waits in a read of the audio's input. By then the read has
+  // outlasted the stall timeout as progress. From then on nothing counts as progress: the reports
+  // stop, and the producer fails the attempt once the encoding FFmpeg has read nothing for the
+  // stall timeout. An FFmpeg that waits in a read ignores the request to terminate, so the producer
+  // destroys both FFmpegs after the grace period and then reports the failure.
+  @Test
+  @DisplayName(
+      "Should fail the attempt within the stall timeout of the source's last byte when the source"
+          + " stops serving the encode of a Dolby Vision profile 5 source's copy while its audio's"
+          + " input reads on")
+  void shouldFailTheAttemptWithinTheStallTimeoutWhenTheSourceStopsServingTheEncodeOfAProfile5Copy()
+      throws Exception {
+    var source = countedAudioEndsLongBeforeNoisyProfile5VideoSource();
+    var job = profile5CountedAudioJob(source);
+    var servedBytes = lastAudioPacketOffset(source) + 7L * THRICE_THE_PROFILE_5_VIDEOS_BYTE_RATE;
+
+    try (var pipes =
+        new PacedSourcePipes(root, THRICE_THE_PROFILE_5_VIDEOS_BYTE_RATE, servedBytes)) {
+      var engine =
+          engine(
+              softwareCapabilities(),
+              pipes.feeding(new ProcessBuilderLauncher()),
+              PACED_STALL_TIMEOUT);
+
+      var failed = executeProbedJobExpectingFailure(engine, source.getParent(), job.build());
+
+      assertFailureWithinTheStallTimeoutOfTheSourcesLastByte(failed, pipes);
+    }
+  }
+
   // A job that encodes the profile 5 source's counted audio to FLAC, as the counted job does, and
   // pads it to the advertised end at 51 s. The video ends there too, so the job holds no picture.
   private static VariantJob.Builder profile5CountedAudioJob(Path source) {
