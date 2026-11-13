@@ -6245,6 +6245,11 @@ class WorkerMediaSmokeTest {
       return delivered.nextSetBit(0);
     }
 
+    // The delivered sample at a time, or none when no delivered sample holds that time.
+    OptionalInt sampleAt(int time) {
+      return delivered.get(time) ? OptionalInt.of(byTime[time]) : OptionalInt.empty();
+    }
+
     // The counted source's sample at index n holds n + 1 in the upper 24 bits.
     SourceSamples sourceSamples(int from, int until) {
       var absent = IntStream.range(from, until).filter(time -> !delivered.get(time)).count();
@@ -6526,13 +6531,17 @@ class WorkerMediaSmokeTest {
   // A FLAC encode that writes 16 bits dithers every sample, so silence that the fill writes before
   // that dither would come out as noise. One that writes 44.1 kHz resamples, so the fill runs
   // before the resampler too, which would otherwise join the audio on both sides of a gap. Its
-  // dither, and its ringing in the 3 ms around each edge, then reach that gap's silence.
+  // dither, and its ringing in the 3 ms around each edge, then reach that gap's silence. The
+  // counted samples rise by one step of 24 bits per sample, a straight line that dither and a
+  // resampler keep within a few steps, so each delivered sample of the source's audio also shows
+  // the time it came from.
   @ParameterizedTest(name = "{0}")
   @EnumSource(ChangedLosslessSamples.class)
   @DisplayName(
-      "Should fill every time with digital silence before the audio and with silence in its gaps"
-          + " when a FLAC encode of audio with gaps dithers or resamples it")
-  void shouldFillEveryTimeWithSilenceWhenAFlacEncodeOfAudioWithGapsDithersOrResamplesIt(
+      "Should deliver every source audio sample at its own time, changed by no more than the"
+          + " dither, and silence before it and in its gaps, when a FLAC encode of audio with gaps"
+          + " dithers or resamples it")
+  void shouldDeliverEverySampleAtItsOwnTimeAndSilenceInEachGapWhenAFlacEncodeDithersOrResamplesIt(
       ChangedLosslessSamples changed) throws Exception {
     var source = gappedSource(GappedSource.COUNTED);
     var job = gappedSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
@@ -6552,6 +6561,15 @@ class WorkerMediaSmokeTest {
     assertThat(delivered.silentSamples(0, start - changed.edgeSamples))
         .as("the samples before the audio's late start at 1.02 s")
         .isEqualTo(new SilentSamples(start - changed.edgeSamples, 0, 0));
+    for (var stretch : GAPPED_COUNTED_AUDIO) {
+      assertThat(changed.timesAwayFromTheSource(delivered, stretch))
+          .as(
+              "times of the source's audio from sample %d to sample %d that hold no sample within"
+                  + " three steps of the written depth of the source's sample there",
+              stretch.from(), stretch.until())
+          .isZero();
+    }
+
     for (var gap : List.of(GAPPED_SOURCE_FIRST_GAP, GAPPED_SOURCE_SECOND_GAP)) {
       assertThat(
               delivered.samplesBeyond(
@@ -6586,6 +6604,27 @@ class WorkerMediaSmokeTest {
     // A time of the counted source, in samples at this encode's rate.
     int at(int sourceTime) {
       return (int) ((long) sourceTime * sampleRate / COUNTED_AUDIO_SAMPLE_RATE);
+    }
+
+    // How many times of a stretch of the source's audio, away from the edges that the resampler
+    // rings into, hold no delivered sample or one more than three steps of the written depth from
+    // the source's sample there. Triangular dither moves a sample by less than one step either
+    // side, the conversion to the written depth by up to one step more, and the resampler by a
+    // small part of a step.
+    long timesAwayFromTheSource(DeliveredAudio delivered, SampleRange stretch) {
+      var tolerance = 3L << (Integer.SIZE - bitDepth);
+      return IntStream.range(at(stretch.from()) + edgeSamples, at(stretch.until()) - edgeSamples)
+          .filter(
+              time ->
+                  delivered.sampleAt(time).stream()
+                      .noneMatch(sample -> Math.abs(sample - sourceSampleAt(time)) <= tolerance))
+          .count();
+    }
+
+    // The counted source's sample at a time of this encode, in samples at its rate, as a 32-bit
+    // sample: the source's sample at time n holds n + 1 in its upper 24 bits.
+    private double sourceSampleAt(int time) {
+      return ((double) time * COUNTED_AUDIO_SAMPLE_RATE / sampleRate + 1) * (1 << 8);
     }
   }
 
