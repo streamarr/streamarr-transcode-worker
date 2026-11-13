@@ -1580,6 +1580,87 @@ class ProducerTest {
                     .map(pictures -> Arguments.of(video.get()[0], video.get()[1], pictures)));
   }
 
+  // The output's only segment, segment 0, is the only listed one: its interval holds every audio
+  // sample from 0 s when the job advertises no end, and up to 2 s when the job advertises its end
+  // there. Its video runs from 0 s to 1 s. All of the copied audio starts at 1 s, so the segment
+  // takes it, but none of it plays beside the segment's video. ADR 0060 refuses the segment as one
+  // that comes before the copied audio's first sample.
+  @ParameterizedTest(name = "{0}, {2}")
+  @MethodSource("copiedAndEncodedVideoOnTheOnlyListedSegment")
+  @DisplayName(
+      "Should refuse the output's only segment when all of the copied audio that it takes starts"
+          + " after its video ends")
+  void shouldRefuseTheOutputsOnlySegmentWhenAllOfTheCopiedAudioThatItTakesStartsAfterItsVideoEnds(
+      String video, VideoDecision videoDecision, SegmentIntervals intervals) {
+    var output = onlySegmentBesideOneSecondOfAudioFrom(48_000);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .intervals(intervals)
+            .mediaSegmentCount(1)
+            .videoDecision(videoDecision)
+            .copiesAudio(true)
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  // The same segment beside copied audio that starts at 0.979 s, one audio sample before its video
+  // ends. That audio plays beside the segment's last picture, so the segment does not come before
+  // the copied audio's first sample, and the audio lasts past its video.
+  @ParameterizedTest(name = "{0}, {2}")
+  @MethodSource("copiedAndEncodedVideoOnTheOnlyListedSegment")
+  @DisplayName(
+      "Should deliver the output's only segment when the copied audio that it takes starts before"
+          + " its video ends")
+  void shouldDeliverTheOutputsOnlySegmentWhenTheCopiedAudioThatItTakesStartsBeforeItsVideoEnds(
+      String video, VideoDecision videoDecision, SegmentIntervals intervals) {
+    var output = onlySegmentBesideOneSecondOfAudioFrom(47_000);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .intervals(intervals)
+            .mediaSegmentCount(1)
+            .videoDecision(videoDecision)
+            .copiesAudio(true)
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  static Stream<Arguments> copiedAndEncodedVideoOnTheOnlyListedSegment() {
+    return copiedAndEncodedVideo()
+        .flatMap(
+            video ->
+                Stream.of(
+                        Named.of("without an advertised end", onlyListedStartAtZero()),
+                        Named.of(
+                            "with the advertised end at 2 s",
+                            onlyListedStartAtZero()
+                                .withLastListedSegmentEndingAt(Duration.ofSeconds(2))))
+                    .map(intervals -> Arguments.of(video.get()[0], video.get()[1], intervals)));
+  }
+
+  private static SegmentIntervals onlyListedStartAtZero() {
+    return SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L), 1, 24));
+  }
+
+  // The output's only segment: 24 pictures of 1/24 s from 0 s, beside 1 s of copied audio from
+  // this tick of the audio's 48,000.
+  private static OneSecondSegments onlySegmentBesideOneSecondOfAudioFrom(long audioStart) {
+    return OneSecondSegments.of(
+        IsoBoxes.videoAndAudioMoov(),
+        TimedFragment.keyframeAt(0)
+            .videoDuration(1_000)
+            .videoSampleCount(24)
+            .audioFrom(audioStart, oneSecondOfAudioSamples())
+            .build());
+  }
+
   @ParameterizedTest
   @CsvSource({"false,false", "false,true", "true,false", "true,true"})
   @DisplayName("Should refuse a segment without copied audio when the audio ends before its video")

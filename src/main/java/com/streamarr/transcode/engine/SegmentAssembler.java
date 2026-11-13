@@ -356,7 +356,7 @@ final class SegmentAssembler {
     }
 
     var videoEnd = new MediaTime(end, new TimeBase(1, timescale));
-    if (earlierTail.isEmpty() && comesBeforeTheCopiedAudiosFirstSample(samples)) {
+    if (earlierTail.isEmpty() && comesBeforeTheCopiedAudiosFirstSample(samples, videoEnd)) {
       throw new FragmentedMp4Exception(
           Reason.COPIED_AUDIO_RAN_SHORT,
           "a media segment comes before the copied audio's first sample");
@@ -401,10 +401,21 @@ final class SegmentAssembler {
   }
 
   // Whether a segment that no copied audio reached before it comes before the copied audio's first
-  // sample: it takes no copied audio, and audio was dropped after the output's last segment's
-  // interval, which starts after this segment.
-  private boolean comesBeforeTheCopiedAudiosFirstSample(List<CarriedSample> samples) {
-    return samples.isEmpty() && audio.discardedTail().isPresent();
+  // sample: the copied audio it takes starts at or after its video's end, so none of it plays
+  // beside that video, or it takes none, and audio was dropped after the output's last segment's
+  // interval, which starts after this segment. The last listed segment's interval runs to the
+  // advertised end or to the end of the media, so it can take audio that starts after its video.
+  private boolean comesBeforeTheCopiedAudiosFirstSample(
+      List<CarriedSample> samples, MediaTime videoEnd) {
+    if (samples.isEmpty()) {
+      return audio.discardedTail().isPresent();
+    }
+
+    var first = samples.getFirst();
+    var timescale = first.fragment().tracks().audio().orElseThrow().timescale();
+    return new MediaTime(first.sample().presentationTime(), new TimeBase(1, timescale))
+            .compareTo(videoEnd)
+        >= 0;
   }
 
   // The length of one video frame in the segment: the duration that most of its pictures share, the

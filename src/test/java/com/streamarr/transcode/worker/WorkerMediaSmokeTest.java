@@ -7044,8 +7044,10 @@ class WorkerMediaSmokeTest {
   }
 
   // The source's audio starts after its video has ended at 24 s. An attempt from segment 3, the
-  // last, reads no copied audio before or inside that segment, and drops the audio after the
-  // advertised end when the output ends (ADR 0037). So segment 3 comes before the copied audio's
+  // last, reads no copied audio before that segment, and none of the copied audio plays beside its
+  // video. With the advertised end at 24 s, the attempt drops that audio when the output ends (ADR
+  // 0037). Without an advertised end, and with the advertised end at 30 s, segment 3's interval
+  // holds the audio, and the segment takes it. Either way segment 3 comes before the copied audio's
   // first sample, which ADR 0060 refuses whether the video is copied or encoded.
   @ParameterizedTest(name = "{0}, {1}")
   @MethodSource("copiedAndEncodedVideoBesideAudioAfterIt")
@@ -7085,7 +7087,12 @@ class WorkerMediaSmokeTest {
             mode ->
                 Stream.of(
                         Named.<UnaryOperator<TranscodeExecution.Builder>>of(
-                            "with the advertised end at 24 s", advertisedEndAt(24)))
+                            "with the advertised end at 24 s", advertisedEndAt(24)),
+                        Named.<UnaryOperator<TranscodeExecution.Builder>>of(
+                            "without an advertised end", UnaryOperator.identity()),
+                        Named.<UnaryOperator<TranscodeExecution.Builder>>of(
+                            "with the advertised end at 30 s, after the audio's first sample",
+                            advertisedEndAt(30)))
                     .map(advertisedEnd -> Arguments.of(mode, advertisedEnd)));
   }
 
