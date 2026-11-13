@@ -332,6 +332,7 @@ class WorkerMediaSmokeTest {
   private static final String MPEG2_TS_INSIDE_GROUP_SOURCE = "mpeg2-ac3-mp2-inside-a-group.ts";
   private static final String SPARSE_CUES_SOURCE = "h264-aac-ac3-sparse-cues.mkv";
   private static final String MPEG4_AVI_SOURCE = "mpeg4-mp3.avi";
+  private static final String H264_AC3_SOURCE = "h264-ac3.mkv";
   private static final String MOVED_AUDIO_BLOCK_SOURCE = "h264-ac3-moved-audio-block.mkv";
   private static final byte[] MATROSKA_SEGMENT_ID = {0x18, 0x53, (byte) 0x80, 0x67};
   private static final byte[] MATROSKA_CLUSTER_ID = {0x1F, 0x43, (byte) 0xB6, 0x75};
@@ -10067,14 +10068,16 @@ class WorkerMediaSmokeTest {
               measuredSourceArguments(
                   List.of("-map", "-1", "-c:v", "mpeg4", "-bf", "0", "-c:a", "libmp3lame")),
               output);
-      case MOVED_AUDIO_BLOCK_SOURCE -> {
-        var inOrder = root.resolve("audio-in-order.mkv");
-        runFfmpeg(
-            measuredSourceArguments(
-                List.of("-c:v", "libx264", "-bf", "2", "-c:a", "ac3", "-write_crc32", "0")),
-            inOrder);
-        Files.write(output, withAudioBlockMovedLater(Files.readAllBytes(inOrder)));
-      }
+      // -write_crc32 0 leaves out the CRC-32 elements that a moved block start would break.
+      case H264_AC3_SOURCE ->
+          runFfmpeg(
+              measuredSourceArguments(
+                  List.of("-c:v", "libx264", "-bf", "2", "-c:a", "ac3", "-write_crc32", "0")),
+              output);
+      case MOVED_AUDIO_BLOCK_SOURCE ->
+          Files.write(
+              output,
+              withAudioBlockMovedLater(Files.readAllBytes(measuredSource(H264_AC3_SOURCE))));
       default -> {
         return keyframeSource(name);
       }
@@ -10168,30 +10171,59 @@ class WorkerMediaSmokeTest {
   }
 
   // The Matroska bytes with the first block of track 2, the first audio track, that starts at or
-  // after 1 s moved to 2.5 s, as a muxer that misplaces one audio frame writes it. A SimpleBlock
-  // holds its track number, then its start in milliseconds after its Cluster's Timestamp as a
-  // signed 16-bit value. -write_crc32 0 leaves out the CRC-32 elements that the change would break.
+  // after 1 s moved to 2.5 s, as a muxer that misplaces one audio frame writes it.
   private static byte[] withAudioBlockMovedLater(byte[] matroska) {
     var changed = matroska.clone();
-    var segment = 0;
-    while (!hasElementId(changed, segment, MATROSKA_SEGMENT_ID)) {
-      segment = elementEnd(changed, segment);
+    var blocks = ByteBuffer.wrap(changed);
+    audioBlocks(changed).stream()
+        .filter(block -> block.start(blocks) >= 1_000)
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("No block of track 2 starts at or after 1 s"))
+        .moveTo(blocks, 2_500);
+    return changed;
+  }
+
+  /**
+   * One SimpleBlock of track 2: the position of its start in the file's bytes, and its Cluster's
+   * Timestamp. A SimpleBlock holds its track number, then its start in milliseconds after its
+   * Cluster's Timestamp as a signed 16-bit value.
+   */
+  private record AudioBlock(int startPosition, long clusterTime) {
+
+    long start(ByteBuffer matroska) {
+      return clusterTime + matroska.getShort(startPosition);
     }
 
-    for (var child = elementBody(changed, segment);
-        child < changed.length;
-        child = elementEnd(changed, child)) {
-      if (hasElementId(changed, child, MATROSKA_CLUSTER_ID)
-          && tryMoveAudioBlockLater(changed, child)) {
-        return changed;
+    void moveTo(ByteBuffer matroska, long start) {
+      var afterCluster = Math.toIntExact(start - clusterTime);
+      assertThat(afterCluster)
+          .as("the moved block's start after its Cluster's Timestamp")
+          .isBetween((int) Short.MIN_VALUE, (int) Short.MAX_VALUE);
+      matroska.putShort(startPosition, (short) afterCluster);
+    }
+  }
+
+  // The SimpleBlocks of track 2 in the order that the file holds them.
+  private static List<AudioBlock> audioBlocks(byte[] matroska) {
+    var segment = 0;
+    while (!hasElementId(matroska, segment, MATROSKA_SEGMENT_ID)) {
+      segment = elementEnd(matroska, segment);
+    }
+
+    var blocks = new ArrayList<AudioBlock>();
+    for (var child = elementBody(matroska, segment);
+        child < matroska.length;
+        child = elementEnd(matroska, child)) {
+      if (hasElementId(matroska, child, MATROSKA_CLUSTER_ID)) {
+        blocks.addAll(audioBlocksOfCluster(matroska, child));
       }
     }
 
-    throw new AssertionError("No block of track 2 starts at or after 1 s");
+    return blocks;
   }
 
-  private static boolean tryMoveAudioBlockLater(byte[] matroska, int cluster) {
-    var blocks = ByteBuffer.wrap(matroska);
+  private static List<AudioBlock> audioBlocksOfCluster(byte[] matroska, int cluster) {
+    var blocks = new ArrayList<AudioBlock>();
     var clusterTime = 0L;
     var end = elementEnd(matroska, cluster);
     for (var child = elementBody(matroska, cluster);
@@ -10203,19 +10235,12 @@ class WorkerMediaSmokeTest {
         clusterTime = new BigInteger(1, timestamp).longValueExact();
       }
 
-      if (matroska[child] == SIMPLE_BLOCK_ID
-          && matroska[body] == TRACK_2
-          && clusterTime + blocks.getShort(body + 1) >= 1_000) {
-        var movedStart = Math.toIntExact(2_500 - clusterTime);
-        assertThat(movedStart)
-            .as("the moved block's start after its Cluster's Timestamp")
-            .isLessThanOrEqualTo(Short.MAX_VALUE);
-        blocks.putShort(body + 1, (short) movedStart);
-        return true;
+      if (matroska[child] == SIMPLE_BLOCK_ID && matroska[body] == TRACK_2) {
+        blocks.add(new AudioBlock(body + 1, clusterTime));
       }
     }
 
-    return false;
+    return blocks;
   }
 
   private static boolean hasElementId(byte[] bytes, int element, byte[] id) {
