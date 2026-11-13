@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fixtures.RecordingFixtures;
 import java.io.IOException;
 import java.io.InputStream;
@@ -63,6 +64,69 @@ class ProcessBuilderLauncherTest {
     assertThat(new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8))
         .isEqualTo(jobAttemptId.toString());
     assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+  }
+
+  // dd reads its standard input with read calls, one byte in each. Once it has passed one byte on,
+  // it has read everything it reads to start and waits in a read of its standard input, so only
+  // the bytes written next are read after the first count.
+  @Test
+  @EnabledOnOs(OS.LINUX)
+  @DisplayName(
+      "Should count the bytes that a launched process has read, and the same bytes while it reads"
+          + " nothing more")
+  void shouldCountTheBytesThatALaunchedProcessHasReadAndTheSameWhileItReadsNothingMore()
+      throws IOException {
+    var process = launcher.launch(List.of("dd", "bs=1", "status=none"), UUID.randomUUID());
+    try (var input = process.getOutputStream()) {
+      input.write(0);
+      input.flush();
+      assertThat(process.getInputStream().readNBytes(1)).hasSize(1);
+      var readToStart = launcher.bytesRead(process);
+      assertThat(readToStart).as("the bytes that dd had read once it had started").isPresent();
+
+      input.write(new byte[10_000]);
+      input.flush();
+      assertThat(process.getInputStream().readNBytes(10_000)).hasSize(10_000);
+
+      var read = launcher.bytesRead(process);
+      assertThat(read).hasValue(readToStart.getAsLong() + 10_000);
+      assertThat(launcher.bytesRead(process))
+          .as("counted again, with nothing read")
+          .isEqualTo(read);
+    } finally {
+      process.destroyForcibly();
+    }
+  }
+
+  @Test
+  @DisplayName("Should count no bytes read for a launched process that has exited")
+  void shouldCountNoBytesReadForALaunchedProcessThatHasExited()
+      throws IOException, InterruptedException {
+    var process = launcher.launch(List.of("true"), UUID.randomUUID());
+    assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+    assertThat(launcher.bytesRead(process)).isEmpty();
+  }
+
+  // A process without a handle names no process whose count the system keeps.
+  @Test
+  @DisplayName("Should count no bytes read for a process that has no handle")
+  void shouldCountNoBytesReadForAProcessThatHasNoHandle() {
+    var process = ScriptedProcess.builder().output(new byte[0]).hasNoHandle(true).build();
+
+    assertThat(launcher.bytesRead(process)).isEmpty();
+  }
+
+  @Test
+  @DisabledOnOs(OS.LINUX)
+  @DisplayName("Should count no bytes read for a launched process outside Linux")
+  void shouldCountNoBytesReadForALaunchedProcessOutsideLinux() throws IOException {
+    var process = launcher.launch(List.of("dd", "bs=1", "status=none"), UUID.randomUUID());
+    try {
+      assertThat(launcher.bytesRead(process)).isEmpty();
+    } finally {
+      process.destroyForcibly();
+    }
   }
 
   @Test
@@ -200,7 +264,7 @@ class ProcessBuilderLauncherTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertCarriesTheRecordedSamples(sink.acceptedBytes(), recording(ENCODED_RECORDING));
   }
 

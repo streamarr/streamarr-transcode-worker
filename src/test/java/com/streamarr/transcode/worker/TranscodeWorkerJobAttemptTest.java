@@ -90,6 +90,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.BeforeEach;
@@ -1561,18 +1562,19 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @ParameterizedTest(name = "{0} with {1}")
+  // A copy that encodes its audio reads it from a second input of the source.
+  @ParameterizedTest(name = "{0} with {1} from input {2}")
   @CsvSource({
-    "TRANSCODE_MODE_REMUX, AUDIO_MODE_COPY",
-    "TRANSCODE_MODE_AUDIO_TRANSCODE, AUDIO_MODE_TRANSCODE",
-    "TRANSCODE_MODE_VIDEO_TRANSCODE, AUDIO_MODE_COPY",
-    "TRANSCODE_MODE_FULL_TRANSCODE, AUDIO_MODE_TRANSCODE"
+    "TRANSCODE_MODE_REMUX, AUDIO_MODE_COPY, 0",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, AUDIO_MODE_TRANSCODE, 1",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, AUDIO_MODE_COPY, 0",
+    "TRANSCODE_MODE_FULL_TRANSCODE, AUDIO_MODE_TRANSCODE, 0"
   })
   @DisplayName(
       "Should map the audio stream that the job names when a replacement attempt copies or encodes"
           + " it")
   void shouldMapTheAudioStreamThatTheJobNamesWhenAReplacementAttemptCopiesOrEncodesIt(
-      TranscodeMode mode, AudioMode audioMode) throws Exception {
+      TranscodeMode mode, AudioMode audioMode, int audioInput) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(mode);
     job.getExecutionBuilder().setStartSequenceNumber(3);
@@ -1591,8 +1593,8 @@ class TranscodeWorkerJobAttemptTest {
 
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
-          .containsSequence("-map", "0:0", "-map", "0:2?")
-          .doesNotContain("0:a:0");
+          .containsSequence("-map", "0:0", "-map", audioInput + ":2?")
+          .doesNotContain("0:a:0", "1:a:0");
     }
   }
 
@@ -2242,13 +2244,12 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should complete the attempt with every media segment when its encoded audio's last frames"
-          + " arrive after their media segment was delivered")
-  void
-      shouldCompleteTheAttemptWithEveryMediaSegmentWhenItsEncodedAudiosLastFramesArriveAfterTheirMediaSegmentWasDelivered()
-          throws Exception {
+      "Should report a failed transcode, after the segments it uploaded, when the attempt's"
+          + " encoded audio's last frames arrive after their media segment was delivered")
+  void shouldReportAFailedTranscodeWhenItsEncodedAudiosLastFramesArriveAfterTheirMediaSegment()
+      throws Exception {
     var recording = recording("17-encode-audio-ends-long-before-video.fmp4");
-    assertThat(recording.droppedAudioSamples()).isNotEmpty();
+    var lateSample = recording.lateAudioSamples().getFirst();
     var job = variantJobBuilder();
     job.getExecutionBuilder().setMediaSegmentCount(recording.mediaSegmentCount());
 
@@ -2257,10 +2258,16 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
-      assertThat(connection.uploads())
-          .extracting(upload -> upload.metadata().getSegmentName())
-          .containsExactlyElementsOf(uploadNames(recording));
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      var uploaded =
+          connection.uploads().stream().map(upload -> upload.metadata().getSegmentName()).toList();
+      assertThat(uploaded)
+          .as("the segments uploaded before the first late sample arrived, its own among them")
+          .contains("segment" + lateSample.segmentNumber() + ".m4s")
+          .hasSizeLessThan(uploadNames(recording).size())
+          .isEqualTo(uploadNames(recording).subList(0, uploaded.size()));
     }
   }
 
@@ -2355,6 +2362,104 @@ class TranscodeWorkerJobAttemptTest {
           .as("segment 0 has not closed")
           .containsExactly("init.mp4");
     }
+  }
+
+  // FFmpeg has written the first fragment and writes nothing more, as while a copy's audio input
+  // reads on after the audio's last packet, and it has read one more byte at every count.
+  @Test
+  @DisplayName(
+      "Should report the bytes that FFmpeg has read, each time they have grown, and no further"
+          + " output end while a copy that encodes its audio reads ahead and writes nothing")
+  void shouldReportTheBytesThatFfmpegHasReadWhileACopyThatEncodesItsAudioReadsAhead()
+      throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var pause = endOfFragment(output, 1);
+    var launcher = new ScriptedProcessLauncher(_ -> readingProcess(output, pause));
+    var job = copyThatEncodesItsAudioJobBuilder();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitProgressReports(connection, 3);
+      var reports = progressReportsOf(connection);
+      assertThat(reports)
+          .extracting(JobAttemptProgress::getJobAttemptId)
+          .containsOnly(job.getJobAttemptId());
+      assertThat(reports.stream().flatMapToLong(TranscodeWorkerJobAttemptTest::ffmpegBytesRead))
+          .as("the bytes read that the reports carry")
+          .hasSizeGreaterThanOrEqualTo(2)
+          .doesNotHaveDuplicates()
+          .isSorted();
+      assertThat(reports.stream().filter(JobAttemptProgress::hasOutputEnd))
+          .as("the reports that the output's end grew: it grew once, in the first fragment")
+          .hasSize(1);
+    }
+  }
+
+  // A count that comes two stall timeouts after the one before it, as when the system does not run
+  // the worker's watchdog meanwhile, finds that FFmpeg read, as does every count after it.
+  @Test
+  @DisplayName(
+      "Should keep the attempt running when a count of the bytes that FFmpeg has read comes later"
+          + " than the stall timeout and finds that FFmpeg read, while a copy that encodes its"
+          + " audio reads ahead")
+  void shouldKeepTheAttemptRunningWhenACountThatComesLaterThanTheStallTimeoutFindsThatFfmpegRead()
+      throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var pause = endOfFragment(output, 1);
+    var launcher = new ScriptedProcessLauncher(_ -> readingProcess(output, pause));
+    var job = copyThatEncodesItsAudioJobBuilder().build();
+    var stallTimeout = Duration.ofMillis(200);
+    var engine = engineBuilder(launcher).encoderStallTimeout(stallTimeout).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).engine(engine).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      awaitProgressReports(connection, 2);
+      var process = processOf(launcher, job);
+      process.delayNextCount(stallTimeout.multipliedBy(2));
+      var readBeforeTheDelayedCount = process.bytesRead();
+
+      promptly()
+          .until(
+              () ->
+                  process.bytesRead() >= readBeforeTheDelayedCount + 3
+                      || !terminalEventsOf(connection, job).isEmpty());
+
+      assertThat(eventsOf(connection))
+          .as("the attempt's events, after the delayed count and two more")
+          .containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      process.resume();
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+    }
+  }
+
+  // A job that copies its video and encodes its audio, whose audio's input reads ahead.
+  private static VariantJob.Builder copyThatEncodesItsAudioJobBuilder() {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000);
+    return job;
+  }
+
+  private static ScriptedProcess readingProcess(byte[] output, int pause) {
+    var process = ScriptedProcess.builder().output(output).pauseAfter(pause).build();
+    process.startReading();
+    return process;
+  }
+
+  // JobAttemptProgress.ffmpeg_bytes_read, field 4 of the worker contract, which the pinned SDK
+  // predates.
+  private static LongStream ffmpegBytesRead(JobAttemptProgress progress) {
+    return progress.getUnknownFields().getField(4).getVarintList().stream()
+        .mapToLong(Long::longValue);
   }
 
   @Test

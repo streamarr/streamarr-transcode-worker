@@ -117,7 +117,7 @@ class ProducerRpuMovingPipeTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
   }
 
@@ -143,7 +143,7 @@ class ProducerRpuMovingPipeTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(copied));
   }
 
@@ -159,7 +159,7 @@ class ProducerRpuMovingPipeTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .hasSize(recording(ENCODED_RECORDING).segments().size() + 1)
         .startsWith("init.mp4", "segment0.m4s");
@@ -221,7 +221,7 @@ class ProducerRpuMovingPipeTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(videoDurationsOf(encode.stdinBytes())).containsExactly(984L, 1476L);
   }
 

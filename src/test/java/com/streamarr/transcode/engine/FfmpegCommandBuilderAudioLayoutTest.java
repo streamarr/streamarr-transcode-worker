@@ -460,6 +460,24 @@ class FfmpegCommandBuilderAudioLayoutTest {
               "-drc_scale:a:0", "0", "-target_level:a:0", "-31", "-i", "/media/movie.mkv");
     }
 
+    // The first input feeds only video and decodes no audio.
+    @Test
+    @DisplayName(
+        "Should pass the decoder's options to the audio's input alone when a copy encodes Dolby"
+            + " audio")
+    void shouldPassTheDecodersOptionsToTheAudiosInputAloneWhenACopyEncodesDolbyAudio() {
+      var cmd = command(encode("aac", "5.1"), source("ac3", "5.1(side)"));
+
+      var firstInputsEnd = cmd.indexOf("/media/movie.mkv") + 1;
+      assertThat(cmd.subList(0, firstInputsEnd))
+          .as("the first input")
+          .containsExactly("ffmpeg", "-y", "-isync", "1", "-i", "/media/movie.mkv");
+      assertThat(cmd.subList(firstInputsEnd, cmd.indexOf("-map")))
+          .as("the audio's input")
+          .containsExactly(
+              "-drc_scale:a:0", "0", "-target_level:a:0", "-31", "-i", "/media/movie.mkv");
+    }
+
     @Test
     @DisplayName(
         "Should decode the audio stream that the job names without compression when it is Dolby")
@@ -470,8 +488,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(cmd)
           .containsSubsequence("-drc_scale:2", "0", "-target_level:2", "-31", "-i")
-          .containsSequence("-map", "0:2?")
-          .doesNotContain("-drc_scale:a:0", "0:a:0");
+          .containsSequence("-map", "1:2?")
+          .doesNotContain("-drc_scale:a:0", "0:a:0", "1:a:0");
     }
 
     @Test

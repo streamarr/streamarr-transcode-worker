@@ -88,9 +88,10 @@ final class SegmentAssembler {
    *     track that it requires or other video than the decision, when the first video sample of an
    *     AV1 encode holds no sequence header that matches its {@code av1C}, when a video sample that
    *     the copy rewrites cannot be read, when the grouper refuses the fragment, when it holds a
-   *     short video sample or an audio sample that starts before the one before it, or when the
-   *     rewritten initialization segment or a segment it closes is larger than the segment cap once
-   *     rebuilt, after which nothing is delivered, not even the segments it would close
+   *     short video sample, an audio sample that starts before the one before it or one whose
+   *     segment has closed, or when the rewritten initialization segment or a segment it closes is
+   *     larger than the segment cap once rebuilt, after which nothing is delivered, not even the
+   *     segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
@@ -195,11 +196,6 @@ final class SegmentAssembler {
   long heldBytes() {
     return heldInitializationSegment.map(segment -> (long) segment.bytes().length).orElse(0L)
         + heldFragments().stream().mapToLong(Fragment::heldBytes).sum();
-  }
-
-  /** The audio samples dropped because they arrived after their segment closed. */
-  long droppedLateAudioSampleCount() {
-    return audio.droppedLateSampleCount();
   }
 
   /**

@@ -42,6 +42,10 @@ final class FragmentedMp4Exception extends RuntimeException {
      */
     PRESENTATION_TIME_REGRESSED,
     /**
+     * An audio sample arrived after the media segment whose interval holds its start was closed.
+     */
+    AUDIO_ARRIVED_AFTER_ITS_SEGMENT,
+    /**
      * A video sample of an encoded output lasts less than half the frame duration of the rate the
      * encode forced.
      */

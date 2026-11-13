@@ -2298,24 +2298,25 @@ class FfmpegCommandBuilderTest {
   }
 
   // The decoder applies trailing padding that only side data records, as Matroska's DiscardPadding,
-  // so the worker reads where the decoded audio ends as well as where its packets end.
-  @ParameterizedTest(name = "{0}")
-  @CsvSource({"AUDIO_TRANSCODE, copy", "FULL_TRANSCODE, libx264"})
+  // so the worker reads where the decoded audio ends as well as where its packets end. The decoded
+  // stream trails as the encoded audio does, so a copy reads it from the audio's own input.
+  @ParameterizedTest(name = "{0} from input {2}")
+  @CsvSource({"AUDIO_TRANSCODE, copy, 1", "FULL_TRANSCODE, libx264, 0"})
   @DisplayName(
       "Should also decode the chosen audio stream to PCM as the framecrc's third stream when"
           + " building a command that encodes the audio")
   void shouldAlsoDecodeTheChosenAudioStreamToPcmAsTheFramecrcsThirdStreamWhenItEncodesTheAudio(
-      TranscodeMode mode, String videoEncoder) {
+      TranscodeMode mode, String videoEncoder, int audioInput) {
     var cmd = command(request(mode).startSequenceNumber(5).build(), videoEncoder);
 
-    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.indexOf("pipe:2") + 1))
         .containsExactly(
             "-map",
             "0:0",
             "-map",
-            "0:a:0",
+            audioInput + ":a:0",
             "-map",
-            "0:a:0",
+            audioInput + ":a:0",
             "-c",
             "copy",
             "-copypriorss",
@@ -2832,13 +2833,14 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "-0:s");
   }
 
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(TranscodeMode.class)
+  // A copy that encodes its audio reads it from the second input.
+  @ParameterizedTest(name = "{0} from input {1}")
+  @CsvSource({"REMUX, 0", "VIDEO_TRANSCODE, 0", "AUDIO_TRANSCODE, 1", "FULL_TRANSCODE, 0"})
   @DisplayName(
       "Should map the audio stream that the job names in place of the first when a replacement"
           + " attempt seeks")
   void shouldMapTheAudioStreamThatTheJobNamesInPlaceOfTheFirstWhenAReplacementAttemptSeeks(
-      TranscodeMode mode) {
+      TranscodeMode mode, int audioInput) {
     var decision =
         decision(mode).audioDecision(audio(mode).streamIndex(OptionalInt.of(2)).build()).build();
     var request =
@@ -2850,8 +2852,9 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request, mode.encodesVideo() ? "libx264" : "copy");
 
     assertThat(cmd)
-        .containsSequence("-map", "0:0", "-map", "0:2?", "-map", "-0:s")
-        .doesNotContain("0:a:0");
+        .containsSequence(
+            "-map", "0:0", "-map", audioInput + ":2?", "-map", "-" + audioInput + ":s")
+        .doesNotContain("0:a:0", "1:a:0");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -3670,6 +3673,243 @@ class FfmpegCommandBuilderTest {
 
     assertThat(heldAudioFilter(cmd)).isEqualTo(aacStereoFromTheFirstSegment("60", "6"));
     assertThat(cmd).containsSequence("-c:a", "aac");
+  }
+
+  // FFmpeg holds an input back only while every output stream that it feeds runs ahead of the one
+  // that trails, and a stream of encoded or decoded audio trails once the audio's packets stop:
+  // FFmpeg keeps its end back until the input ends. Each output of a copy therefore takes its
+  // audio from the second input, so that the first feeds only video.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiesThatEncodeTheirAudio")
+  @DisplayName(
+      "Should map only the video from the first input, in every output, when a copy encodes its"
+          + " audio")
+  void shouldMapOnlyTheVideoFromTheFirstInputInEveryOutputWhenACopyEncodesItsAudio(
+      EncodedAudioCopy copy) {
+    var cmd = command(copy.request(), "copy");
+
+    var audio = copy.audioMap();
+    assertThat(streamMaps(cmd))
+        .as("the maps of the fragmented MP4, of the framecrc and of the null muxer")
+        .containsExactly("0:0", audio, "0:0", audio, audio, "1:0");
+  }
+
+  static Stream<EncodedAudioCopy> copiesThatEncodeTheirAudio() {
+    var namedStream = audio(TranscodeMode.AUDIO_TRANSCODE).streamIndex(OptionalInt.of(2)).build();
+    return Stream.of(
+        new EncodedAudioCopy(
+            "from segment 0", request(TranscodeMode.AUDIO_TRANSCODE).build(), "1:a:0"),
+        new EncodedAudioCopy(
+            "from segment 5",
+            request(TranscodeMode.AUDIO_TRANSCODE).startSequenceNumber(5).build(),
+            "1:a:0"),
+        new EncodedAudioCopy("padding its audio", paddedAudio("aac", 2), "1:a:0"),
+        new EncodedAudioCopy(
+            "naming its audio stream",
+            request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(namedStream).build())
+                .build(),
+            "1:2?"));
+  }
+
+  private record EncodedAudioCopy(String name, TranscodeRequest request, String audioMap) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  // Every stream that an output maps, in the command's order, without the maps that exclude.
+  private static List<String> streamMaps(List<String> cmd) {
+    return IntStream.range(1, cmd.size())
+        .filter(index -> cmd.get(index - 1).equals("-map"))
+        .mapToObj(cmd::get)
+        .filter(map -> !map.startsWith("-"))
+        .toList();
+  }
+
+  // A copied audio stream never trails, and an encode that holds no frame keeps the one input.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"REMUX, copy", "VIDEO_TRANSCODE, libx264", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should read the source once when a job copies its audio or encodes its video without"
+          + " holding the last frame")
+  void shouldReadTheSourceOnceWhenAJobCopiesItsAudioOrEncodesItsVideoWithoutHoldingAFrame(
+      TranscodeMode mode, String videoEncoder) {
+    var cmd = command(request(mode).build(), videoEncoder);
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(streamMaps(cmd)).isNotEmpty().allMatch(map -> map.startsWith("0:"));
+  }
+
+  // A copy from a later segment that encodes its audio seeks one segment period before its first
+  // segment's start. FFmpeg starts an input's timeline at the earliest start among the streams
+  // that the input's outputs use: the audio's input uses the video and the audio, as the one input
+  // did, and -isync places the video's input, which uses the video alone, on that timeline.
+  @Test
+  @DisplayName(
+      "Should read the encoded audio from a second input of the source, seeked as the first, and"
+          + " place the first input on the second's timeline when a copy encodes its audio")
+  void shouldReadTheEncodedAudioFromASecondInputAndPlaceTheFirstOnItsTimelineWhenACopyEncodesIt() {
+    var cmd =
+        command(request(TranscodeMode.AUDIO_TRANSCODE).startSequenceNumber(5).build(), "copy");
+
+    assertThat(cmd)
+        .startsWith(
+            "ffmpeg",
+            "-y",
+            "-isync",
+            "1",
+            "-ss",
+            "24",
+            "-i",
+            "/media/movie.mkv",
+            "-ss",
+            "24",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:0",
+            "-map",
+            "1:a:0");
+  }
+
+  // FFmpeg holds the first input back while the audio trails, and writes nothing while the audio's
+  // input reads from the audio stream's last packet to its next one or to the source's end.
+  @Test
+  @DisplayName(
+      "Should say that the audio's input reads ahead when a copy encodes its audio, from the start"
+          + " and from a later segment")
+  void shouldSayThatTheAudiosInputReadsAheadWhenACopyEncodesItsAudio() {
+    var fromTheStart = request(TranscodeMode.AUDIO_TRANSCODE).build();
+    var fromALaterSegment = request(TranscodeMode.AUDIO_TRANSCODE).startSequenceNumber(5).build();
+
+    assertThat(builder.buildPipeline(job(fromTheStart, "copy")).audioInputReadsAhead()).isTrue();
+    assertThat(builder.buildPipeline(job(fromALaterSegment, "copy")).audioInputReadsAhead())
+        .isTrue();
+  }
+
+  // Copied audio never trails, and an encode that holds no frame keeps the one input.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"REMUX, copy", "VIDEO_TRANSCODE, libx264", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should say that no input reads ahead when a job copies its audio or encodes its video"
+          + " without holding the last frame")
+  void shouldSayThatNoInputReadsAheadWhenAJobCopiesItsAudioOrEncodesItsVideoWithoutHoldingAFrame(
+      TranscodeMode mode, String videoEncoder) {
+    var pipeline = builder.buildPipeline(job(request(mode).build(), videoEncoder));
+
+    assertThat(pipeline.audioInputReadsAhead()).isFalse();
+  }
+
+  // The held encode reads its audio from a second input too. FFmpeg holds the first input back
+  // while the audio trails there as well, and writes nothing while the audio's input reads on.
+  @Test
+  @DisplayName(
+      "Should say that the audio's input reads ahead when an encode holds the last frame and reads"
+          + " its audio from an input of its own")
+  void shouldSayThatTheAudiosInputReadsAheadWhenAnEncodeHoldsTheLastFrame() {
+    var held = heldAndPadded(TranscodeMode.FULL_TRANSCODE).build();
+
+    var pipeline = builder.buildPipeline(job(held, "libx264"));
+
+    assertThat(pipeline.audioInputReadsAhead()).isTrue();
+  }
+
+  // A held encode that names a stream which the worker did not read as audio keeps the one input.
+  @Test
+  @DisplayName(
+      "Should say that no input reads ahead when an encode holds the last frame and names an audio"
+          + " stream that the worker did not read")
+  void shouldSayThatNoInputReadsAheadWhenAHeldEncodeNamesAnAudioStreamThatTheWorkerDidNotRead() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .audioDecision(namedPaddedAac())
+            .build();
+    var held = request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build();
+
+    var pipeline = builder.buildPipeline(job(held, "libx264"));
+
+    assertThat(pipeline.commandLine()).doesNotContain("-isync");
+    assertThat(pipeline.audioInputReadsAhead()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should say that no input reads ahead when two FFmpegs move a Dolby Vision profile 5"
+          + " source's RPUs for an encode")
+  void shouldSayThatNoInputReadsAheadWhenTwoFfmpegsMoveAProfile5SourcesRpus() {
+    var request =
+        request(
+                decision(TranscodeMode.VIDEO_TRANSCODE)
+                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .build())
+            .build();
+
+    var pipeline = builder.buildPipeline(job(request, "libx264"));
+
+    assertThat(pipeline).isInstanceOf(FfmpegPipeline.RpuMovingPipe.class);
+    assertThat(pipeline.audioInputReadsAhead()).isFalse();
+  }
+
+  // A named stream that is no audio stream maps nothing, so that the producer refuses the output
+  // without a sound track.
+  @Test
+  @DisplayName(
+      "Should exclude a subtitle, data, attachment or attached picture stream of the audio's input"
+          + " when a copy names the audio stream that it encodes")
+  void shouldExcludeAStreamThatIsNoAudioStreamOfTheAudiosInputWhenACopyNamesItsEncodedAudio() {
+    var decision =
+        decision(TranscodeMode.AUDIO_TRANSCODE)
+            .audioDecision(
+                audio(TranscodeMode.AUDIO_TRANSCODE).streamIndex(OptionalInt.of(2)).build())
+            .build();
+
+    var cmd = command(request(decision).build(), "copy");
+
+    assertThat(cmd)
+        .containsSequence(
+            "-map",
+            "0:0",
+            "-map",
+            "1:2?",
+            "-map",
+            "-1:s",
+            "-map",
+            "-1:d",
+            "-map",
+            "-1:t",
+            "-map",
+            "-1:disp:attached_pic",
+            "-map_metadata");
+  }
+
+  // A Matroska demuxer that discards the video seeks by the audio and drops audio blocks after a
+  // seek, and an MPEG-TS input that uses the audio alone starts its timeline at the audio's start,
+  // so the audio's input keeps its video in use, as the one input did.
+  @Test
+  @DisplayName(
+      "Should keep the audio input's video in use through a copy to FFmpeg's null muxer when a"
+          + " copy encodes its audio")
+  void shouldKeepTheAudioInputsVideoInUseThroughANullCopyWhenACopyEncodesItsAudio() {
+    var cmd =
+        command(request(TranscodeMode.AUDIO_TRANSCODE).startSequenceNumber(5).build(), "copy");
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:2") + 1, cmd.size()))
+        .containsExactly(
+            "-map",
+            "1:0",
+            "-c",
+            "copy",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "null",
+            "-");
   }
 
   // tpad repeats the last picture once its input ends, and a demuxer ends every stream of its

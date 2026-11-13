@@ -6,9 +6,11 @@ import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -76,6 +78,7 @@ public final class ScriptedProcess extends Process {
   private final boolean readsMediaFromStdin;
   private final OptionalInt stdinCapacity;
   private final byte[] stderr;
+  private final boolean hasNoHandle;
   private final ByteArrayOutputStream stdin = new ByteArrayOutputStream();
   private final CompletableFuture<Integer> exit = new CompletableFuture<>();
   private final CompletableFuture<Void> pauseReached = new CompletableFuture<>();
@@ -96,6 +99,15 @@ public final class ScriptedProcess extends Process {
   private boolean destroyedForcibly;
   private boolean inputEnded;
   private boolean pausedBySignal;
+  private boolean reading;
+  private long bytesRead;
+  // How long after the count before it the next count comes at the soonest; 0 for no delay.
+  private long nextCountDelayNanos;
+  // On System.nanoTime: the latest count, the count that found the last byte read, and the first
+  // request to terminate; 0 until it happens.
+  private long countedAtNanos;
+  private long lastReadCountedAtNanos;
+  private long terminatedAtNanos;
   private boolean quitArrivedWhilePausedBySignal;
   private boolean quitPendingUntilResumed;
   private boolean terminationPendingUntilResumed;
@@ -115,7 +127,8 @@ public final class ScriptedProcess extends Process {
       boolean lingersAfterKill,
       boolean readsMediaFromStdin,
       Integer stdinCapacity,
-      String stderr) {
+      String stderr,
+      boolean hasNoHandle) {
     this.output = output.clone();
     this.exitCode = exitCode;
     this.exitTiming = Objects.requireNonNullElse(exitTiming, ExitTiming.AT_END_OF_OUTPUT);
@@ -129,6 +142,7 @@ public final class ScriptedProcess extends Process {
     this.readsMediaFromStdin = readsMediaFromStdin;
     this.stdinCapacity = optionalOffset(stdinCapacity);
     this.stderr = Objects.requireNonNullElse(stderr, "").getBytes(StandardCharsets.UTF_8);
+    this.hasNoHandle = hasNoHandle;
     this.endOffset = this.output.length;
     if (this.exitTiming == ExitTiming.AT_LAUNCH) {
       exit.complete(exitCode);
@@ -201,6 +215,71 @@ public final class ScriptedProcess extends Process {
   /** Exits with the scripted exit code; the output keeps whatever the reader has not read. */
   public void exit() {
     exit.complete(exitCode);
+  }
+
+  /** From now on, every count of the bytes that the process has read finds one more. */
+  public synchronized void startReading() {
+    reading = true;
+  }
+
+  /** From now on, every count of the bytes that the process has read finds the same bytes. */
+  public synchronized void stopReading() {
+    reading = false;
+  }
+
+  /**
+   * Makes the next count of the bytes that the process has read come no sooner than the delay after
+   * the count before it, as a count does whose thread the system does not run meanwhile.
+   */
+  public synchronized void delayNextCount(Duration delay) {
+    nextCountDelayNanos = delay.toNanos();
+  }
+
+  /** Counts the bytes that the process has read so far, as its launcher does. */
+  public synchronized long countBytesRead() {
+    awaitTheDelayedCount();
+    var now = System.nanoTime();
+    if (reading) {
+      bytesRead++;
+      lastReadCountedAtNanos = now;
+    }
+
+    countedAtNanos = now;
+    return bytesRead;
+  }
+
+  // Holds this monitor; the wait releases it, so the process's output stays readable meanwhile.
+  private void awaitTheDelayedCount() {
+    var countAt = countedAtNanos + nextCountDelayNanos;
+    while (nextCountDelayNanos > 0 && countAt - System.nanoTime() > 0) {
+      try {
+        TimeUnit.NANOSECONDS.timedWait(this, countAt - System.nanoTime());
+      } catch (InterruptedException _) {
+        Thread.currentThread().interrupt();
+        break;
+      }
+    }
+
+    nextCountDelayNanos = 0;
+  }
+
+  /** When the count that found the last byte that the process read was made, on System.nanoTime. */
+  public synchronized long lastReadCountedAtNanos() {
+    return lastReadCountedAtNanos;
+  }
+
+  /** When the process was first asked to terminate, on System.nanoTime. */
+  public synchronized OptionalLong terminatedAtNanos() {
+    if (terminatedAtNanos == 0) {
+      return OptionalLong.empty();
+    }
+
+    return OptionalLong.of(terminatedAtNanos);
+  }
+
+  /** The bytes that the process has read so far: one for each count made while it read. */
+  public synchronized long bytesRead() {
+    return bytesRead;
   }
 
   /**
@@ -354,6 +433,10 @@ public final class ScriptedProcess extends Process {
   }
 
   private synchronized void terminate() {
+    if (!terminated) {
+      terminatedAtNanos = System.nanoTime();
+    }
+
     terminated = true;
     if (ignoresTermination) {
       return;
@@ -385,9 +468,16 @@ public final class ScriptedProcess extends Process {
     }
   }
 
-  /** A handle whose termination and destruction act on this process as its own methods do. */
+  /**
+   * A handle whose termination and destruction act on this process as its own methods do; none for
+   * a process scripted without one, which throws as {@link Process} does by default.
+   */
   @Override
   public ProcessHandle toHandle() {
+    if (hasNoHandle) {
+      return super.toHandle();
+    }
+
     return new ScriptedHandle();
   }
 

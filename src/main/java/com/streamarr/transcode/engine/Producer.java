@@ -18,6 +18,7 @@ import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -45,11 +46,12 @@ import lombok.extern.slf4j.Slf4j;
  * waits on the pipe, and the delivery in flight once that delivery returns.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
- * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the
- * output ends and the sink has accepted its last segment, FFmpeg must exit within the grace period,
- * or the producer fails the attempt too, as a truncated output when it was one. In both cases it
- * asks FFmpeg to terminate and destroys it after the grace period, because a hung FFmpeg can ignore
- * termination.
+ * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. An FFmpeg
+ * that writes nothing while its audio's input reads ahead has stalled only once it has not read for
+ * the stall timeout either. Once the output ends and the sink has accepted its last segment, FFmpeg
+ * must exit within the grace period, or the producer fails the attempt too, as a truncated output
+ * when it was one. In both cases it asks FFmpeg to terminate and destroys it after the grace
+ * period, because a hung FFmpeg can ignore termination.
  */
 @Slf4j
 // The launch builder's parameters only pass through to FFmpeg and the assembler (worker #109).
@@ -89,6 +91,7 @@ public final class Producer {
   // The latest video or audio sample end that the reader has read, and the latest one taken.
   private final AtomicReference<Duration> outputEnd = new AtomicReference<>(BEFORE_ANY_SAMPLE);
   private final AtomicReference<Duration> takenOutputEnd = new AtomicReference<>(BEFORE_ANY_SAMPLE);
+  private final AtomicLong takenBytesRead = new AtomicLong();
 
   // Guarded by lock. The first outcome decided is the only one the producer settles.
   private Optional<AttemptOutcome> decision = Optional.empty();
@@ -117,7 +120,7 @@ public final class Producer {
     this.ffmpeg = ffmpeg;
     this.launcher = settings.launcher();
     this.stallTimeout = settings.stallTimeout();
-    this.watchdog = new StallWatchdog(stallTimeout);
+    this.watchdog = watchdogOf(ffmpeg, settings);
     this.productionTimer = new ProductionTimer(settings.clock());
     this.clock = settings.clock();
     this.reader =
@@ -198,6 +201,7 @@ public final class Producer {
             .memoryBudget(memoryBudget)
             .pauses(pauses)
             .stallTimeout(stallTimeout)
+            .audioInputReadsAhead(pipeline.audioInputReadsAhead())
             .clock(clock)
             .sourceEndRule(
                 SourceEndRule.builder()
@@ -230,8 +234,37 @@ public final class Producer {
     return producer;
   }
 
+  // FFmpeg writes nothing while its audio's input reads ahead, so the bytes that it reads count as
+  // its progress too. Such a pipeline runs one FFmpeg.
+  private static StallWatchdog watchdogOf(FfmpegProcess ffmpeg, Settings settings) {
+    if (!settings.audioInputReadsAhead()) {
+      return new StallWatchdog(settings.stallTimeout());
+    }
+
+    var process = ffmpeg.processes().getFirst();
+    return StallWatchdog.watchingReads(
+        settings.stallTimeout(), () -> settings.launcher().bytesRead(process));
+  }
+
   long pid() {
     return ffmpeg.pid();
+  }
+
+  /**
+   * The bytes that FFmpeg has read, when the attempt's FFmpeg writes nothing while its audio's
+   * input reads ahead and the bytes have grown since the previous call took them; empty otherwise.
+   * The stall watchdog counts them several times within the stall timeout while the producer reads
+   * FFmpeg's output, so they stop growing once FFmpeg stops reading, and while the producer or the
+   * worker holds FFmpeg up.
+   */
+  public OptionalLong takeAdvancedBytesRead() {
+    var bytesRead = watchdog.sampledBytesRead();
+    var taken = takenBytesRead.getAndAccumulate(bytesRead, Math::max);
+    if (bytesRead <= taken) {
+      return OptionalLong.empty();
+    }
+
+    return OptionalLong.of(bytesRead);
   }
 
   /**
@@ -580,11 +613,18 @@ public final class Producer {
 
   private void watchForStall() {
     if (watchdog.awaitStall()) {
-      failAndTerminateFfmpeg(
-          new Failed(
-              ProducerFailure.ENCODER_STALLED,
-              "FFmpeg wrote no output for " + stallTimeout + " while the producer read it"));
+      failAndTerminateFfmpeg(new Failed(ProducerFailure.ENCODER_STALLED, stallDetail()));
     }
+  }
+
+  private String stallDetail() {
+    if (watchdog.watchesReads()) {
+      return "FFmpeg wrote no output, and the worker counted no bytes that it read, for "
+          + stallTimeout
+          + " while the producer read it";
+    }
+
+    return "FFmpeg wrote no output for " + stallTimeout + " while the producer read it";
   }
 
   private void failAndTerminateFfmpeg(Failed failure) {
@@ -1025,7 +1065,7 @@ public final class Producer {
             ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
       }
 
-      return new Completed(assembler.droppedLateAudioSampleCount(), sourceEnd);
+      return new Completed(sourceEnd);
     }
   }
 
@@ -1090,6 +1130,7 @@ public final class Producer {
       SegmentMemoryBudget memoryBudget,
       ProducerPauses pauses,
       Duration stallTimeout,
+      boolean audioInputReadsAhead,
       MonotonicClock clock,
       SourceEndRule sourceEndRule,
       int startSequenceNumber) {}

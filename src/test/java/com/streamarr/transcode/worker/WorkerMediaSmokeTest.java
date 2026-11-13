@@ -108,6 +108,7 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -117,6 +118,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -136,6 +138,7 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -311,6 +314,21 @@ class WorkerMediaSmokeTest {
 
   // 18 s of video and 10 s of FLAC audio in three 6 s segments.
   private static final int FLAC_SOURCE_SEGMENT_COUNT = 3;
+  private static final int COUNTED_AUDIO_SAMPLE_RATE = 48_000;
+  // The counted source's audio ends at 10 s, inside segment 3 of the twenty 3 s segments that its
+  // video fills.
+  private static final int COUNTED_AUDIO_SAMPLES = 10 * COUNTED_AUDIO_SAMPLE_RATE;
+  private static final int COUNTED_AUDIO_SEGMENT_COUNT = 20;
+  private static final int COUNTED_AUDIO_ADVERTISED_END_SAMPLES =
+      COUNTED_AUDIO_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
+  // The counted MPEG-TS and MPEG-PS sources' 11.5 s of video and 10 s of audio start 0.5 s apart
+  // and end by 12 s, in four segments of 3 s.
+  private static final int COUNTED_MPEG_SOURCE_SEGMENT_COUNT = 4;
+  private static final int COUNTED_MPEG_SOURCE_VIDEO_MILLIS = 11_500;
+  // 10 ms at 48 kHz.
+  private static final int MPEG_PS_STAMP_TOLERANCE_SAMPLES = 480;
+  // One tick of the 90 kHz clock of MPEG-TS and MPEG-PS timestamps, rounded up.
+  private static final Duration MPEG_TICK = Duration.ofNanos(11_112);
   private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
   // FFmpeg's FLAC encoder codes 4,608 samples a frame at 48 kHz, less than 0.1 s.
   private static final int FLAC_SAMPLES_PAST_THE_END_AT_MOST = 4_800;
@@ -321,6 +339,18 @@ class WorkerMediaSmokeTest {
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   // How long the server waits for an attempt's progress before it replaces the attempt's producer.
   private static final Duration SERVER_STALL_THRESHOLD = Duration.ofSeconds(10);
+  // The stall timeout of an engine that reads the source with video long after its audio through
+  // paced pipes: a sixth of the worker's own, so that the read after the audio's end outlasts it.
+  private static final Duration PACED_STALL_TIMEOUT = Duration.ofSeconds(5);
+  // How long FFmpeg may take to exit once the producer has asked it to terminate, after which the
+  // producer destroys it and reports the failure.
+  private static final Duration FFMPEG_GRACE_PERIOD = Duration.ofSeconds(5);
+  // The source with video long after its audio: 51 s of video in seventeen 3 s segments.
+  private static final int VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT = 17;
+  // About three times the byte rate of that source's video, which fills it after the audio's end.
+  private static final int THRICE_THE_VIDEOS_BYTE_RATE = 280_000;
+  // JobAttemptProgress.ffmpeg_bytes_read in the worker contract, which the pinned SDK predates.
+  private static final int FFMPEG_BYTES_READ_FIELD = 4;
   // About three times the 256 kb/s of the audio that makes up nearly all of a source's bytes.
   private static final int THRICE_THE_SOURCES_BYTE_RATE = 96 * 1024;
 
@@ -1324,6 +1354,11 @@ class WorkerMediaSmokeTest {
     "TRANSCODE_MODE_REMUX, 4, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_REMUX, 5, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_REMUX, 9, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, 0, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, 3, SUBTITLE_MODE_HLS",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, 5, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, 9, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_FULL_TRANSCODE, 0, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_FULL_TRANSCODE, 3, SUBTITLE_MODE_HLS",
     "TRANSCODE_MODE_FULL_TRANSCODE, 4, SUBTITLE_MODE_EXCLUDE",
@@ -5898,37 +5933,566 @@ class WorkerMediaSmokeTest {
         .isEqualTo(unwithheldUploads.contentOf(unwithheldUploads.names()));
   }
 
+  // FFmpeg counts an encoded audio stream as ended once its filter graph ends, before the encoder
+  // has written the frames queued for it, and then lets the copied video's input run on. The
+  // server pads every audio encode to the advertised end, which keeps the graph running beside the
+  // video. Without padding, thread scheduling decides whether the encoder's last frames arrive
+  // before the worker has delivered segment 1.
   @Test
   @DisplayName(
-      "Should upload every media segment without the audio encoder's last frames when an attempt"
-          + " that encodes its audio reads audio that ends long before the video")
-  void shouldUploadEveryMediaSegmentWithoutTheAudioEncodersLastFramesWhenTheAudioEndsLongBeforeIt()
-      throws Exception {
+      "Should complete only with every audio packet that FFmpeg wrote, and report a failed"
+          + " transcode otherwise, when an attempt that encodes its audio without padding reads"
+          + " audio that ends long before the video")
+  void
+      shouldCompleteOnlyWithEveryAudioPacketThatFfmpegWroteWhenUnpaddedAudioEndsLongBeforeTheVideo()
+          throws Exception {
     var source = audioEndsLongBeforeVideoSource();
     var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
-    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
-    job.getExecutionBuilder().setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
+    var unpadded = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    unpadded.getExecutionBuilder().setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
+    var job = unpadded.build();
 
-    var uploads =
-        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+    var ended = executeToItsEnd(engine(softwareCapabilities(), launcher), source.getParent(), job);
 
-    assertThat(uploads.names())
-        .containsExactlyElementsOf(uploadNames(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT));
     var ffmpegAudio =
         FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root).stream()
             .filter(Packet::isAudio)
             .toList();
-    var uploadedAudio =
-        FfprobePackets.of(uploads.contentOf(uploads.names()), root).stream()
+    assertThat(ffmpegAudio).isNotEmpty();
+    var expected = Optional.<JobAttemptFailure>empty();
+    if (!audioPacketsOf(ended.uploads()).equals(ffmpegAudio)) {
+      expected = Optional.of(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+    }
+
+    assertThat(ended.failure())
+        .as("the failure of an attempt whose uploads lack audio that FFmpeg wrote, and no other")
+        .isEqualTo(expected);
+  }
+
+  // The source's AAC ends at 10 s, inside segment 1, and its video at 90 s: FFmpeg writes the
+  // encoder's last frames and the padding only once the audio's input ends.
+  @Test
+  @DisplayName(
+      "Should upload every audio packet that FFmpeg wrote before the advertised end when a copy"
+          + " encodes and pads AAC audio that ends 80 s before the video of an MP4 source")
+  void
+      shouldUploadEveryAudioPacketBeforeTheAdvertisedEndWhenACopyPadsAacThatEndsLongBeforeTheVideo()
+          throws Exception {
+    var source = audioEndsLongBeforeVideoSource();
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var job =
+        audioEndsLongBeforeVideoPaddedJob(
+                source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE, "aac")
+            .build();
+
+    var uploads = execute(engine(softwareCapabilities(), launcher), source.getParent(), job);
+
+    var advertisedEndTicks = AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT * 6L * 48_000;
+    var ffmpegAudio =
+        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root).stream()
             .filter(Packet::isAudio)
+            .filter(packet -> packet.pts() < advertisedEndTicks)
             .toList();
-    // The copied video runs ahead of the audio still inside FFmpeg's decoder, filter and encoder,
-    // and the muxer stops holding the video for it 10 s after the audio's last packet. The frames
-    // that come out later, as many as thread scheduling leaves behind, arrive after their segment
-    // was delivered, and the worker drops them: only the end of FFmpeg's audio can be missing.
-    assertThat(uploadedAudio)
+    assertThat(audioPacketsOf(uploads))
+        .as("FFmpeg's audio packets that start before the advertised end at 90 s")
         .isNotEmpty()
-        .containsExactlyElementsOf(ffmpegAudio.subList(0, uploadedAudio.size()));
+        .containsExactlyElementsOf(ffmpegAudio);
+  }
+
+  // FFmpeg releases the last packets inside a frame-threaded audio decoder, the encoder's last
+  // frame and the padding only once the audio's input ends, and it holds an input back only while
+  // every output stream that the input feeds runs ahead of the one that trails. Read from the
+  // video's input, a copy's audio came out after the video had run on to the source's end, 50 s
+  // later, when the worker had delivered the segments it belongs to. The encode that holds its
+  // last frame keeps its video beside its audio in one filter graph.
+  // A replacement attempt for segment 2 seeks both inputs alike, 3 s into the source, one segment
+  // before its first: a Matroska source by decode time, and an MP4 source by presentation time.
+  @ParameterizedTest(name = "{0} of the {1} source from segment {2}")
+  @CsvSource({
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mkv, 0",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mkv, 2",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, mp4, 2",
+    "TRANSCODE_MODE_FULL_TRANSCODE, mkv, 0"
+  })
+  @DisplayName(
+      "Should deliver every source audio sample once, at its own time, and silence after it when"
+          + " the video outlasts by 50 s the audio that an attempt encodes and pads")
+  void shouldDeliverEverySourceAudioSampleOnceAtItsOwnTimeWhenTheVideoOutlastsTheEncodedAudio(
+      TranscodeMode mode, String container, int startSequenceNumber) throws Exception {
+    var source = countedAudioEndsLongBeforeVideoSource(container);
+    var job = countedAudioJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var firstSample = startSequenceNumber * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
+    var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+    assertThat(delivered.sourceSamples(firstSample, COUNTED_AUDIO_SAMPLES))
+        .as("the source's samples from the first segment's start to the audio's end at 10 s")
+        .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES - firstSample, 0, 0));
+    assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+    assertThat(delivered.silentSamples(COUNTED_AUDIO_SAMPLES, COUNTED_AUDIO_ADVERTISED_END_SAMPLES))
+        .as("the samples from the audio's end at 10 s to the advertised end at 60 s")
+        .isEqualTo(
+            new SilentSamples(COUNTED_AUDIO_ADVERTISED_END_SAMPLES - COUNTED_AUDIO_SAMPLES, 0, 0));
+  }
+
+  // A job that encodes the counted source's mono audio to FLAC, which keeps every sample's value,
+  // and pads it to the advertised end of its 3 s segments, holding the last frame too when it
+  // encodes the video. It names the source's audio stream and the output's layout, as the server
+  // does for every audio encode, which maps that stream alone and encodes 2,400 samples a frame.
+  private static VariantJob.Builder countedAudioJob(Path source, TranscodeMode mode) {
+    var job = seekableSourceJob(source, mode);
+    paddedToSlots(job, COUNTED_AUDIO_SEGMENT_COUNT);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(1)
+        .setStreamIndex(1)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO);
+    if (mode == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE) {
+      job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    }
+
+    return job;
+  }
+
+  // Pads the job's audio to the advertised end of this many 3 s segments.
+  private static void paddedToSlots(VariantJob.Builder job, int segmentCount) {
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(segmentCount);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds((long) segmentCount * SLOT_SECONDS);
+    job.getDecisionBuilder().getAudioBuilder().setPadWithSilenceToAdvertisedEnd(true);
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 60 s, and 10 s of 24-bit mono FLAC at
+  // 48 kHz whose sample n holds n + 1: each decoded sample names the source sample it came from,
+  // and digital silence is 0. The video outlasts the audio by 50 s, several times the 10 s for
+  // which FFmpeg's muxer holds a stream's packets for another's. The MP4 source carries the
+  // Matroska source's streams unchanged.
+  private static synchronized Path countedAudioEndsLongBeforeVideoSource(String container)
+      throws Exception {
+    var matroska = seekableSources.resolve("counted-audio-ends-long-before-video.mkv");
+    if (!generatedSeekableSources.contains(matroska)) {
+      var arguments =
+          Stream.of(
+                  List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=60"),
+                  countedAudioInput(),
+                  List.of("-c:v", "libx264", "-g", "48", "-c:a", "flac", "-sample_fmt", "s32"))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, matroska);
+      generatedSeekableSources.add(matroska);
+    }
+
+    var source = seekableSources.resolve("counted-audio-ends-long-before-video." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // FFmpeg starts the timeline of an MPEG-TS or MPEG-PS input at the earliest start among the
+  // streams that the input's outputs use. The one input used the video and the audio. The audio's
+  // input uses both as well, its video through the null output, and the video's input, which uses
+  // the video alone, takes its timeline from the audio's input. Had the audio's input taken the
+  // timeline of the video's, audio that starts first would lose its first 0.5 s, and every stream
+  // would lie 0.5 s early. Without the null output, the same would happen to video that starts
+  // first.
+  @ParameterizedTest(name = "{0} starts first")
+  @EnumSource(FirstStream.class)
+  @DisplayName(
+      "Should deliver every source audio sample once, and both streams at their own times, when a"
+          + " copy encodes the audio of an MPEG-TS source whose streams start 0.5 s apart")
+  void
+      shouldDeliverBothStreamsAtTheirOwnTimesWhenACopyEncodesAudioOfAnMpegTsSourceWhoseStreamsStartApart(
+          FirstStream firstStream) throws Exception {
+    var source = countedMpegSource(MpegContainer.MPEG_TS, firstStream);
+    var job = countedMpegSourceJob(source);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var uploads = completion.uploads();
+    var delivered =
+        DeliveredAudio.of(playable(uploads.contentOf(uploads.names())))
+            .startingAt(firstStream.audioStartSample());
+    assertThat(delivered.sourceSamples(0, COUNTED_AUDIO_SAMPLES))
+        .as("the source's samples, counted from the audio's start")
+        .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES, 0, 0));
+    assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+    assertThat(firstVideoSampleOf(uploads, 0))
+        .as("the video's first keyframe")
+        .isEqualTo(new BigFraction(firstStream.videoStartMillis, 1_000));
+    assertThat(streamEnd(completion, job.getDecision().getVideo().getStreamIndex()))
+        .as("the end of the video's 11.5 s")
+        .isEqualTo(
+            Duration.ofMillis(firstStream.videoStartMillis + COUNTED_MPEG_SOURCE_VIDEO_MILLIS));
+    assertThat(streamEnd(completion, job.getDecision().getAudio().getStreamIndex()))
+        .as("the end of the audio's 10 s, which Blu-ray PCM rounds up to a whole 5 ms frame")
+        .isBetween(
+            Duration.ofMillis(firstStream.audioStartMillis + 10_000L),
+            Duration.ofMillis(firstStream.audioStartMillis + 10_005L));
+  }
+
+  // The replacement attempt for segment 2 seeks both inputs 3 s into the source, one segment
+  // before its first, and must count both from the same zero as the start attempt. Its first FLAC
+  // frame starts less than one frame of 2,400 samples after segment 2's start.
+  @ParameterizedTest(name = "{0} starts first")
+  @EnumSource(FirstStream.class)
+  @DisplayName(
+      "Should deliver both streams at their own times, with every source audio sample from its"
+          + " first frame on, when a replacement attempt for segment 2 seeks into an MPEG-TS source"
+          + " whose streams start 0.5 s apart, copies it and encodes its audio")
+  void
+      shouldDeliverBothStreamsAtTheirOwnTimesWhenAReplacementSeeksIntoAnMpegTsSourceWhoseStreamsStartApart(
+          FirstStream firstStream) throws Exception {
+    var source = countedMpegSource(MpegContainer.MPEG_TS, firstStream);
+    var job = countedMpegSourceJob(source);
+    job.getExecutionBuilder().setStartSequenceNumber(2);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names()).containsExactly("init.mp4", "segment2.m4s", "segment3.m4s");
+    var delivered =
+        DeliveredAudio.of(playable(uploads.contentOf(uploads.names())))
+            .startingAt(firstStream.audioStartSample());
+    var segmentStart = firstStream.segmentTwosStartSample();
+    var firstSample = delivered.firstTime();
+    assertThat(firstSample)
+        .as("the first delivered sample, less than one FLAC frame after segment 2's start")
+        .isBetween(segmentStart, segmentStart + 2_399);
+    assertThat(delivered.sourceSamples(firstSample, COUNTED_AUDIO_SAMPLES))
+        .as("the source's samples from the first delivered one to the audio's end")
+        .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES - firstSample, 0, 0));
+    assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+    assertThat(firstVideoSampleOf(uploads, 2))
+        .as("the first keyframe at or after 6 s, of one every 2 s from the video's start")
+        .isEqualTo(new BigFraction(6_000L + firstStream.videoStartMillis, 1_000));
+  }
+
+  // An MPEG-PS source starts its timeline as an MPEG-TS source does (see the tests above). Its
+  // DVD PCM keeps every sample's value, but FFmpeg's MPEG-PS demuxer gives this source's packets
+  // times up to 6 ms from their first samples' own times, and an encode keeps those times. The
+  // source's samples are therefore counted in the order they play, and each must play within 10 ms
+  // of its own time, far less than the 0.5 s between the streams' starts by which a wrong timeline
+  // would move them.
+  @ParameterizedTest(name = "{0} starts first")
+  @EnumSource(FirstStream.class)
+  @DisplayName(
+      "Should play every source audio sample once, in order and near its own time, and the video"
+          + " at its own time, when a copy encodes the audio of an MPEG-PS source whose streams"
+          + " start 0.5 s apart")
+  void
+      shouldPlayEverySourceAudioSampleInOrderAndTheVideoAtItsTimeWhenACopyEncodesAudioOfAnMpegPsSourceWhoseStreamsStartApart(
+          FirstStream firstStream) throws Exception {
+    var source = countedMpegSource(MpegContainer.MPEG_PS, firstStream);
+    var job = countedMpegSourceJob(source);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var uploads = completion.uploads();
+    var delivered =
+        DeliveredAudio.of(playable(uploads.contentOf(uploads.names())))
+            .startingAt(firstStream.audioStartSample());
+    assertThat(delivered.sourceSamplesInPlayOrder(0, COUNTED_AUDIO_SAMPLES))
+        .as("the source's samples in the order the delivered audio plays them")
+        .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES, 0, 0));
+    assertThat(delivered.soundingSampleCount())
+        .as("the delivered samples that are not digital silence")
+        .isEqualTo(COUNTED_AUDIO_SAMPLES);
+    assertThat(delivered.largestDistanceFromSourceTime())
+        .as("the largest distance, in samples, between a sample's time and its source time")
+        .isLessThan(MPEG_PS_STAMP_TOLERANCE_SAMPLES);
+    assertThat(firstVideoSampleOf(uploads, 0))
+        .as("the video's first keyframe")
+        .isEqualTo(new BigFraction(firstStream.videoStartMillis, 1_000));
+    var videoEnd =
+        Duration.ofMillis(firstStream.videoStartMillis + COUNTED_MPEG_SOURCE_VIDEO_MILLIS);
+    assertThat(streamEnd(completion, job.getDecision().getVideo().getStreamIndex()))
+        .as("the end of the video's 11.5 s, whose last picture the muxer stamped up to a tick late")
+        .isBetween(videoEnd, videoEnd.plus(MPEG_TICK));
+    assertThat(streamEnd(completion, job.getDecision().getAudio().getStreamIndex()))
+        .as("the end of the audio's 10 s, as the source's stamps place it")
+        .isBetween(
+            Duration.ofMillis(firstStream.audioStartMillis + 10_000L),
+            Duration.ofMillis(firstStream.audioStartMillis + 10_010L));
+  }
+
+  // The end that the attempt's completion reports for the source stream with this index.
+  private static Duration streamEnd(CompletedExecution completion, int streamIndex) {
+    var ends =
+        completion.report().getStreamEndsList().stream()
+            .filter(end -> end.getStreamIndex() == streamIndex)
+            .map(
+                end ->
+                    Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+            .toList();
+    assertThat(ends).as("the ends reported for source stream %d", streamIndex).hasSize(1);
+    return ends.getFirst();
+  }
+
+  // The copy of a counted MPEG source that encodes its audio to FLAC and pads it to 12 s, in four
+  // segments of 3 s. It names each stream by the index that a probe of the source reads, as the
+  // server does: an MPEG-PS demuxer numbers the streams in the order of their first packets.
+  private static VariantJob.Builder countedMpegSourceJob(Path source) throws Exception {
+    var job = countedAudioJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    paddedToSlots(job, COUNTED_MPEG_SOURCE_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setStreamIndex(firstStreamIndexOf(source, "v"));
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(firstStreamIndexOf(source, "a"));
+    return job;
+  }
+
+  // The index of the source's first stream of the type that an ffprobe stream specifier names.
+  // ffprobe lists an MPEG-TS source's streams once in its program and once more on their own.
+  private static int firstStreamIndexOf(Path source, String streamType) throws Exception {
+    var streams =
+        ffprobe(
+            List.of("-select_streams", streamType + ":0", "-show_entries", "stream=index"), source);
+    return Integer.parseInt(streams.lines().findFirst().orElseThrow());
+  }
+
+  // Where each stream of a counted MPEG source starts, in milliseconds on the timeline whose zero
+  // is the earlier start.
+  private enum FirstStream {
+    AUDIO(0, 500),
+    VIDEO(500, 0);
+
+    private final int audioStartMillis;
+    private final int videoStartMillis;
+
+    FirstStream(int audioStartMillis, int videoStartMillis) {
+      this.audioStartMillis = audioStartMillis;
+      this.videoStartMillis = videoStartMillis;
+    }
+
+    int audioStartSample() {
+      return audioStartMillis * COUNTED_AUDIO_SAMPLE_RATE / 1_000;
+    }
+
+    // Segment 2's start at 6 s, in samples from the audio's start.
+    int segmentTwosStartSample() {
+      return 2 * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE - audioStartSample();
+    }
+  }
+
+  // The containers whose timestamps may jump, each with the 24-bit PCM codec that it carries and
+  // keeps every sample's value in: Blu-ray PCM in MPEG-TS in its Blu-ray mode, and DVD PCM in an
+  // MPEG-PS source of the DVD kind.
+  private enum MpegContainer {
+    MPEG_TS("m2ts", List.of("-c:a", "pcm_bluray", "-f", "mpegts", "-mpegts_m2ts_mode", "1")),
+    MPEG_PS("vob", List.of("-c:a", "pcm_dvd", "-f", "vob"));
+
+    private final String extension;
+    private final List<String> audioCodecAndFormat;
+
+    MpegContainer(String extension, List<String> audioCodecAndFormat) {
+      this.extension = extension;
+      this.audioCodecAndFormat = audioCodecAndFormat;
+    }
+  }
+
+  // 11.5 s of H.264 at 64x36 and 24 fps with a keyframe every 2 s and no B-frames, beside the
+  // counted audio as 24-bit mono PCM. The stream that does not start first starts 0.5 s after the
+  // other, delayed in a stream copy, whose packets -itsoffset moves.
+  private static synchronized Path countedMpegSource(
+      MpegContainer container, FirstStream firstStream) throws Exception {
+    var startingTogether = seekableSources.resolve("counted-audio-starts-with-video.m2ts");
+    if (!generatedSeekableSources.contains(startingTogether)) {
+      var arguments =
+          Stream.of(
+                  List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24:duration=11.5"),
+                  countedAudioInput(),
+                  List.of("-c:v", "libx264", "-g", "48", "-bf", "0"),
+                  MpegContainer.MPEG_TS.audioCodecAndFormat)
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, startingTogether);
+      generatedSeekableSources.add(startingTogether);
+    }
+
+    var source =
+        seekableSources.resolve(
+            "counted-audio-and-"
+                + firstStream.name().toLowerCase(Locale.ROOT)
+                + "-first."
+                + container.extension);
+    if (!generatedSeekableSources.contains(source)) {
+      var onTime = List.of("-i", startingTogether.toString());
+      var delayed = List.of("-itsoffset", "0.5", "-i", startingTogether.toString());
+      var videoThenAudio =
+          switch (firstStream) {
+            case AUDIO -> Stream.of(delayed, onTime);
+            case VIDEO -> Stream.of(onTime, delayed);
+          };
+      var arguments =
+          Stream.concat(
+                  videoThenAudio,
+                  Stream.of(
+                      List.of("-map", "0:v", "-map", "1:a", "-c:v", "copy"),
+                      container.audioCodecAndFormat))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The input that reads the counted samples: 10 s of signed 32-bit little-endian mono PCM at
+  // 48 kHz whose sample n holds n + 1 in its upper 24 bits.
+  private static synchronized List<String> countedAudioInput() throws Exception {
+    var samples = seekableSources.resolve("counted-audio.s32le");
+    if (!generatedSeekableSources.contains(samples)) {
+      var counted =
+          ByteBuffer.allocate(COUNTED_AUDIO_SAMPLES * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+      IntStream.rangeClosed(1, COUNTED_AUDIO_SAMPLES).forEach(count -> counted.putInt(count << 8));
+      Files.write(samples, counted.array());
+      generatedSeekableSources.add(samples);
+    }
+
+    return List.of(
+        "-f",
+        "s32le",
+        "-ar",
+        String.valueOf(COUNTED_AUDIO_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-i",
+        samples.toString());
+  }
+
+  /**
+   * How many of the counted source's samples in a range the delivered audio holds unchanged at
+   * their own times, lacks, and holds with another value.
+   */
+  private record SourceSamples(long unchanged, long absent, long changed) {}
+
+  /** How many samples of a range the delivered audio holds as digital silence, lacks, or not. */
+  private record SilentSamples(long silent, long absent, long notSilent) {}
+
+  /**
+   * The delivered audio's decoded samples by the time each one plays at, in samples: each decoded
+   * frame's samples follow its own presentation time, so a frame that is absent leaves its times
+   * without a sample instead of moving the samples after it. It keeps the decoded samples in the
+   * order they play as well.
+   */
+  private record DeliveredAudio(int[] byTime, BitSet delivered, long deliveredTwice, int[] played) {
+
+    static DeliveredAudio of(Path media) throws Exception {
+      var decoded = media.resolveSibling(media.getFileName() + ".s32le");
+      runFfmpeg(List.of("-i", media.toString(), "-map", "0:a:0", "-f", "s32le"), decoded);
+      var samples =
+          ByteBuffer.wrap(Files.readAllBytes(decoded)).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+      var frames =
+          ffprobe(List.of("-select_streams", "a:0", "-show_entries", "frame=pts,nb_samples"), media)
+              .lines()
+              .map(DecodedFrame::parse)
+              .toList();
+      var played = new int[samples.remaining()];
+      samples.get(played);
+      var byTime = new int[frames.stream().mapToInt(DecodedFrame::end).max().orElse(0)];
+      var delivered = new BitSet();
+      var deliveredTwice = 0L;
+      var times = frames.stream().flatMapToInt(DecodedFrame::times).toArray();
+      assertThat(times).as("the sample times of the decoded frames").hasSameSizeAs(played);
+      for (var index = 0; index < times.length; index++) {
+        var time = times[index];
+        deliveredTwice += delivered.get(time) ? 1 : 0;
+        delivered.set(time);
+        byTime[time] = played[index];
+      }
+
+      return new DeliveredAudio(byTime, delivered, deliveredTwice, played);
+    }
+
+    // The delivered audio on a timeline whose zero is this time, where the source's audio starts.
+    DeliveredAudio startingAt(int time) {
+      return new DeliveredAudio(
+          Arrays.copyOfRange(byTime, time, byTime.length),
+          delivered.get(time, Math.max(time, delivered.length())),
+          deliveredTwice,
+          played);
+    }
+
+    // The time of the first delivered sample.
+    int firstTime() {
+      return delivered.nextSetBit(0);
+    }
+
+    // The counted source's sample at index n holds n + 1 in the upper 24 bits.
+    SourceSamples sourceSamples(int from, int until) {
+      var absent = IntStream.range(from, until).filter(time -> !delivered.get(time)).count();
+      var unchanged =
+          IntStream.range(from, until)
+              .filter(time -> delivered.get(time) && byTime[time] == (time + 1) << 8)
+              .count();
+      return new SourceSamples(unchanged, absent, until - from - absent - unchanged);
+    }
+
+    SilentSamples silentSamples(int from, int until) {
+      var absent = IntStream.range(from, until).filter(time -> !delivered.get(time)).count();
+      var silent =
+          IntStream.range(from, until)
+              .filter(time -> delivered.get(time) && byTime[time] == 0)
+              .count();
+      return new SilentSamples(silent, absent, until - from - absent - silent);
+    }
+
+    // How many of the counted source's samples in a range follow one another unchanged in the
+    // order the delivered audio plays its samples that are not digital silence, are absent from
+    // that order, or hold another value.
+    SourceSamples sourceSamplesInPlayOrder(int from, int until) {
+      var sounding = sounding().toArray();
+      var compared = Math.min(sounding.length, until - from);
+      var unchanged =
+          IntStream.range(0, compared)
+              .filter(index -> sounding[index] == (from + index + 1) << 8)
+              .count();
+      return new SourceSamples(unchanged, until - from - compared, compared - unchanged);
+    }
+
+    long soundingSampleCount() {
+      return sounding().count();
+    }
+
+    // The largest distance, in samples, between the time of a delivered sample that is not digital
+    // silence and the time of the source sample that it holds.
+    int largestDistanceFromSourceTime() {
+      return delivered.stream()
+          .filter(time -> byTime[time] != 0)
+          .map(time -> Math.abs((byTime[time] >> 8) - 1 - time))
+          .max()
+          .orElse(0);
+    }
+
+    private IntStream sounding() {
+      return Arrays.stream(played).filter(sample -> sample != 0);
+    }
+  }
+
+  // A decoded audio frame: the time its first sample plays at, in samples, and how many it holds.
+  private record DecodedFrame(int start, int sampleCount) {
+
+    static DecodedFrame parse(String ptsAndSampleCount) {
+      var fields = ptsAndSampleCount.split(",");
+      return new DecodedFrame(Integer.parseInt(fields[0]), Integer.parseInt(fields[1]));
+    }
+
+    int end() {
+      return start + sampleCount;
+    }
+
+    IntStream times() {
+      return IntStream.range(start, end());
+    }
   }
 
   @Test
@@ -6005,6 +6569,8 @@ class WorkerMediaSmokeTest {
   @CsvSource({
     "TRANSCODE_MODE_REMUX, 0",
     "TRANSCODE_MODE_REMUX, 11",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, 0",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, 11",
     "TRANSCODE_MODE_FULL_TRANSCODE, 0",
     "TRANSCODE_MODE_FULL_TRANSCODE, 11"
   })
@@ -6310,9 +6876,8 @@ class WorkerMediaSmokeTest {
         .addAllSegmentStartTicks(List.of(0L, 6L))
         .setSegmentStartTimeBase(WHOLE_SECONDS);
 
-    try (var pipe =
-        new PacedSourcePipe(root.resolve("source-pipe"), THRICE_THE_SOURCES_BYTE_RATE)) {
-      var engine = engine(softwareCapabilities(), pipe.feeding(new ProcessBuilderLauncher()));
+    try (var pipes = new PacedSourcePipes(root, THRICE_THE_SOURCES_BYTE_RATE)) {
+      var engine = engine(softwareCapabilities(), pipes.feeding(new ProcessBuilderLauncher()));
 
       var completion = executeToCompletion(engine, source.getParent(), job.build());
 
@@ -6367,34 +6932,187 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // A copy and an encode that holds its last frame read their encoded audio from an input of its
+  // own. FFmpeg holds the video's input back while the audio trails, and once the audio's packets
+  // stop it writes nothing until the audio's input has read on to the source's end. Both inputs
+  // read through pipes at about three times real time, so reading the 41 s of video after the
+  // audio's end takes about 13 s: longer than the engine's stall timeout of 5 s and than the
+  // server's stall threshold. An FFmpeg that reads is not stalled: the worker counts the bytes that
+  // FFmpeg reads as the attempt's progress, and reports them, while FFmpeg writes nothing.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_AUDIO_TRANSCODE", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should deliver every source audio sample and report progress throughout when an attempt"
+          + " that reads its encoded audio from an input of its own reads a paced source's video"
+          + " for longer than the stall timeout after the audio's end")
+  void shouldDeliverEverySourceAudioSampleAndReportProgressWhenTheAudiosInputReadsOnLongAfterItsEnd(
+      TranscodeMode mode) throws Exception {
+    var source = countedAudioEndsLongBeforeNoisyVideoSource();
+    var job = countedAudioJob(source, mode);
+    paddedToSlots(job, VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT);
+    var advertisedEndSamples =
+        VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT * SLOT_SECONDS * COUNTED_AUDIO_SAMPLE_RATE;
+
+    try (var pipes = new PacedSourcePipes(root, THRICE_THE_VIDEOS_BYTE_RATE)) {
+      var engine =
+          engine(
+              softwareCapabilities(),
+              pipes.feeding(new ProcessBuilderLauncher()),
+              PACED_STALL_TIMEOUT);
+
+      var completion = executeToCompletion(engine, source.getParent(), job.build());
+
+      var uploads = completion.uploads();
+      assertThat(uploads.names())
+          .containsExactlyElementsOf(uploadNames(VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT));
+      var delivered = DeliveredAudio.of(playable(uploads.contentOf(uploads.names())));
+      assertThat(delivered.sourceSamples(0, COUNTED_AUDIO_SAMPLES))
+          .as("the source's samples up to the audio's end at 10 s")
+          .isEqualTo(new SourceSamples(COUNTED_AUDIO_SAMPLES, 0, 0));
+      assertThat(delivered.deliveredTwice()).as("times that two delivered samples share").isZero();
+      assertThat(delivered.silentSamples(COUNTED_AUDIO_SAMPLES, advertisedEndSamples))
+          .as("the samples from the audio's end at 10 s to the advertised end at 51 s")
+          .isEqualTo(new SilentSamples(advertisedEndSamples - COUNTED_AUDIO_SAMPLES, 0, 0));
+      assertThat(completion.longestTimeWithoutOutput())
+          .as("the longest time in which the attempt's output did not advance")
+          .isGreaterThan(PACED_STALL_TIMEOUT);
+      assertThat(completion.longestSilence())
+          .as("the longest time without a progress report before the attempt completed")
+          .isLessThan(SERVER_STALL_THRESHOLD);
+      assertThat(completion.progress().stream().flatMapToLong(TimedProgress::ffmpegBytesRead))
+          .as("the bytes read that the reports carry, each only once it has grown")
+          .isNotEmpty()
+          .doesNotHaveDuplicates()
+          .isSorted();
+    }
+  }
+
+  // The pipes stop 7 s into the read after the audio's end and stay open, as a mount that hangs
+  // does, so FFmpeg waits in a read of the audio's input. By then the read has outlasted the stall
+  // timeout as progress. From then on nothing counts as progress: the reports stop, and the
+  // producer fails the attempt once FFmpeg has read nothing for the stall timeout, as it does for
+  // an FFmpeg that writes nothing. FFmpeg ignores the request to terminate while it waits in the
+  // read, so the producer destroys it after the grace period and then reports the failure.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_AUDIO_TRANSCODE", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should fail the attempt within the stall timeout of the source's last byte when the source"
+          + " stops serving an attempt whose audio's input reads on after the audio's end")
+  void shouldFailTheAttemptWithinTheStallTimeoutWhenTheSourceStopsServingTheAudiosInputReadingOn(
+      TranscodeMode mode) throws Exception {
+    var source = countedAudioEndsLongBeforeNoisyVideoSource();
+    var job = countedAudioJob(source, mode);
+    paddedToSlots(job, VIDEO_LONG_AFTER_AUDIO_SEGMENT_COUNT);
+    var servedBytes = lastAudioPacketOffset(source) + 7L * THRICE_THE_VIDEOS_BYTE_RATE;
+
+    try (var pipes = new PacedSourcePipes(root, THRICE_THE_VIDEOS_BYTE_RATE, servedBytes)) {
+      var engine =
+          engine(
+              softwareCapabilities(),
+              pipes.feeding(new ProcessBuilderLauncher()),
+              PACED_STALL_TIMEOUT);
+
+      var failed = executeProbedJobExpectingFailure(engine, source.getParent(), job.build());
+
+      assertThat(failed.failure().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      var stoppedAt = pipes.firstStoppedAtNanos();
+      assertThat(stoppedAt).as("when a pipe served its last byte").isPresent();
+      assertThat(failed.timeWithoutOutputBefore(stoppedAt.getAsLong()))
+          .as("how long the attempt's output had not advanced when the source stopped")
+          .isGreaterThan(PACED_STALL_TIMEOUT);
+      assertThat(failed.lastProgressAfter(stoppedAt.getAsLong()))
+          .as("the last progress report, counted from the source's last byte")
+          .isLessThan(Duration.ofSeconds(3));
+      assertThat(Duration.ofNanos(failed.failedAtNanos() - stoppedAt.getAsLong()))
+          .as("the failure report, counted from the source's last byte")
+          .isBetween(
+              PACED_STALL_TIMEOUT.minusSeconds(1),
+              PACED_STALL_TIMEOUT.plus(FFMPEG_GRACE_PERIOD).plusSeconds(3));
+    }
+  }
+
+  private static long lastAudioPacketOffset(Path source) throws Exception {
+    return ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=pos"), source)
+        .lines()
+        .mapToLong(Long::parseLong)
+        .max()
+        .orElseThrow();
+  }
+
+  // 51 s of noise in H.264 at 64x36 and 24 fps with a keyframe every 2 s, at about 90 kB a second,
+  // beside the counted source's 10 s of 24-bit mono FLAC. The video stays High 4:4:4 Predictive at
+  // level 1.0, as the other seekable sources' is. After the audio's last packet, about 1.1 MB into
+  // the file, 41 s of video alone follow in about 3.7 MB.
+  private static synchronized Path countedAudioEndsLongBeforeNoisyVideoSource() throws Exception {
+    var source = seekableSources.resolve("counted-audio-ends-long-before-noisy-video.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          Stream.of(
+                  List.of(
+                      "-f",
+                      "lavfi",
+                      "-i",
+                      "testsrc=size=64x36:rate=24:duration=51,noise=alls=100:allf=t+u,"
+                          + "format=yuv444p"),
+                  countedAudioInput(),
+                  List.of("-c:v", "libx264", "-g", "48", "-crf", "10"),
+                  List.of("-c:a", "flac", "-sample_fmt", "s32"))
+              .flatMap(List::stream)
+              .toList();
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   /**
-   * Feeds FFmpeg its source through a named pipe, in place of the path that its command reads, at a
-   * steady number of bytes a second, as a slow mount would serve it.
+   * Feeds FFmpeg each of its inputs through a named pipe of its own, in place of the path that its
+   * command reads, at a steady number of bytes a second, as a slow mount would serve it.
    */
-  private static final class PacedSourcePipe implements AutoCloseable {
+  private static final class PacedSourcePipes implements AutoCloseable {
 
     private static final int WRITES_PER_SECOND = 20;
 
-    private final Path pipe;
+    private final Path directory;
     private final int bytesPerWrite;
-    private final ScheduledExecutorService writer =
-        Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
-    private volatile FileChannel output;
+    private final long servedBytes;
+    private final List<PacedPipe> pipes = new CopyOnWriteArrayList<>();
 
-    private PacedSourcePipe(Path pipe, int bytesPerSecond) throws Exception {
-      var mkfifo = new ProcessBuilder("mkfifo", pipe.toString()).start();
-      assertThat(mkfifo.waitFor()).isZero();
-      this.pipe = pipe;
+    private PacedSourcePipes(Path directory, int bytesPerSecond) {
+      this(directory, bytesPerSecond, Long.MAX_VALUE);
+    }
+
+    // Each pipe serves this many bytes of the source and then stays open without another byte.
+    private PacedSourcePipes(Path directory, int bytesPerSecond, long servedBytes) {
+      this.directory = directory;
       this.bytesPerWrite = bytesPerSecond / WRITES_PER_SECOND;
+      this.servedBytes = servedBytes;
+    }
+
+    // When the first pipe that served its last byte did so, on System.nanoTime.
+    private OptionalLong firstStoppedAtNanos() {
+      return pipes.stream().flatMapToLong(pipe -> pipe.stoppedAtNanos().stream()).min();
     }
 
     private ProcessLauncher feeding(ProcessLauncher launcher) {
       return (command, jobAttemptId) -> {
-        var input = command.indexOf("-i") + 1;
-        assertThat(input).as("the command reads an input").isPositive();
-        startWriting(readSource(Path.of(command.get(input))));
+        var inputs =
+            IntStream.range(1, command.size())
+                .filter(argument -> command.get(argument - 1).equals("-i"))
+                .boxed()
+                .toList();
+        assertThat(inputs).as("the command reads an input").isNotEmpty();
         var adjusted = new ArrayList<>(command);
-        adjusted.set(input, pipe.toString());
+        for (var input : inputs) {
+          adjusted.set(input, pipeFeeding(readSource(Path.of(command.get(input)))).toString());
+        }
+
         return launcher.launch(adjusted, jobAttemptId);
       };
     }
@@ -6407,21 +7125,59 @@ class WorkerMediaSmokeTest {
       }
     }
 
-    // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
-    // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
-    private void startWriting(byte[] source) {
+    private Path pipeFeeding(byte[] source) {
       try {
-        output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
+        var path = directory.resolve("source-pipe-" + pipes.size());
+        var mkfifo = new ProcessBuilder("mkfifo", path.toString()).start();
+        assertThat(mkfifo.waitFor()).isZero();
+        var served = Arrays.copyOf(source, (int) Math.min(source.length, servedBytes));
+        pipes.add(new PacedPipe(path, served, bytesPerWrite, served.length == source.length));
+        return path;
       } catch (IOException e) {
         throw new UncheckedIOException(e);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(e);
       }
-
-      var written = new AtomicInteger();
-      writer.scheduleAtFixedRate(
-          () -> writeNext(source, written), 0, 1_000 / WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
     }
 
-    private void writeNext(byte[] source, AtomicInteger written) {
+    @Override
+    public void close() throws Exception {
+      for (var pipe : pipes) {
+        pipe.close();
+      }
+    }
+  }
+
+  /**
+   * Writes a source into one named pipe at a steady pace, on a thread of its own, so that an input
+   * which FFmpeg holds back delays no other input's bytes.
+   */
+  private static final class PacedPipe implements AutoCloseable {
+
+    private final byte[] source;
+    private final int bytesPerWrite;
+    private final boolean endsTheSource;
+    private final ScheduledExecutorService writer =
+        Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
+    private final FileChannel output;
+    private final AtomicInteger written = new AtomicInteger();
+    private final AtomicLong stoppedAtNanos = new AtomicLong();
+
+    // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
+    // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
+    // A pipe that does not end the source stays open after its last byte, so its reader waits.
+    private PacedPipe(Path pipe, byte[] source, int bytesPerWrite, boolean endsTheSource)
+        throws IOException {
+      this.source = source;
+      this.bytesPerWrite = bytesPerWrite;
+      this.endsTheSource = endsTheSource;
+      this.output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
+      writer.scheduleAtFixedRate(
+          this::writeNext, 0, 1_000 / PacedSourcePipes.WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
+    }
+
+    private void writeNext() {
       try {
         var length = Math.min(bytesPerWrite, source.length - written.get());
         var block = ByteBuffer.wrap(source, written.getAndAdd(length), length);
@@ -6429,22 +7185,33 @@ class WorkerMediaSmokeTest {
           output.write(block);
         }
 
-        if (written.get() == source.length) {
+        if (written.get() < source.length) {
+          return;
+        }
+
+        stoppedAtNanos.set(System.nanoTime());
+        writer.shutdown();
+        if (endsTheSource) {
           output.close();
-          writer.shutdown();
         }
       } catch (IOException e) {
         throw new UncheckedIOException(e);
       }
     }
 
+    private OptionalLong stoppedAtNanos() {
+      var stoppedAt = stoppedAtNanos.get();
+      if (stoppedAt == 0) {
+        return OptionalLong.empty();
+      }
+
+      return OptionalLong.of(stoppedAt);
+    }
+
     @Override
     public void close() throws Exception {
       writer.shutdownNow();
-      if (output != null) {
-        output.close();
-      }
-
+      output.close();
       assertThat(writer.awaitTermination(5, TimeUnit.SECONDS)).as("the writer stopped").isTrue();
     }
   }
@@ -8190,6 +8957,33 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  // The source's AAC priming starts 21 ms before its video. On a timeline that started at the
+  // video instead, every keyframe lay 21 ms before its listed start, so the producer kept it in
+  // the segment before and opened each segment one keyframe, 3.37 s, late.
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 2})
+  @DisplayName(
+      "Should open every copied segment after the first at its listed keyframe when a copy that"
+          + " encodes the audio of an MPEG-TS source whose audio starts before its video carries"
+          + " exact starts")
+  void
+      shouldOpenEveryCopiedSegmentAtItsListedKeyframeWhenAnMpegTsCopyEncodingAudioCarriesExactStarts(
+          int startSequenceNumber) throws Exception {
+    var source = exactStartMpegTsSourceWithAudio();
+    var starts = exactStarts(source);
+    var job = copyEncodingAudioJob(source, starts, "aac");
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(starts).as("the source's listed starts").hasSizeGreaterThan(3);
+    for (var number = Math.max(1, startSequenceNumber); number < starts.size(); number++) {
+      assertThat(firstVideoSampleOf(uploads, number))
+          .as("segment %d opens at its listed keyframe", number)
+          .isEqualTo(new BigFraction(starts.get(number), MPEG_TS_TICKS_PER_SECOND));
+    }
+  }
+
   // A copy of the source's video on its exact starts that encodes its audio in stereo.
   private static VariantJob.Builder copyEncodingAudioJob(
       Path source, List<Long> starts, String codec) {
@@ -9659,10 +10453,32 @@ class WorkerMediaSmokeTest {
           .max(Comparator.naturalOrder())
           .orElseThrow();
     }
+
+    // The longest time between two reports that the output's end grew, or between the last one
+    // and the completion.
+    Duration longestTimeWithoutOutput() {
+      var times =
+          new ArrayList<>(
+              progress.stream()
+                  .filter(timed -> timed.report().hasOutputEnd())
+                  .map(TimedProgress::receivedAtNanos)
+                  .toList());
+      times.add(completedAtNanos);
+      return IntStream.range(1, times.size())
+          .mapToObj(index -> Duration.ofNanos(times.get(index) - times.get(index - 1)))
+          .max(Comparator.naturalOrder())
+          .orElseThrow();
+    }
   }
 
   // A progress report and when the control plane received it, on System.nanoTime.
   private record TimedProgress(long receivedAtNanos, JobAttemptProgress report) {
+
+    // The bytes that the attempt's FFmpeg has read, when the report carries them.
+    LongStream ffmpegBytesRead() {
+      return report.getUnknownFields().getField(FFMPEG_BYTES_READ_FIELD).getVarintList().stream()
+          .mapToLong(Long::longValue);
+    }
 
     Duration outputEnd() {
       var end = report.getOutputEnd();
@@ -9678,8 +10494,20 @@ class WorkerMediaSmokeTest {
 
   private FailedExecution executeExpectingFailure(
       FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    return executeExpectingFailure(workerBuilder(sourceRoot).engine(engine), job);
+  }
+
+  // The worker probes the audio stream that the job names before it starts the attempt.
+  private FailedExecution executeProbedJobExpectingFailure(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    return executeExpectingFailure(
+        workerBuilder(sourceRoot).engine(engine).ffprobe(probeExecutor()), job);
+  }
+
+  private FailedExecution executeExpectingFailure(
+      TranscodeWorker.TranscodeWorkerBuilder workerBuilder, VariantJob job) throws Exception {
     try (var controlPlane = new MediaControlPlane(_ -> {});
-        var worker = workerBuilder(sourceRoot).engine(engine).build()) {
+        var worker = workerBuilder.build()) {
       worker.start("127.0.0.1", controlPlane.port());
       var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
       controlPlane.responses.onNext(
@@ -9691,11 +10519,60 @@ class WorkerMediaSmokeTest {
       var failure = controlPlane.failed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS);
       return new FailedExecution(
           failure,
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)),
+          List.copyOf(controlPlane.progress),
+          controlPlane.failedAt.get());
+    }
+  }
+
+  private record FailedExecution(
+      JobAttemptFailed failure,
+      MediaUploads uploads,
+      List<TimedProgress> progress,
+      long failedAtNanos) {
+
+    // How long before the moment the last report arrived that the output's end grew.
+    Duration timeWithoutOutputBefore(long nanos) {
+      return progress.stream()
+          .filter(timed -> timed.report().hasOutputEnd())
+          .filter(timed -> timed.receivedAtNanos() < nanos)
+          .map(timed -> Duration.ofNanos(nanos - timed.receivedAtNanos()))
+          .min(Comparator.naturalOrder())
+          .orElseThrow();
+    }
+
+    // How long after the moment the last progress report arrived; negative when it came before.
+    Duration lastProgressAfter(long nanos) {
+      return Duration.ofNanos(progress.getLast().receivedAtNanos() - nanos);
+    }
+  }
+
+  // Runs the job until the worker reports that its attempt completed or failed.
+  private EndedExecution executeToItsEnd(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    try (var controlPlane = new MediaControlPlane(_ -> {});
+        var worker = workerBuilder(sourceRoot).engine(engine).ffprobe(probeExecutor()).build()) {
+      worker.start("127.0.0.1", controlPlane.port());
+      var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
+      controlPlane.responses.onNext(
+          EstablishWorkerSessionResponse.newBuilder()
+              .setStartVariant(
+                  StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(job))
+              .build());
+
+      var failure =
+          controlPlane
+              .completed
+              .handle((_, _) -> Optional.ofNullable(controlPlane.failed.getNow(null)))
+              .get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      return new EndedExecution(
+          failure.map(JobAttemptFailed::getFailure),
           new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
     }
   }
 
-  private record FailedExecution(JobAttemptFailed failure, MediaUploads uploads) {}
+  // An attempt's uploads, and the failure that it reported in place of a completion.
+  private record EndedExecution(Optional<JobAttemptFailure> failure, MediaUploads uploads) {}
 
   private static List<String> uploadNames(int mediaSegmentCount) {
     return Stream.concat(
@@ -9710,11 +10587,16 @@ class WorkerMediaSmokeTest {
 
   private static FfmpegTranscodeEngine engine(
       TranscodeCapabilityService capabilities, ProcessLauncher launcher) {
+    return engine(capabilities, launcher, FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT);
+  }
+
+  private static FfmpegTranscodeEngine engine(
+      TranscodeCapabilityService capabilities, ProcessLauncher launcher, Duration stallTimeout) {
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", DEFAULT_FRAGMENTATION_TARGET))
         .capabilityService(capabilities)
         .launcher(launcher)
-        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
+        .encoderStallTimeout(stallTimeout)
         .build();
   }
 
@@ -10255,6 +11137,7 @@ class WorkerMediaSmokeTest {
     private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
     private final AtomicLong completedAt = new AtomicLong();
     private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
+    private final AtomicLong failedAt = new AtomicLong();
     private final List<TimedProgress> progress = new CopyOnWriteArrayList<>();
     private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
     private final List<String> names = new CopyOnWriteArrayList<>();
@@ -10306,6 +11189,7 @@ class WorkerMediaSmokeTest {
           }
 
           if (message.hasJobAttemptFailed()) {
+            failedAt.set(System.nanoTime());
             failed.complete(message.getJobAttemptFailed());
             completed.completeExceptionally(new AssertionError(message.getJobAttemptFailed()));
           }

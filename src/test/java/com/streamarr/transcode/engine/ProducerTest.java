@@ -16,7 +16,6 @@ import static org.awaitility.Awaitility.await;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
-import com.streamarr.transcode.engine.FfmpegRecordings.DroppedAudioSample;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.SourceEnd.EndedEarly;
@@ -49,6 +48,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -89,6 +89,10 @@ class ProducerTest {
   private static final String AV1_RECORDING = "09-svtav1-vfr.fmp4";
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
+  // An FFmpeg that writes nothing while its audio's input reads ahead, as a copy that encodes its
+  // audio does.
+  private static final FfmpegPipeline READING_AHEAD =
+      new FfmpegPipeline.SingleProcess(List.of("ffmpeg"), true);
   private static final Duration POLL_INTERVAL = Duration.ofMillis(5);
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
@@ -190,11 +194,16 @@ class ProducerTest {
   }
 
   static Stream<Recording> recordingsThatComplete() {
-    return recordings().filter(recording -> recording.failure().isEmpty());
+    return recordingsWhoseAudioArrivesInTime().filter(recording -> recording.failure().isEmpty());
   }
 
-  static Stream<Recording> recordingsThatDropAudio() {
-    return recordings().filter(recording -> !recording.droppedAudioSamples().isEmpty());
+  // The producer fails the others before it delivers every segment that expected.json lists.
+  static Stream<Recording> recordingsWhoseAudioArrivesInTime() {
+    return recordings().filter(recording -> recording.lateAudioSamples().isEmpty());
+  }
+
+  static Stream<Recording> recordingsWhoseAudioArrivesLate() {
+    return recordings().filter(recording -> !recording.lateAudioSamples().isEmpty());
   }
 
   static Stream<Recording> recordings() {
@@ -273,7 +282,7 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordings")
+  @MethodSource("recordingsWhoseAudioArrivesInTime")
   @DisplayName("Should deliver FFmpeg's own samples when it rebuilds the media segments")
   void shouldDeliverFfmpegsOwnSamplesWhenItRebuildsTheMediaSegments(Recording recording) {
     deliverEverySegmentOf(recording);
@@ -544,7 +553,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s"))
         .containsExactly(0L, 12_000L, 24_000L, 36_000L, 45_600L);
@@ -575,7 +584,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s"))
         .containsExactly(0L, 12_000L, 24_000L, 36_000L, 46_000L);
@@ -606,7 +615,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
     assertThat(videoDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
@@ -643,7 +652,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly(
             "init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s", "segment3.m4s");
@@ -672,7 +681,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L, 24_000L, 36_000L);
     assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
   }
@@ -720,32 +729,29 @@ class ProducerTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
   }
 
-  // FFmpeg flushes an audio encoder only once the whole input has ended, so the encoder's last
-  // frames of audio that ends long before the video arrive after their segment was delivered.
+  // Recorded from one input: FFmpeg flushes an audio encoder only once the whole input has ended,
+  // so the encoder's last frames of audio that ends long before the video arrive after their
+  // segment was delivered.
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsThatDropAudio")
+  @MethodSource("recordingsWhoseAudioArrivesLate")
   @DisplayName(
-      "Should deliver every media segment without the audio samples that arrive after their segment"
-          + " was delivered, and count them, when the audio ends long before the video")
-  void
-      shouldDeliverEveryMediaSegmentWithoutTheLateAudioSamplesAndCountThemWhenTheAudioEndsLongBeforeTheVideo(
-          Recording recording) {
+      "Should fail the attempt, after the segments it delivered, when the audio encoder's last"
+          + " frames arrive after their segment was delivered")
+  void shouldFailTheAttemptWhenTheAudioEncodersLastFramesArriveAfterTheirSegmentWasDelivered(
+      Recording recording) {
     var outcome = deliverEverySegmentOf(recording);
 
     assertThat(outcome)
-        .isEqualTo(
-            new Completed(recording.droppedAudioSamples().size(), NOTHING_READ_FROM_THE_SOURCE));
-    assertThat(mediaSegmentNames())
-        .extracting(ProducerTest::numberOf)
-        .containsExactlyElementsOf(
-            recording.segments().stream().map(SegmentSummary::number).toList());
-    var delivered = Mp4Samples.read(sink.acceptedBytes());
-    assertThat(delivered.samplesOf(delivered.audioTrack()))
-        .extracting(Sample::presentationTime)
-        .doesNotContainAnyElementsOf(
-            recording.droppedAudioSamples().stream()
-                .map(DroppedAudioSample::presentationTime)
-                .toList());
+        .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+        .extracting(Failed::reason)
+        .isEqualTo(ProducerFailure.AUDIO_ARRIVED_AFTER_ITS_SEGMENT);
+    var everySegment = recording.segments().stream().map(SegmentSummary::number).toList();
+    var delivered = mediaSegmentNames().stream().map(ProducerTest::numberOf).toList();
+    assertThat(delivered)
+        .as("the segments delivered before the first late sample arrived, its own among them")
+        .contains(recording.lateAudioSamples().getFirst().segmentNumber())
+        .hasSizeLessThan(everySegment.size())
+        .isEqualTo(everySegment.subList(0, delivered.size()));
   }
 
   @Test
@@ -770,7 +776,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly(
             "init.mp4",
@@ -804,7 +810,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -853,18 +859,18 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L, 24_000L, 36_000L);
     assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
   }
 
+  // The video runs a margin past segment 0's end before its last audio sample arrives.
   @Test
   @DisplayName(
-      "Should drop and count an audio sample and complete the attempt when the sample arrives"
+      "Should fail the attempt, after the segments it delivered, when an audio sample arrives"
           + " after the segment whose interval holds its start was delivered")
-  void
-      shouldDropAndCountAnAudioSampleAndCompleteTheAttemptWhenItArrivesAfterItsSegmentWasDelivered() {
+  void shouldFailTheAttemptWhenAnAudioSampleArrivesAfterItsSegmentWasDelivered() {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
@@ -875,14 +881,11 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).start();
 
-    assertThat(producer.outcome())
-        .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(1, NOTHING_READ_FROM_THE_SOURCE));
-    assertThat(sink.acceptedNames())
-        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.AUDIO_ARRIVED_AFTER_ITS_SEGMENT);
+    assertThat(failure.detail()).contains("media segment 0");
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
-    assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
-    assertThat(audioDecodeTimesOf("segment2.m4s")).isEmpty();
   }
 
   @Test
@@ -940,8 +943,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(
-            new Completed(recording.droppedAudioSamples().size(), NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertDeliveredInOrder(recording);
   }
 
@@ -965,7 +967,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(recording.discardedPreroll()).isEmpty();
     assertThat(sink.acceptedNames())
         .startsWith("init.mp4", "segment5.m4s")
@@ -991,7 +993,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1013,7 +1015,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertDeliveredInOrder(recording);
   }
 
@@ -1037,7 +1039,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.mediaTimings())
         .hasSize(recording.segments().size())
         .extracting(ProductionTiming::productionTime)
@@ -1069,7 +1071,7 @@ class ProducerTest {
     assertThat(pausedBySignal).isTrue();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.mediaTimings())
         .extracting(ProductionTiming::productionTime)
         .startsWith(Duration.ofSeconds(2))
@@ -1102,7 +1104,7 @@ class ProducerTest {
     assertThat(paused).isFalse();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.mediaTimings())
         .extracting(ProductionTiming::productionTime)
         .startsWith(Duration.ofSeconds(7));
@@ -1130,7 +1132,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1162,7 +1164,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1196,7 +1198,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1230,7 +1232,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1268,7 +1270,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1294,7 +1296,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1351,7 +1353,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1380,7 +1382,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1409,7 +1411,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1447,7 +1449,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1485,7 +1487,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -1496,7 +1498,7 @@ class ProducerTest {
     var producer = producerFor(process, recording).start();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
 
     var held = producer.holdBackFfmpeg();
 
@@ -1512,7 +1514,7 @@ class ProducerTest {
     var producer = producerFor(process, recording).start();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
 
     producer.pauseFfmpeg();
 
@@ -1539,7 +1541,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     var timings = sink.mediaTimings();
     assertThat(timings)
         .extracting(ProductionTiming::productionTime)
@@ -1568,7 +1570,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -1610,7 +1612,7 @@ class ProducerTest {
     stopped.sink().release();
     assertThat(next.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(stopped.process().isAlive()).isTrue();
     stopped.process().exit();
     assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
@@ -1642,10 +1644,10 @@ class ProducerTest {
     stopped.sink().release();
     assertThat(waiting.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(later.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(laterSink.acceptedNames()).contains("init.mp4");
     stopped.process().exit();
     assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
@@ -1724,7 +1726,7 @@ class ProducerTest {
     workerBudget.release(otherAttempts);
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
     assertReleasesEveryReservedByte(workerBudget);
@@ -1833,7 +1835,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment1.m4s", "segment2.m4s", "segment3.m4s");
   }
@@ -1857,7 +1859,7 @@ class ProducerTest {
     process.exit();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1876,8 +1878,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(
-            new Completed(recording.droppedAudioSamples().size(), NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertDeliveredInOrder(recording);
   }
 
@@ -2018,7 +2019,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
     var segment = mediaSegmentOf(sink, "segment0.m4s");
     assertThat(segment.samplesOf(segment.audioTrack()))
@@ -2064,7 +2065,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
     assertReleasesEveryReservedByte(workerBudget);
   }
@@ -2103,7 +2104,7 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertReleasesEveryReservedByte(workerBudget);
   }
@@ -2140,7 +2141,7 @@ class ProducerTest {
     process.resume();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
     assertReleasesEveryReservedByte(workerBudget);
@@ -2329,7 +2330,7 @@ class ProducerTest {
     workerBudget.release(otherAttempts);
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
     assertReleasesEveryReservedByte(workerBudget);
   }
@@ -2756,7 +2757,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
   }
 
@@ -2778,7 +2779,7 @@ class ProducerTest {
 
       assertThat(producer.outcome())
           .succeedsWithin(OUTCOME_LIMIT)
-          .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+          .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
       assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
     } finally {
       Locale.setDefault(Locale.Category.FORMAT, formatLocale);
@@ -2915,7 +2916,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)));
   }
@@ -2942,7 +2943,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     var expectedEntry =
         IsoBoxes.largeSizeBox(
             "hvc1", IsoBoxes.concat(new byte[78], IsoBoxes.box("hvcC", HVC1_PARAMETER_SET_RECORD)));
@@ -2968,7 +2969,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(hevcInitializationSegment(hvc1Entry(recordWithStaticSei(planned.seiUnits()))));
   }
@@ -3035,7 +3036,7 @@ class ProducerTest {
               .start();
       assertThat(producer.outcome())
           .succeedsWithin(OUTCOME_LIMIT)
-          .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+          .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
       delivered.add(attemptSink.contentOf("init.mp4"));
     }
 
@@ -3070,7 +3071,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(
             hevcInitializationSegment(
@@ -3104,7 +3105,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(
             hevcInitializationSegment(
@@ -3134,7 +3135,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(entry));
   }
 
@@ -3162,7 +3163,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .as("the delivered initialization segment")
         .hasSizeGreaterThan(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).length);
@@ -3350,7 +3351,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
@@ -3440,7 +3441,6 @@ class ProducerTest {
         .succeedsWithin(OUTCOME_LIMIT)
         .isEqualTo(
             new Completed(
-                0,
                 new SourceEnd(
                     List.of(
                         new StreamEnd(0, Duration.ofMillis(20_040)),
@@ -3743,7 +3743,7 @@ class ProducerTest {
 
     assertThat(process.stdinText()).isEmpty();
     assertThat(producer.outcome())
-        .isCompletedWithValue(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isCompletedWithValue(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -3936,7 +3936,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -3957,7 +3957,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @ParameterizedTest(name = "FFmpeg ignores termination: {0}")
@@ -3986,6 +3986,271 @@ class ProducerTest {
     assertThat(process.wasTerminated()).isTrue();
     assertThat(process.wasDestroyedForcibly()).isEqualTo(ignoresTermination);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The scripted FFmpeg has read one more byte at every count while it reads, and the watchdog
+  // counts ten times within a stall timeout: thirty counts span three stall timeouts.
+  @Test
+  @DisplayName(
+      "Should keep the attempt running when FFmpeg writes nothing for three stall timeouts while"
+          + " its audio's input reads ahead and FFmpeg reads")
+  void shouldKeepTheAttemptRunningWhenFfmpegWritesNothingWhileItsAudiosInputReadsAheadAndItReads() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var stallTimeout = Duration.ofMillis(200);
+    var producer =
+        producerFor(process, recording).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    var pausedAt = System.nanoTime();
+    var readAtThePause = process.bytesRead();
+
+    awaiting().until(() -> process.bytesRead() >= readAtThePause + 30);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - pausedAt))
+        .as("how long FFmpeg has written nothing")
+        .isGreaterThan(stallTimeout.multipliedBy(2));
+    assertThat(producer.outcome()).isNotDone();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  // The watchdog dates the bytes that a count finds to that count, so it never fails an FFmpeg
+  // that a count found reading within the stall timeout. The watchdog counts ten times within the
+  // stall timeout, every 200 ms here, and an FFmpeg that stops reading is caught within one count
+  // interval more than the stall timeout. That interval leaves the producer 200 ms to end FFmpeg
+  // once the stall is decided.
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall no sooner than the stall timeout after the count"
+          + " that found FFmpeg's last read, and within one count interval more, when FFmpeg stops"
+          + " reading while its audio's input reads ahead")
+  void
+      shouldFailTheAttemptOneStallTimeoutAfterTheCountThatFoundTheLastReadWhenFfmpegStopsReading() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var stallTimeout = Duration.ofSeconds(2);
+    var producer =
+        producerFor(process, recording).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    var readAtThePause = process.bytesRead();
+    awaiting().until(() -> process.bytesRead() >= readAtThePause + 3);
+
+    process.stopReading();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(failure.detail())
+        .isEqualTo(
+            "FFmpeg wrote no output, and the worker counted no bytes that it read, for PT2S while"
+                + " the producer read it");
+    var fromTheCountThatFoundTheLastRead =
+        Duration.ofNanos(
+            process.terminatedAtNanos().orElseThrow() - process.lastReadCountedAtNanos());
+    assertThat(fromTheCountThatFoundTheLastRead)
+        .as("from the count that found FFmpeg's last read to the stall")
+        .isGreaterThanOrEqualTo(stallTimeout)
+        .isLessThan(stallTimeout.plus(stallTimeout.dividedBy(10)));
+  }
+
+  // A count that comes two stall timeouts after the one before it, as when the system does not run
+  // the watchdog meanwhile, finds that the scripted FFmpeg read, as does every count after it. The
+  // watchdog counts every 20 ms here.
+  @Test
+  @DisplayName(
+      "Should keep the attempt running when a count of the bytes that FFmpeg has read comes later"
+          + " than the stall timeout and finds that FFmpeg read, while its audio's input reads"
+          + " ahead")
+  void shouldKeepTheAttemptRunningWhenACountThatComesLaterThanTheStallTimeoutFindsThatFfmpegRead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var stallTimeout = Duration.ofMillis(200);
+    var producer =
+        producerFor(process, recording).pipeline(READING_AHEAD).stallTimeout(stallTimeout).start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    process.delayNextCount(stallTimeout.multipliedBy(2));
+    var readBeforeTheDelayedCount = process.bytesRead();
+
+    awaiting()
+        .until(
+            () ->
+                process.bytesRead() >= readBeforeTheDelayedCount + 3
+                    || producer.outcome().isDone());
+
+    assertThat(producer.outcome())
+        .as("the attempt, after the delayed count and two more")
+        .isNotDone();
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  // The scripted FFmpeg reads one more byte at every count, so a count taken while the worker
+  // pauses FFmpeg would show in its bytes read. The watchdog counts every 200 ms here.
+  @Test
+  @DisplayName(
+      "Should count none of the bytes that FFmpeg reads while the worker pauses it, and count them"
+          + " again once it continues, when its audio's input reads ahead")
+  void shouldCountNoBytesReadWhileTheWorkerPausesFfmpegWhenItsAudiosInputReadsAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer =
+        producerFor(process, recording)
+            .pipeline(READING_AHEAD)
+            .stallTimeout(Duration.ofSeconds(2))
+            .start();
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    awaiting().until(producer::pauseFfmpeg);
+
+    process.startReading();
+
+    await("no count of the bytes that FFmpeg read while the worker paused it")
+        .during(Duration.ofMillis(600))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> process.bytesRead() == 0);
+    producer.resumeFfmpeg();
+    awaiting().until(() -> process.bytesRead() > 0);
+    process.resume();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall, without counting the bytes that FFmpeg reads,"
+          + " when FFmpeg writes nothing and no input of its reads ahead")
+  void shouldFailTheAttemptAsAnEncoderStallWithoutCountingReadsWhenNoInputReadsAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(200)).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(failure.detail())
+        .isEqualTo("FFmpeg wrote no output for PT0.2S while the producer read it");
+    assertThat(process.bytesRead()).as("the counts of the bytes that FFmpeg read").isZero();
+    assertThat(producer.takeAdvancedBytesRead()).isEmpty();
+  }
+
+  // Outside Linux no count of the bytes that a process has read exists, so only output shows that
+  // FFmpeg works.
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall when FFmpeg writes nothing while its audio's"
+          + " input reads ahead and the system counts no bytes read")
+  void shouldFailTheAttemptAsAnEncoderStallWhenTheSystemCountsNoBytesReadWhileReadingAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var countingNoBytesRead =
+        new ProcessLauncher() {
+          @Override
+          public Process launch(List<String> command, UUID jobAttemptId) {
+            return process;
+          }
+
+          @Override
+          public OptionalLong bytesRead(Process launched) {
+            return OptionalLong.empty();
+          }
+        };
+
+    var producer =
+        producerFor(process, recording)
+            .launcher(countingNoBytesRead)
+            .pipeline(READING_AHEAD)
+            .stallTimeout(Duration.ofMillis(200))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(producer.takeAdvancedBytesRead()).isEmpty();
+  }
+
+  // A launcher may hand the producer a process without a handle, as a wrapper of the JDK's process
+  // does unless it passes the handle on. The system's count of its reads then names no process.
+  @Test
+  @DisplayName(
+      "Should complete the attempt when its audio's input reads ahead and FFmpeg's process has no"
+          + " handle to count its reads by")
+  void shouldCompleteTheAttemptWhenFfmpegsProcessHasNoHandleToCountItsReadsBy() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).hasNoHandle(true).build();
+    ProcessLauncher countingThroughTheSystem = (_, _) -> process;
+
+    var producer =
+        producerFor(process, recording)
+            .launcher(countingThroughTheSystem)
+            .pipeline(READING_AHEAD)
+            .start();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(producer.takeAdvancedBytesRead()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should give the bytes that FFmpeg has read once they have grown, and nothing once FFmpeg"
+          + " has stopped reading, when its audio's input reads ahead")
+  void shouldGiveTheBytesThatFfmpegHasReadOnceTheyHaveGrownWhenItsAudiosInputReadsAhead() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    process.startReading();
+    var producer = producerFor(process, recording).pipeline(READING_AHEAD).start();
+    awaiting().until(() -> process.bytesRead() >= 3);
+
+    var first = producer.takeAdvancedBytesRead();
+    process.stopReading();
+    var read = process.bytesRead();
+
+    assertThat(first).isPresent();
+    assertThat(first.getAsLong()).isBetween(1L, read);
+    awaiting().until(() -> latestBytesRead(producer, first.getAsLong()) == read);
+    assertThat(producer.takeAdvancedBytesRead()).as("the bytes read have not grown").isEmpty();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+  }
+
+  // The bytes read that the producer gives now, or those it gave before when none have grown.
+  private static long latestBytesRead(Producer producer, long before) {
+    return producer.takeAdvancedBytesRead().orElse(before);
   }
 
   @Test
@@ -4087,7 +4352,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -4112,7 +4377,7 @@ class ProducerTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   @Test
@@ -4535,7 +4800,7 @@ class ProducerTest {
     var producer = producerFor(process, recording).sink(deliveries).start();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     return deliveries;
   }
 

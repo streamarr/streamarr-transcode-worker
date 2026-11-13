@@ -349,7 +349,7 @@ const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
 const RECIPE =
   'ffmpeg -y [-ss S: (K-1)*6 -noaccurate_seek for an encode with K > 0, else the job\'s seek] -i SRC -map 0:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc ' +
-  'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
+  'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k, its audio from a second input: -isync 1 before the first input, [-ss S] -i SRC before the maps and -map 1:a:0 in place of -map 0:a:0] [encode: -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount; -vf ending fps=24000/1001:eof_action=pass, ' +
   'then for an encode with K > 0 trim=start_pts=ceil(K*6 x 23.976) and -af ending atrim=start=K*6 between ' +
   'asetpts shifts by the whole AAC frames that fit in 6 s ' +
@@ -369,8 +369,8 @@ const RULES =
   'firstVideoPresentationTime = the opening sync sample\'s decode time + its composition offset, in ' +
   'videoTimescale ticks, no edit list. Audio samples follow their own start: once the keyframe of a later ' +
   'segment has arrived, a segment closes after the fragment in which an audio sample of a later segment ' +
-  'arrives or the video\'s decode end runs 1 s past the segment\'s end; droppedAudioSamples lists every audio ' +
-  'sample that arrives after its segment closed, which the producer drops.';
+  'arrives or the video\'s decode end runs 1 s past the segment\'s end; lateAudioSamples lists every audio ' +
+  'sample that arrives after its segment closed, at which the producer fails the attempt.';
 
 function fixtureRecord({ fixture, record, source, pipe, work }) {
   const stream = record.stream;

@@ -136,7 +136,7 @@ class FfmpegTranscodeEngineTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(launcher.command(request.attemptId()))
         .startsWith("ffmpeg")
         .containsSubsequence("-ss", "24", "-i", "/media/movie.mkv", "pipe:1");
@@ -181,7 +181,7 @@ class FfmpegTranscodeEngineTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
   }
 
   // FFmpeg writes three 1 s segments of 23.976 fps video whose second holds a 1-tick sample.
@@ -348,7 +348,7 @@ class FfmpegTranscodeEngineTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
@@ -380,7 +380,7 @@ class FfmpegTranscodeEngineTest {
 
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
-        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+        .isEqualTo(new Completed(NOTHING_READ_FROM_THE_SOURCE));
     var lastSegment =
         Mp4Samples.read(
             IsoBoxes.concat(sink.contentOf("init.mp4"), sink.contentOf("segment1.m4s")));
