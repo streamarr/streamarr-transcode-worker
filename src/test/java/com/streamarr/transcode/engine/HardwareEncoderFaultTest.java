@@ -128,6 +128,28 @@ class HardwareEncoderFaultTest {
         .contains(HardwareEncoderFault.DECODER_REFUSED);
   }
 
+  // FFmpeg prints the source's path and metadata near the start of its error output. Text there
+  // that reads like an NVENC or CUDA error is not an error of the GPU.
+  @Test
+  @DisplayName(
+      "Should read a decoder refusal when the hardware decoder refuses a source whose metadata"
+          + " reads like an NVENC or CUDA error")
+  void
+      shouldReadADecoderRefusalWhenTheHardwareDecoderRefusesASourceWhoseMetadataReadsLikeAnError() {
+    var errorOutput =
+        """
+        Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/barracuda failed.mp4':
+          Metadata:
+            major_brand     : iso4
+            title           : [hevc_nvenc @ 0x0] encode failed: CUDA_ERROR_UNKNOWN
+          Duration: 00:00:06.00, start: 0.000000, bitrate: 71 kb/s
+        """
+            + DECODER_REFUSAL;
+
+    assertThat(HardwareEncoderFault.of(HEVC_NVENC, exitedWith(errorOutput)))
+        .contains(HardwareEncoderFault.DECODER_REFUSED);
+  }
+
   // FFmpeg's nvdec.c and its CUDA filters report a failed CUDA call with the call and its status.
   @ParameterizedTest
   @ValueSource(

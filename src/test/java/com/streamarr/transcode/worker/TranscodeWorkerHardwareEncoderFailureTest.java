@@ -41,12 +41,16 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 // ADR 0044 and streamarr/streamarr-transcode-worker#56: what the worker does when NVENC fails
 // during
@@ -233,13 +237,14 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   }
 
   // The server places the fallback on the software encoder, whose command decodes in software.
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("refusedSources")
   @DisplayName(
       "Should keep offering NVENC and report the hardware encoder failure of that job alone when"
           + " the hardware decoder refuses the job's source")
-  void shouldKeepOfferingNvencAndReportTheFailureOfThatJobWhenTheHardwareDecoderRefusesItsSource()
-      throws Exception {
-    var launcher = launcherFailingNvencOnceWith(DECODER_REFUSAL);
+  void shouldKeepOfferingNvencAndReportTheFailureOfThatJobWhenTheHardwareDecoderRefusesItsSource(
+      String errorOutput) throws Exception {
+    var launcher = launcherFailingNvencOnceWith(errorOutput);
     var refused = encodeJob();
     var next = encodeJob();
 
@@ -257,6 +262,23 @@ class TranscodeWorkerHardwareEncoderFailureTest {
       assertThat(eventsOf(connection)).doesNotContain(EventCase.VIDEO_ENCODERS_CHANGED);
       assertThat(started(connection, next).getEncoder()).isEqualTo("h264_nvenc");
     }
+  }
+
+  // FFmpeg prints the source's path and metadata ahead of the stream mapping. Text there that reads
+  // like an NVENC or CUDA error is not an error of the GPU.
+  static Stream<Named<String>> refusedSources() {
+    return Stream.of(
+        Named.of("a picture smaller than 144x144", DECODER_REFUSAL),
+        Named.of(
+            "a picture smaller than 144x144, in a source whose title reads like a CUDA error",
+            """
+            Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/barracuda failed.mp4':
+              Metadata:
+                major_brand     : iso4
+                title           : [hevc_nvenc @ 0x0] encode failed: CUDA_ERROR_UNKNOWN
+              Duration: 00:00:06.00, start: 0.000000, bitrate: 71 kb/s
+            """
+                + DECODER_REFUSAL));
   }
 
   // ADR 0044: a driver reset that takes down the hardware encoder can take down the hardware

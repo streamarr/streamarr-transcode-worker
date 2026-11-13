@@ -58,15 +58,16 @@ public enum HardwareEncoderFault {
       return Optional.empty();
     }
 
-    if (NVENC_ERROR.matcher(withoutBusyDeviceLines(errorOutput)).find()) {
+    var diagnostics = diagnosticLines(errorOutput);
+    if (NVENC_ERROR.matcher(withoutBusyDeviceLines(diagnostics)).find()) {
       return Optional.of(FAILED);
     }
 
-    if (OUT_OF_DEVICE_MEMORY.matcher(errorOutput).find()) {
+    if (OUT_OF_DEVICE_MEMORY.matcher(diagnostics).find()) {
       return Optional.of(DEVICE_OUT_OF_MEMORY);
     }
 
-    if (SESSION_REFUSAL.matcher(errorOutput).find()) {
+    if (SESSION_REFUSAL.matcher(diagnostics).find()) {
       return Optional.of(SESSION_REFUSED);
     }
 
@@ -75,6 +76,16 @@ public enum HardwareEncoderFault {
     }
 
     return Optional.empty();
+  }
+
+  // FFmpeg starts each line that a component such as NVENC, NVDEC or a CUDA filter logs with that
+  // component's name in brackets. The source's path and metadata, which FFmpeg also prints, start
+  // otherwise, so text there that reads like an error is not read as one.
+  private static String diagnosticLines(String errorOutput) {
+    return errorOutput
+        .lines()
+        .filter(line -> line.startsWith("["))
+        .collect(Collectors.joining("\n"));
   }
 
   // FFmpeg tries each GPU in turn and, once none opened a session, adds "No capable devices
