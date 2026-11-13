@@ -1943,19 +1943,16 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("jobsOfARecordingWhoseAudioOutlastsItsVideo")
   @DisplayName(
-      "Should close the last listed segment's audio at the job's advertised end when a held"
-          + " encode's audio outlasts the video and that end")
-  void shouldCloseTheLastListedSegmentsAudioAtTheAdvertisedEndWhenAHeldEncodesAudioOutlastsIt()
-      throws Exception {
-    // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s.
-    var recording = recording("06-encode-audio-tail.fmp4");
-    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
-    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+      "Should close the last listed segment's audio at the job's advertised end when the attempt's"
+          + " audio outlasts the video and that end")
+  void shouldCloseTheLastListedSegmentsAudioAtTheAdvertisedEndWhenTheAudioOutlastsIt(
+      String attempt, VariantJob.Builder job) throws Exception {
+    var recording = recording(AUDIO_TAIL_RECORDING);
     // Segment 1 runs from 6 s to 18 s, twice the period, and segment 2 from 18 s to 21 s.
     job.getExecutionBuilder()
-        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
         .setMediaSegmentCount(3)
         .addAllSegmentStartTicks(List.of(0L, 6L, 18L))
         .setSegmentStartTimeBase(WHOLE_SECONDS)
@@ -1981,6 +1978,18 @@ class TranscodeWorkerJobAttemptTest {
           .isNotEmpty()
           .allMatch(start -> start >= 18 * audioTimescale && start < 21 * audioTimescale);
     }
+  }
+
+  // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s.
+  private static final String AUDIO_TAIL_RECORDING = "06-encode-audio-tail.fmp4";
+
+  static Stream<Arguments> jobsOfARecordingWhoseAudioOutlastsItsVideo() {
+    var heldEncode = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    heldEncode.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    heldEncode
+        .getExecutionBuilder()
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001));
+    return Stream.of(Arguments.of("a held encode", heldEncode));
   }
 
   @Test
