@@ -364,11 +364,17 @@ final class SegmentAssembler {
           "a media segment comes before the copied audio's first sample");
     }
 
-    if (videoDecision instanceof VideoDecision.Copy && !samples.isEmpty()) {
+    // Only the copied audio that starts before the segment's video ends plays beside it, so a
+    // sample that the segment takes after its video has ended counts as none.
+    var lastBesideTheVideo =
+        samples.reversed().stream()
+            .filter(carried -> carried.audioStart().compareTo(videoEnd) < 0)
+            .findFirst();
+    if (videoDecision instanceof VideoDecision.Copy && lastBesideTheVideo.isPresent()) {
       return;
     }
 
-    var copiedTail = copiedAudioTail.or(audio::prerollTail);
+    var copiedTail = lastBesideTheVideo.map(audio::tailOf).or(() -> earlierTail);
     var frameDuration = oneVideoFrame(videoSamples);
     var audioTail = copiedTail;
     // The audio after the output's last segment's interval was dropped, because no keyframe opened

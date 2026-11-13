@@ -967,6 +967,71 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
+  // Segment 1, the output's last, holds 23 pictures from 1 s, which end at 1.958 s, within one
+  // video frame of its interval's end. The copied audio stops at 1 s, and no sample spans the gap
+  // before it resumes at 1.979 s, after segment 1's video has ended. Segment 1 takes that sample,
+  // but none of its copied audio plays beside its video, and the audio of segment 0 does not reach
+  // it, so ADR 0060 refuses segment 1 as a full interval without copied audio, whether the video
+  // is copied or encoded.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiedAndEncodedVideo")
+  @DisplayName(
+      "Should refuse the output's last segment when the copied audio stops at its start and resumes"
+          + " only after its video ends")
+  void
+      shouldRefuseTheOutputsLastSegmentWhenTheCopiedAudioStopsAtItsStartAndResumesOnlyAfterItsVideoEnds(
+          String video, VideoDecision videoDecision) {
+    var output = lastSegmentOfPicturesBeforeAnAudioSampleAtItsEnd(23);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .videoDecision(videoDecision)
+            .copiesAudio(true)
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  // The same audio beside a copy whose last segment holds 12 pictures from 1 s, which end at 1.5 s,
+  // more than one video frame before its interval's end. ADR 0060 leaves a copied video's
+  // incomplete final interval to ADR 0037's normal short-copy path, also when the copied audio it
+  // takes starts after its video.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(CopyLayout.class)
+  @DisplayName(
+      "Should complete a short copy when the copied audio stops at its last segment's start and"
+          + " resumes only after that segment's video ends")
+  void
+      shouldCompleteAShortCopyWhenTheCopiedAudioStopsAtItsLastSegmentsStartAndResumesOnlyAfterThatSegmentsVideoEnds(
+          CopyLayout layout) {
+    var output = lastSegmentOfPicturesBeforeAnAudioSampleAtItsEnd(12);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer = layout.producerOf(producerOfOneSecondSegments(process)).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
+  // Video and audio in two segments that start at 0 s and 1 s. Segment 0 holds 24 pictures of 1/24
+  // s and the audio, which ends at 1 s. Segment 1 holds this many pictures of 1/24 s from 1 s and
+  // one audio sample, from 1.979 s to 2 s.
+  private static OneSecondSegments lastSegmentOfPicturesBeforeAnAudioSampleAtItsEnd(int pictures) {
+    return OneSecondSegments.of(
+        IsoBoxes.videoAndAudioMoov(),
+        TimedFragment.keyframeAt(0)
+            .videoDuration(1_000)
+            .videoSampleCount(24)
+            .audioFrom(0, oneSecondOfAudioSamples())
+            .build(),
+        TimedFragment.keyframeAt(24_000)
+            .videoDuration(1_000)
+            .videoSampleCount(pictures)
+            .audioFrom(95_000, audioSamples(1, 1_000))
+            .build());
+  }
+
   // The encoder missed the keyframe at 1 s, and the output ends at 1.083 s, so segment 0 is the
   // output's last and its 26 pictures run two frames past its interval. The copied audio stops at
   // 0.5 s, and no sample spans the gap before it resumes at 1 s, in segment 1's interval, which no
