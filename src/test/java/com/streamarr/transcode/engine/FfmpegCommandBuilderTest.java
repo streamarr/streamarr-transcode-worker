@@ -3836,15 +3836,41 @@ class FfmpegCommandBuilderTest {
     assertThat(pipeline.audioInputReadsAhead()).isFalse();
   }
 
+  // The encode of the copy reads the copy on its standard input, and the source's audio, copied or
+  // encoded, from the source. FFmpeg holds the copy back while that audio trails, and writes
+  // nothing while the audio's input reads on.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should say that the audio's input reads ahead when two FFmpegs move a Dolby Vision profile"
+          + " 5 source's RPUs for an encode with audio")
+  void shouldSayThatTheAudiosInputReadsAheadWhenTwoFfmpegsMoveAProfile5SourcesRpus(
+      TranscodeMode mode) {
+    var request =
+        request(
+                decision(mode)
+                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .build())
+            .build();
+
+    var pipeline = builder.buildPipeline(job(request, "libx264"));
+
+    assertThat(pipeline).isInstanceOf(FfmpegPipeline.RpuMovingPipe.class);
+    assertThat(pipeline.audioInputReadsAhead()).isTrue();
+  }
+
   @Test
   @DisplayName(
       "Should say that no input reads ahead when two FFmpegs move a Dolby Vision profile 5"
-          + " source's RPUs for an encode")
-  void shouldSayThatNoInputReadsAheadWhenTwoFfmpegsMoveAProfile5SourcesRpus() {
+          + " source's RPUs for an encode without audio")
+  void shouldSayThatNoInputReadsAheadWhenTwoFfmpegsMoveAProfile5SourcesRpusWithoutAudio() {
     var request =
         request(
                 decision(TranscodeMode.VIDEO_TRANSCODE)
                     .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .audioDecision(NO_AUDIO)
                     .build())
             .build();
 

@@ -267,12 +267,21 @@ public class FfmpegCommandBuilder {
   public FfmpegPipeline buildPipeline(TranscodeJob job) {
     if (needsRpuMove(job.request())) {
       return new FfmpegPipeline.RpuMovingPipe(
-          buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE), false);
+          buildSourceCopyCommand(job),
+          buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE),
+          mapsAudio(job.request()));
     }
 
     return new FfmpegPipeline.SingleProcess(
         buildCommand(job, EncoderInput.SOURCE),
         readsAudioFromItsOwnInput(job.request(), EncoderInput.SOURCE));
+  }
+
+  // The encode of a profile 5 source's copy reads the copy on its standard input, and any audio
+  // that it maps, copied or encoded, from the source, an input of its own. FFmpeg holds the copy
+  // back while that audio trails, as it holds a single command's video input.
+  private static boolean mapsAudio(TranscodeRequest request) {
+    return request.transcodeDecision().audioDecision().mode() != AudioMode.NONE;
   }
 
   // Dolby Vision profiles 5 and 10.0 have no compatible base, and of those only profile 5 is

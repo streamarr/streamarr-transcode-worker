@@ -14,7 +14,8 @@ public sealed interface FfmpegPipeline {
    * Whether FFmpeg writes nothing while its audio's input reads on: an attempt that encodes its
    * audio from an input of its own, as a copy and an encode that holds its last frame do, holds the
    * video's input back while that input reads from the audio stream's last packet to its next one
-   * or to the source's end.
+   * or to the source's end. The encode of a profile 5 source's copy reads any audio from the source
+   * beside the copy, so it holds the copy back in the same way.
    */
   boolean audioInputReadsAhead();
 
