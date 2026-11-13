@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,11 +42,21 @@ public final class FfprobeExecutor {
   public static final int MEASUREMENT_VERSION = 2;
 
   /**
-   * The read limits let ffprobe reach streams whose first packet comes late, such as PGS subtitles.
-   * Without -scan_all_pmts 0, ffprobe reads an MPEG-TS source to those limits.
+   * How far a read of a source goes to find each stream's parameters. The limits let ffprobe reach
+   * streams whose first packet comes late, such as PGS subtitles.
    */
+  static final List<String> STREAM_READ_LIMITS =
+      List.of("-analyzeduration", "200M", "-probesize", "1G");
+
+  /**
+   * An option of the MPEG-TS demuxer alone. Without -scan_all_pmts 0, ffprobe reads an MPEG-TS
+   * source to the stream read limits.
+   */
+  static final List<String> MPEG_TS_READ_LIMITS = List.of("-scan_all_pmts", "0");
+
+  /** The read limits of ffprobe, which ignores an option that the source's demuxer lacks. */
   static final List<String> READ_LIMITS =
-      List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
+      Stream.concat(STREAM_READ_LIMITS.stream(), MPEG_TS_READ_LIMITS.stream()).toList();
 
   private static final List<String> QUIET_JSON_OUTPUT =
       List.of("-v", "quiet", "-print_format", "json");
