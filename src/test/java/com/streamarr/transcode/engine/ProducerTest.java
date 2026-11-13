@@ -1325,6 +1325,47 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).doesNotContain("segment1.m4s");
   }
 
+  // ADR 0060 refuses a segment that comes before the copied audio's first sample, whether the video
+  // is copied or encoded. Segment 0 holds 1 s of video, and the copied audio starts at 1 s.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiedAndEncodedVideo")
+  @DisplayName("Should refuse a segment that comes before the copied audio's first sample")
+  void shouldRefuseASegmentThatComesBeforeTheCopiedAudiosFirstSample(
+      String video, VideoDecision videoDecision) {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).videoDuration(1_000).videoSampleCount(24).build(),
+            TimedFragment.keyframeAt(24_000)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(48_000, oneSecondOfAudioSamples())
+                .build(),
+            TimedFragment.keyframeAt(48_000)
+                .videoDuration(1_000)
+                .videoSampleCount(24)
+                .audioFrom(96_000, oneSecondOfAudioSamples())
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var producer =
+        producerOfOneSecondSegments(process)
+            .videoDecision(videoDecision)
+            .copiesAudio(true)
+            .requiresSoundTrack(true)
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPIED_AUDIO_RAN_SHORT);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  static Stream<Arguments> copiedAndEncodedVideo() {
+    return Stream.of(
+        Arguments.of(
+            "copied video",
+            VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING)),
+        Arguments.of("encoded video", VideoDecisionFixtures.encodeBuilder().build()));
+  }
+
   @ParameterizedTest
   @CsvSource({"false,false", "false,true", "true,false", "true,true"})
   @DisplayName("Should refuse a segment without copied audio when the audio ends before its video")
