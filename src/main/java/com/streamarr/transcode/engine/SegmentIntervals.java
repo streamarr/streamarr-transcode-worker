@@ -10,10 +10,9 @@ import lombok.NonNull;
  * The media segments' intervals on ADR 0037's zero-based timeline of slots, each one period long.
  * On the plain grid segment N's interval is slot N. On a segment list, segment N's interval runs
  * from its listed start up to the next segment's, so one segment can span several slots; a list
- * gives each start as an exact presentation time in ticks of a time base. The last listed segment's
- * audio ends at the job's advertised end, and runs to the end of the media only in a job that
- * carries none; its video runs to the end of the media either way, so a keyframe past the
- * advertised end opens no segment that the playlist does not advertise.
+ * gives each start as an exact presentation time in ticks of a time base. The job's advertised end
+ * bounds the last segment's video and audio on either timeline; without one, the final listed
+ * segment runs to the end of the media.
  */
 final class SegmentIntervals {
 
@@ -22,7 +21,7 @@ final class SegmentIntervals {
   // plain grid.
   private final long[] starts;
   private final TimeBase startTimeBase;
-  // Where the last listed segment's audio ends; empty when it runs to the end of the media.
+  // The job's advertised end, when present, on either timeline.
   private final Optional<Duration> advertisedEnd;
 
   private SegmentIntervals(
@@ -59,16 +58,16 @@ final class SegmentIntervals {
   }
 
   /**
-   * These intervals with the last listed segment's audio ending at the job's advertised end, so
-   * that no audio past that end joins it. The plain grid's segments each keep one period. The job's
-   * mapping has checked that the end lies after the last listed segment's start.
+   * These intervals bounded by the job's advertised end. The plain grid's last segment may be
+   * shorter than one period. For a list, the job's mapping has checked that the end lies after its
+   * last start.
    */
   SegmentIntervals withAdvertisedEnd(@NonNull Duration advertisedEnd) {
-    if (isPlainGrid()) {
-      return this;
-    }
-
     return new SegmentIntervals(periodSeconds, starts, startTimeBase, Optional.of(advertisedEnd));
+  }
+
+  Optional<Duration> advertisedEnd() {
+    return advertisedEnd;
   }
 
   private static void requirePositive(int periodSeconds) {
@@ -177,12 +176,13 @@ final class SegmentIntervals {
 
   /**
    * Where segment {@code number}'s interval ends, in ticks of this timescale: for the last listed
-   * segment, the first tick at or after the advertised end, where its audio ends; empty when that
+   * segment, the first tick at or after the advertised end, where its media ends; empty when that
    * segment runs to the end of the media, and for a number past the list.
    */
   OptionalLong endOf(long number, long timescale) {
     if (isPlainGrid() || number + 1 < starts.length) {
-      return OptionalLong.of(startOf(number + 1, timescale));
+      return OptionalLong.of(
+          limitToAdvertisedEnd(startTimeOf(number + 1)).ceilIn(new TimeBase(1, timescale)));
     }
 
     if (number + 1 > starts.length || advertisedEnd.isEmpty()) {
@@ -194,12 +194,12 @@ final class SegmentIntervals {
 
   /**
    * Where segment {@code number}'s interval ends on the zero-based timeline, exactly: for the last
-   * listed segment, the advertised end, where its audio ends; empty when that segment runs to the
+   * listed segment, the advertised end, where its media ends; empty when that segment runs to the
    * end of the media, and for a number past the list.
    */
   Optional<MediaTime> endTimeOf(long number) {
     if (isPlainGrid() || number + 1 < starts.length) {
-      return Optional.of(startTimeOf(number + 1));
+      return Optional.of(limitToAdvertisedEnd(startTimeOf(number + 1)));
     }
 
     if (number + 1 > starts.length) {
@@ -209,14 +209,20 @@ final class SegmentIntervals {
     return advertisedEnd.map(MediaTime::of);
   }
 
+  private MediaTime limitToAdvertisedEnd(MediaTime end) {
+    return advertisedEnd.map(MediaTime::of).filter(limit -> limit.compareTo(end) < 0).orElse(end);
+  }
+
   /**
    * The number of the segment whose audio takes a sample that starts at this presentation time: as
-   * {@link #numberAt}, except that a sample at or after the last listed segment's end belongs past
-   * the list.
+   * {@link #numberAt}, except that a sample at or after the advertised end belongs past the final
+   * segment.
    */
   long numberOfAudioSampleAt(long presentationTime, long timescale) {
     if (startsAtOrAfterAdvertisedEnd(presentationTime, timescale)) {
-      return starts.length;
+      return isPlainGrid()
+          ? MediaTime.of(advertisedEnd.orElseThrow()).ceilIn(slotsOf(periodSeconds))
+          : starts.length;
     }
 
     return numberAt(presentationTime, timescale);

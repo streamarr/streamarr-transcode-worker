@@ -1981,6 +1981,95 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @ParameterizedTest(name = "exact segment starts: {0}")
+  @ValueSource(booleans = {true, false})
+  @DisplayName("Should end copied video at the advertised end when the source continues past it")
+  void shouldEndCopiedVideoAtTheAdvertisedEndWhenTheSourceContinuesPastIt(boolean exactStarts)
+      throws Exception {
+    var recording = recording(AUDIO_TAIL_RECORDING);
+    var job = copyJobBuilderFor(recording);
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, 6L))
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
+        .getAdvertisedEndBuilder()
+        .setSeconds(12);
+
+    if (!exactStarts) {
+      job.getExecutionBuilder().clearSegmentStartTicks().clearSegmentStartTimeBase();
+    }
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(recording.file()))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      var uploads = uploadsOf(connection, job.build());
+      assertThat(uploads)
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+      var delivered = Mp4Samples.read(uploadedBytes(uploads));
+      assertThat(delivered.samplesOf(delivered.videoTrack()))
+          .extracting(Mp4Samples.Sample::presentationTime)
+          .isNotEmpty()
+          .allMatch(start -> start < 12 * delivered.videoTrack().timescale());
+      var source = Mp4Samples.read(bytesOf(recording.file()));
+      assertThat(delivered.samplesOf(delivered.audioTrack()))
+          .containsExactlyElementsOf(
+              source.samplesOf(source.audioTrack()).stream()
+                  .filter(
+                      sample -> sample.presentationTime() < 12 * source.audioTrack().timescale())
+                  .toList());
+    }
+  }
+
+  @Test
+  @DisplayName("Should complete at the advertised end when the source continues producing video")
+  void shouldCompleteAtTheAdvertisedEndWhenTheSourceContinuesProducingVideo() throws Exception {
+    var recording = recording(AUDIO_TAIL_RECORDING);
+    var bytes = bytesOf(recording.file());
+    var process =
+        ScriptedProcess.builder()
+            .output(bytes)
+            .pauseAfter(bytes.length)
+            .exitTiming(ExitTiming.AT_QUIT)
+            .resumesOnQuit(true)
+            .stderr(
+                """
+                Stream mapping:
+                  Stream #0:0 -> #1:0 (copy)
+                  Stream #0:1 -> #1:1 (copy)
+                #tb 0: 1/1000
+                #tb 1: 1/1000
+                0, 19000, 19000, 40, 1000, 0x0a1b2c3d
+                1, 11000, 11000, 20, 300, 0x0a1b2c3d
+                """)
+            .build();
+    var job = copyJobBuilderFor(recording);
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, 6L))
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
+        .getAdvertisedEndBuilder()
+        .setSeconds(12);
+
+    try (var worker = worker(new ScriptedProcessLauncher(_ -> process))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(process.isAlive()).isFalse();
+      assertThat(uploadsOf(connection, job.build()))
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+      var completed = lastEvent(connection).getJobAttemptCompleted();
+      assertThat(completed.hasSourceEndedEarly()).isFalse();
+      assertThat(completed.getStreamEndsList()).isEmpty();
+    }
+  }
+
   static Stream<Arguments> jobsOfARecordingWhoseAudioOutlastsItsVideo() {
     var heldEncode = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
     heldEncode.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
