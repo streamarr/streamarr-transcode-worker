@@ -256,6 +256,38 @@ class AvcSequenceParameterSetTest {
   }
 
   @ParameterizedTest
+  @ValueSource(strings = {"a5", "0000", "a500", "00000304", "000003", "00000301"})
+  @DisplayName("Should preserve bytes after the RBSP trailing bits when rewriting the matrix")
+  void shouldPreserveBytesAfterTheRbspTrailingBitsWhenRewritingTheMatrix(String tail) {
+    var source = Sps.builder().build();
+    var suffix = HexFormat.of().parseHex(tail);
+    var expected =
+        source.toBuilder().vui(true).videoSignal(true).colourDescription(true).matrix(6).build();
+
+    var rewritten =
+        AvcSequenceParameterSet.withMatrix(
+            concat(source.bytes(), suffix), AssumedSourceMatrix.BT601);
+
+    assertThat(rewritten).isEqualTo(concat(expected.bytes(), suffix));
+    assertThat(AvcSequenceParameterSet.withMatrix(rewritten, AssumedSourceMatrix.BT601))
+        .isEqualTo(rewritten);
+  }
+
+  @Test
+  @DisplayName("Should reject nonzero alignment bits when the SPS terminates")
+  void shouldRejectNonzeroAlignmentBitsWhenTheSpsTerminates() {
+    var source = Sps.builder().vui(true).build().bytes();
+    source[source.length - 1] |= 1;
+
+    assertThatThrownBy(() -> AvcSequenceParameterSet.withMatrix(source, AssumedSourceMatrix.BT601))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            failure ->
+                assertThat(failure.getReason())
+                    .isEqualTo(FragmentedMp4Exception.Reason.OUTPUT_MISMATCH));
+  }
+
+  @ParameterizedTest
   @EnumSource(AssumedSourceMatrix.class)
   @DisplayName("Should report the SPS colour values when the rewrite names its matrix")
   void shouldReportTheSpsColourValuesWhenTheRewriteNamesItsMatrix(AssumedSourceMatrix matrix) {
