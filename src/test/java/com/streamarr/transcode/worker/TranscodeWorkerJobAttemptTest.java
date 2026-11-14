@@ -777,6 +777,32 @@ class TranscodeWorkerJobAttemptTest {
     return job;
   }
 
+  // A copy holds no frame and pads no audio, and the worker still checks the advertised end that
+  // its job carries. Its segments start at 0 s, 6 s and 12 s.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("advertisedEndsThatAStreamCopyCannotCarry")
+  @DisplayName(
+      "Should refuse a stream copy as an invalid specification when its advertised end is not"
+          + " positive or does not follow its last listed segment's start")
+  void shouldRefuseAStreamCopyWhenItsAdvertisedEndIsNotPositiveOrDoesNotFollowItsLastListedStart(
+      String contradiction, long advertisedEndSeconds) throws Exception {
+    var copy = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX);
+    copy.getExecutionBuilder()
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartTicks(List.of(0L, 6L, 12L))
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
+        .getAdvertisedEndBuilder()
+        .setSeconds(advertisedEndSeconds);
+
+    assertRefusedAsAnInvalidSpecification(copy.build());
+  }
+
+  static Stream<Arguments> advertisedEndsThatAStreamCopyCannotCarry() {
+    return Stream.of(
+        Arguments.of("the advertised end is zero", 0L),
+        Arguments.of("the advertised end lies at the last listed segment's start", 12L));
+  }
+
   @Test
   @DisplayName(
       "Should refuse the job as an invalid specification when it carries no video decision")
@@ -1961,7 +1987,10 @@ class TranscodeWorkerJobAttemptTest {
     heldEncode
         .getExecutionBuilder()
         .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001));
-    return Stream.of(Arguments.of("a held encode", heldEncode));
+    // A copy holds no frame and pads no audio, and its job still carries the advertised end.
+    var copy = copyJobBuilderFor(recording(AUDIO_TAIL_RECORDING));
+    return Stream.of(
+        Arguments.of("a held encode", heldEncode), Arguments.of("a copy of video and audio", copy));
   }
 
   @Test
