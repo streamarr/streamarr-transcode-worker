@@ -44,8 +44,9 @@ final class VideoSampleRewrite {
    * @param maximumSegmentBytes the segment cap, which the media data of a rewritten fragment may
    *     not exceed either
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the copy lists a
-   *     rewrite for video that is neither HEVC nor AV1, other than an HDR10+ strip of H.264; with
-   *     {@link Reason#MALFORMED_BOX} when the HEVC or AVC record declares no usable NAL unit length
+   *     rewrite for video that is neither HEVC nor AV1, other than an HDR10+ strip or an assumed
+   *     source matrix rewrite of H.264; with {@link Reason#MALFORMED_BOX} when the HEVC or AVC
+   *     record declares no usable NAL unit length
    */
   static Optional<VideoSampleRewrite> of(
       VideoDecision decision, InitializationSegment segment, long maximumSegmentBytes) {
@@ -67,27 +68,23 @@ final class VideoSampleRewrite {
         switch (sampleEntry.type()) {
           case "hvc1", "hev1", "dvh1" ->
               new NalUnitSampleRewrite(
-                  NalSyntax.HEVC,
-                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry),
-                  sampleRewrites);
+                  NalSyntax.HEVC, CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry), copy);
           case "av01" -> new Av1SampleRewrite(sampleRewrites);
-          case "avc1", "avc3" -> avcRewrite(sampleEntry, sampleRewrites);
+          case "avc1", "avc3" -> avcRewrite(sampleEntry, copy);
           default -> throw noSuchContent(sampleEntry, sampleRewrites);
         };
     return Optional.of(new VideoSampleRewrite(rewrite, maximumSegmentBytes));
   }
 
   // H.264 carries HDR10+ in SEI messages; its Dolby Vision is profile 9, which no copy strips.
-  private static SampleRewrite avcRewrite(
-      BoxView sampleEntry, Set<BitstreamRewrite> sampleRewrites) {
-    if (!sampleRewrites.equals(Set.of(BitstreamRewrite.STRIP_HDR10_PLUS))) {
-      throw noSuchContent(sampleEntry, sampleRewrites);
+  private static SampleRewrite avcRewrite(BoxView sampleEntry, VideoDecision.Copy copy) {
+    if (!Set.of(BitstreamRewrite.STRIP_HDR10_PLUS, BitstreamRewrite.NAME_ASSUMED_SOURCE_MATRIX)
+        .containsAll(copy.bitstreamRewrites())) {
+      throw noSuchContent(sampleEntry, copy.bitstreamRewrites());
     }
 
     return new NalUnitSampleRewrite(
-        NalSyntax.AVC,
-        CodecConfigurationReader.avcNalUnitLengthSizeOf(sampleEntry),
-        sampleRewrites);
+        NalSyntax.AVC, CodecConfigurationReader.avcNalUnitLengthSizeOf(sampleEntry), copy);
   }
 
   private static FragmentedMp4Exception noSuchContent(

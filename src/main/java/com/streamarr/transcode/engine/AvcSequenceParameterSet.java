@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Set;
+import lombok.Builder;
 
 final class AvcSequenceParameterSet {
 
@@ -12,6 +13,180 @@ final class AvcSequenceParameterSet {
   private static final int CHROMA_FORMAT_444 = 3;
 
   private AvcSequenceParameterSet() {}
+
+  @Builder(toBuilder = true)
+  record ColourDescription(int primaries, int transfer, int matrix, boolean fullRange) {}
+
+  @Builder
+  private record ColourLayout(
+      int start, int end, boolean addsVui, int videoFormat, ColourDescription colour) {}
+
+  static ColourDescription colourDescriptionOf(byte[] nalUnit) {
+    return colourLayout(new RbspBits(nalUnit)).colour();
+  }
+
+  static byte[] withMatrix(byte[] nalUnit, AssumedSourceMatrix matrix) {
+    var source = new RbspBits(nalUnit);
+    var layout = colourLayout(source);
+    var output = new BitOutput();
+    output.copy(source.bytes, 0, layout.start());
+    if (layout.addsVui()) {
+      output.bits(4, 3); // vui_parameters_present_flag, no aspect ratio or overscan
+    }
+
+    output.bits(1, 1);
+    output.bits(layout.videoFormat(), 3);
+    output.bits(layout.colour().fullRange() ? 1 : 0, 1);
+    output.bits(1, 1);
+    output.bits(layout.colour().primaries(), 8);
+    output.bits(layout.colour().transfer(), 8);
+    output.bits(matrix == AssumedSourceMatrix.BT709 ? 1 : 6, 8);
+    if (layout.addsVui()) {
+      output.bits(0, 6); // remaining VUI presence flags
+    }
+
+    // Retain the unmodified syntax through rbsp_stop_one_bit, then align the new length.
+    output.copy(source.bytes, layout.end(), source.stopBit() + 1);
+    return output.nalUnit();
+  }
+
+  private static ColourLayout colourLayout(RbspBits source) {
+    try {
+      return readColourLayout(source);
+    } catch (RbspBits.EndOfSequenceParameterSet _) {
+      throw new FragmentedMp4Exception(
+          FragmentedMp4Exception.Reason.OUTPUT_MISMATCH,
+          "the H.264 sequence parameter set cannot be read");
+    }
+  }
+
+  private static ColourLayout readColourLayout(RbspBits source) {
+    if (source.bytes.length == 0 || (source.bytes[0] & 0x9F) != 7) {
+      throw new RbspBits.EndOfSequenceParameterSet();
+    }
+
+    if (!frameMacroblocksOnly(source)) {
+      source.skip(1);
+    }
+
+    source.skip(1);
+    if (source.bits(1) == 1) {
+      for (var side = 0; side < 4; side++) {
+        source.skipUnsignedExpGolomb();
+      }
+    }
+
+    var start = source.position;
+    var defaultColour = ColourDescription.builder().primaries(2).transfer(2).matrix(2).build();
+    if (source.bits(1) == 0) {
+      requireTrailingBits(source);
+      return ColourLayout.builder()
+          .start(start)
+          .end(start + 1)
+          .addsVui(true)
+          .videoFormat(5)
+          .colour(defaultColour)
+          .build();
+    }
+
+    skipAspectAndOverscan(source);
+    start = source.position;
+    var videoFormat = 5;
+    var colour = defaultColour;
+    if (source.bits(1) == 1) {
+      videoFormat = source.bits(3);
+      colour = videoColour(source);
+    }
+
+    var end = source.position;
+    skipRemainingVui(source);
+    requireTrailingBits(source);
+    return ColourLayout.builder()
+        .start(start)
+        .end(end)
+        .videoFormat(videoFormat)
+        .colour(colour)
+        .build();
+  }
+
+  private static ColourDescription videoColour(RbspBits source) {
+    var colour =
+        ColourDescription.builder()
+            .primaries(2)
+            .transfer(2)
+            .matrix(2)
+            .fullRange(source.bits(1) == 1);
+    if (source.bits(1) == 1) {
+      colour.primaries(source.bits(8)).transfer(source.bits(8)).matrix(source.bits(8));
+    }
+
+    return colour.build();
+  }
+
+  private static void skipAspectAndOverscan(RbspBits source) {
+    if (source.bits(1) == 1 && source.bits(8) == 255) {
+      source.skip(16);
+      source.skip(16);
+    }
+
+    if (source.bits(1) == 1) {
+      source.skip(1);
+    }
+  }
+
+  private static void skipRemainingVui(RbspBits source) {
+    if (source.bits(1) == 1) {
+      source.skipUnsignedExpGolomb();
+      source.skipUnsignedExpGolomb();
+    }
+
+    if (source.bits(1) == 1) {
+      source.skip(32);
+      source.skip(32);
+      source.skip(1);
+    }
+
+    var nalHrd = skipHrdIfPresent(source);
+    var vclHrd = skipHrdIfPresent(source);
+    if (nalHrd || vclHrd) {
+      source.skip(1);
+    }
+
+    source.skip(1);
+    if (source.bits(1) == 1) {
+      source.skip(1);
+      for (var field = 0; field < 6; field++) {
+        source.skipUnsignedExpGolomb();
+      }
+    }
+  }
+
+  private static boolean skipHrdIfPresent(RbspBits source) {
+    if (source.bits(1) == 0) {
+      return false;
+    }
+
+    var cpbCountMinusOne = source.unsignedExpGolomb();
+    if (cpbCountMinusOne < 0 || cpbCountMinusOne > 31) {
+      throw new RbspBits.EndOfSequenceParameterSet();
+    }
+
+    source.skip(8);
+    for (var cpb = 0; cpb <= cpbCountMinusOne; cpb++) {
+      source.skipUnsignedExpGolomb();
+      source.skipUnsignedExpGolomb();
+      source.skip(1);
+    }
+
+    source.skip(20);
+    return true;
+  }
+
+  private static void requireTrailingBits(RbspBits source) {
+    if (source.position != source.stopBit()) {
+      throw new RbspBits.EndOfSequenceParameterSet();
+    }
+  }
 
   static boolean codesFields(byte[] nalUnit) {
     try {
@@ -132,6 +307,16 @@ final class AvcSequenceParameterSet {
       return value;
     }
 
+    int stopBit() {
+      if (bytes.length == 0 || bytes[bytes.length - 1] == 0) {
+        throw new EndOfSequenceParameterSet();
+      }
+
+      return bytes.length * 8
+          - Integer.numberOfTrailingZeros(Byte.toUnsignedInt(bytes[bytes.length - 1]))
+          - 1;
+    }
+
     void skip(int count) {
       bits(count);
     }
@@ -162,6 +347,54 @@ final class AvcSequenceParameterSet {
       EndOfSequenceParameterSet() {
         super(null, null, false, false);
       }
+    }
+  }
+
+  private static final class BitOutput {
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    private int current;
+    private int filled;
+
+    void copy(byte[] source, int start, int end) {
+      for (var bit = start; bit < end; bit++) {
+        bits((source[bit >> 3] >> (7 - (bit & 7))) & 1, 1);
+      }
+    }
+
+    void bits(int value, int count) {
+      for (var bit = count - 1; bit >= 0; bit--) {
+        appendBit((value >>> bit) & 1);
+      }
+    }
+
+    private void appendBit(int value) {
+      current = (current << 1) | value;
+      filled++;
+      if (filled == 8) {
+        bytes.write(current);
+        filled = 0;
+        current = 0;
+      }
+    }
+
+    byte[] nalUnit() {
+      if (filled != 0) {
+        bytes.write(current << (8 - filled));
+      }
+
+      var escaped = new ByteArrayOutputStream();
+      var zeros = 0;
+      for (var value : bytes.toByteArray()) {
+        if (zeros == 2 && Byte.toUnsignedInt(value) <= 3) {
+          escaped.write(3);
+          zeros = 0;
+        }
+
+        escaped.write(value);
+        zeros = value == 0 ? zeros + 1 : 0;
+      }
+
+      return escaped.toByteArray();
     }
   }
 }

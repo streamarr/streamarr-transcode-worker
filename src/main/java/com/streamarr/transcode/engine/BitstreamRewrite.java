@@ -31,7 +31,9 @@ public enum BitstreamRewrite {
    * its record. A picture whose RPU cannot be converted fails the attempt with the typed conversion
    * failure.
    */
-  CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1(true);
+  CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1(true),
+  /** Names the assumed source matrix in every H.264 SPS and the sample entry's colour box. */
+  NAME_ASSUMED_SOURCE_MATRIX(true);
 
   private final boolean rewritesSamples;
 
