@@ -93,7 +93,7 @@ class SegmentIntervalsTest {
   void shouldEndTheLastListedSegmentsAudioAtTheAdvertisedEndWhenTheJobCarriesOne() {
     var intervals =
         SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
-            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+            .withAdvertisedEnd(Duration.ofMillis(34_500));
 
     assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_500);
     assertThat(intervals.numberOfAudioSampleAt(34_499, MILLISECONDS)).isEqualTo(3);
@@ -110,7 +110,7 @@ class SegmentIntervalsTest {
   void shouldKeepAKeyframePastTheAdvertisedEndInTheLastListedSegmentWhenTheJobCarriesOne() {
     var intervals =
         SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
-            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+            .withAdvertisedEnd(Duration.ofMillis(34_500));
 
     assertThat(intervals.numberAt(34_500, MILLISECONDS)).isEqualTo(3);
   }
@@ -122,7 +122,7 @@ class SegmentIntervalsTest {
   void shouldEndTheLastListedSegmentAtTheFirstTickAtOrAfterTheAdvertisedEndBetweenTwoTicks() {
     var intervals =
         SegmentIntervals.onExactStarts(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
-            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500).plusNanos(1));
+            .withAdvertisedEnd(Duration.ofMillis(34_500).plusNanos(1));
 
     assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_501);
     assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(3);
@@ -130,15 +130,15 @@ class SegmentIntervalsTest {
   }
 
   @Test
-  @DisplayName(
-      "Should keep each segment of the plain grid one period long when the job carries an"
-          + " advertised end")
-  void shouldKeepEachSegmentOfThePlainGridOnePeriodLongWhenTheJobCarriesAnAdvertisedEnd() {
-    var intervals =
-        SegmentIntervals.onPlainGrid(3).withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+  @DisplayName("Should end the plain grid at the advertised end when the job carries one")
+  void shouldEndThePlainGridAtTheAdvertisedEndWhenTheJobCarriesOne() {
+    var intervals = SegmentIntervals.onPlainGrid(3).withAdvertisedEnd(Duration.ofMillis(34_500));
 
-    assertThat(intervals.endOf(11, MILLISECONDS)).hasValue(36_000);
-    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(11);
+    assertThat(intervals.endOf(10, MILLISECONDS)).hasValue(33_000);
+    assertThat(intervals.endOf(11, MILLISECONDS)).hasValue(34_500);
+    assertThat(intervals.endTimeOf(11)).contains(MediaTime.of(Duration.ofMillis(34_500)));
+    assertThat(intervals.numberOfAudioSampleAt(34_499, MILLISECONDS)).isEqualTo(11);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(12);
   }
 
   @Test
@@ -251,7 +251,7 @@ class SegmentIntervalsTest {
   void shouldEndTheLastExactSegmentsAudioAtTheAdvertisedEndWhenTheJobCarriesOne() {
     var intervals =
         SegmentIntervals.onExactStarts(3, MPEG_TS_KEYFRAMES_AT_HALF_SECONDS)
-            .withLastListedSegmentEndingAt(Duration.ofMillis(10_250));
+            .withAdvertisedEnd(Duration.ofMillis(10_250));
 
     assertThat(intervals.endOf(2, AUDIO_TIMESCALE)).hasValue(456_000);
     assertThat(intervals.endOf(3, AUDIO_TIMESCALE)).hasValue(492_000);
@@ -304,7 +304,7 @@ class SegmentIntervalsTest {
 
     assertThat(intervals.endTimeOf(0)).contains(new MediaTime(315_000, new TimeBase(1, 90_000)));
     assertThat(intervals.endTimeOf(3)).as("without an advertised end").isEmpty();
-    assertThat(intervals.withLastListedSegmentEndingAt(Duration.ofMillis(10_250)).endTimeOf(3))
+    assertThat(intervals.withAdvertisedEnd(Duration.ofMillis(10_250)).endTimeOf(3))
         .contains(MediaTime.of(Duration.ofMillis(10_250)));
     assertThat(intervals.endTimeOf(4)).as("past the list").isEmpty();
   }

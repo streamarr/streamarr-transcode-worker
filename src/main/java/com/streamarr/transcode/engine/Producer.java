@@ -5,6 +5,7 @@ import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.ReadingEnding.Abandoned;
+import com.streamarr.transcode.engine.ReadingEnding.AdvertisedEnd;
 import com.streamarr.transcode.engine.ReadingEnding.Decided;
 import com.streamarr.transcode.engine.ReadingEnding.EndOfOutput;
 import com.streamarr.transcode.engine.ReadingEnding.TruncatedOutput;
@@ -635,12 +636,30 @@ public final class Producer {
         switch (ending) {
           case EndOfOutput() ->
               () -> settleAtExitOnceAccepted(this::outcomeOfCompleteOutput, notExited());
+          case AdvertisedEnd() -> this::completeAtAdvertisedEnd;
           case TruncatedOutput(var failure) ->
               () -> settleAtExitOnceAccepted(() -> failure, failure);
           case Abandoned(var failure) -> () -> abandon(failure);
           case Decided() -> ffmpeg::discardRemainingOutput;
         };
     conclusion.run();
+  }
+
+  private void completeAtAdvertisedEnd() {
+    if (!tryAwaitAcceptanceOfDeliveryInFlight()) {
+      return;
+    }
+
+    var completed =
+        new Completed(
+            assembler.droppedLateAudioSampleCount(), new SourceEnd(List.of(), Optional.empty()));
+    if (!tryDecide(completed)) {
+      return;
+    }
+
+    ffmpeg.requestTermination();
+    ffmpeg.awaitExitWithinGracePeriod();
+    settle(completed);
   }
 
   // FFmpeg's exit decides a complete output's outcome, and a non-zero exit takes precedence over
@@ -774,7 +793,21 @@ public final class Producer {
     }
 
     advanceOutputEnd(unit.orElseThrow());
-    return closeSegmentsOf(unit.orElseThrow(), closedSegments);
+    var ending = closeSegmentsOf(unit.orElseThrow(), closedSegments);
+    if (ending.isPresent() || !videoHasPassedAdvertisedEnd()) {
+      return ending;
+    }
+
+    var finalSegments = closeLastSegments(closedSegments);
+    return Optional.of(finalSegments instanceof Decided ? finalSegments : new AdvertisedEnd());
+  }
+
+  private boolean videoHasPassedAdvertisedEnd() {
+    synchronized (lock) {
+      return sourceEndRule.intervals().advertisedEnd().isPresent()
+          && sourceEndRule.mediaSegmentCount() > 0
+          && assembler.videoHasPassed(sourceEndRule.mediaSegmentCount() - 1L);
+    }
   }
 
   // Empty unless reading ends once the closed segments are handed off: because the unit skipped a
