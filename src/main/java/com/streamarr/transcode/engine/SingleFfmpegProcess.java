@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /** A job attempt's FFmpeg that runs as one process. */
@@ -84,14 +85,15 @@ final class SingleFfmpegProcess implements FfmpegProcess {
   }
 
   @Override
-  public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
+  public Optional<Failed> failureAtExit() {
     var exitCode = process.onExit().join().exitValue();
-    if (exitCode != 0) {
-      return new Failed(
-          ProducerFailure.PROCESS_EXITED_WITH_ERROR, errorOutput.exitDetail("FFmpeg", exitCode));
+    if (exitCode == 0) {
+      return Optional.empty();
     }
 
-    return outcomeOnCleanExit;
+    return Optional.of(
+        new Failed(
+            ProducerFailure.PROCESS_EXITED_WITH_ERROR, errorOutput.exitDetail("FFmpeg", exitCode)));
   }
 
   @Override

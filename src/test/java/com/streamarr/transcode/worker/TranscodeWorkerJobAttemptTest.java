@@ -2322,6 +2322,36 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // Segments 0 and 1 and two of segment 2's six fragments, then exit code 137, as the system
+  // reports a process that SIGKILL ended.
+  @Test
+  @DisplayName(
+      "Should upload no media segment that FFmpeg's end cut short when FFmpeg is killed in the"
+          + " middle of a media segment")
+  void
+      shouldUploadNoMediaSegmentThatFfmpegsEndCutShortWhenFfmpegIsKilledInTheMiddleOfAMediaSegment()
+          throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var killedInsideSegmentTwo = Arrays.copyOf(output, endOfFragment(output, 13));
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ -> ScriptedProcess.builder().output(killedInsideSegmentTwo).exitCode(137).build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    }
+  }
+
   @Test
   @DisplayName(
       "Should report how far the attempt's output reached when FFmpeg pauses inside a media"
@@ -3186,12 +3216,14 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt as a transcode failure and terminate FFmpeg when FFmpeg does not"
-          + " exit within the grace period after its output ends")
+      "Should fail the attempt as a transcode failure, terminate FFmpeg and upload no media segment"
+          + " that the end of the output leaves open when FFmpeg does not exit within the grace"
+          + " period after its output ends")
   void
-      shouldFailTheAttemptAsATranscodeFailureAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds()
+      shouldFailTheAttemptAsATranscodeFailureTerminateFfmpegAndUploadNoMediaSegmentThatTheEndOfTheOutputLeavesOpenWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds()
           throws Exception {
     var recording = recording(ENCODED_RECORDING);
+    var namesWithoutTheLastSegment = uploadNames(recording).subList(0, recording.segments().size());
     var launcher = writingUntilTheTestExits();
     var job = variantJobBuilder().build();
 
@@ -3205,7 +3237,7 @@ class TranscodeWorkerJobAttemptTest {
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertThat(connection.uploads())
           .extracting(upload -> upload.metadata().getSegmentName())
-          .containsExactlyElementsOf(uploadNames(recording));
+          .containsExactlyElementsOf(namesWithoutTheLastSegment);
       var process = processOf(launcher, job);
       assertThat(process.wasTerminated()).isTrue();
       assertThat(process.wasDestroyedForcibly()).isFalse();
