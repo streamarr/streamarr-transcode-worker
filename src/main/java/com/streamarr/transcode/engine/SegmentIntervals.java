@@ -23,14 +23,14 @@ final class SegmentIntervals {
   private final long[] starts;
   private final TimeBase startTimeBase;
   // Where the last listed segment's audio ends; empty when it runs to the end of the media.
-  private final Optional<Duration> listEnd;
+  private final Optional<Duration> advertisedEnd;
 
   private SegmentIntervals(
-      int periodSeconds, long[] starts, TimeBase startTimeBase, Optional<Duration> listEnd) {
+      int periodSeconds, long[] starts, TimeBase startTimeBase, Optional<Duration> advertisedEnd) {
     this.periodSeconds = periodSeconds;
     this.starts = starts;
     this.startTimeBase = startTimeBase;
-    this.listEnd = listEnd;
+    this.advertisedEnd = advertisedEnd;
   }
 
   /** The intervals of a plain grid whose every segment lasts this many seconds. */
@@ -63,7 +63,7 @@ final class SegmentIntervals {
    * that no audio past that end joins it. The plain grid's segments each keep one period. The job's
    * mapping has checked that the end lies after the last listed segment's start.
    */
-  SegmentIntervals withLastListedSegmentEndingAt(@NonNull Duration advertisedEnd) {
+  SegmentIntervals withAdvertisedEnd(@NonNull Duration advertisedEnd) {
     if (isPlainGrid()) {
       return this;
     }
@@ -185,11 +185,11 @@ final class SegmentIntervals {
       return OptionalLong.of(startOf(number + 1, timescale));
     }
 
-    if (number + 1 > starts.length || listEnd.isEmpty()) {
+    if (number + 1 > starts.length || advertisedEnd.isEmpty()) {
       return OptionalLong.empty();
     }
 
-    return OptionalLong.of(MediaTicks.firstTickAtOrAfter(listEnd.get(), timescale));
+    return OptionalLong.of(MediaTicks.firstTickAtOrAfter(advertisedEnd.get(), timescale));
   }
 
   /**
@@ -206,7 +206,7 @@ final class SegmentIntervals {
       return Optional.empty();
     }
 
-    return listEnd.map(MediaTime::of);
+    return advertisedEnd.map(MediaTime::of);
   }
 
   /**
@@ -215,15 +215,15 @@ final class SegmentIntervals {
    * the list.
    */
   long numberOfAudioSampleAt(long presentationTime, long timescale) {
-    if (startsAtOrAfterTheListsEnd(presentationTime, timescale)) {
+    if (startsAtOrAfterAdvertisedEnd(presentationTime, timescale)) {
       return starts.length;
     }
 
     return numberAt(presentationTime, timescale);
   }
 
-  private boolean startsAtOrAfterTheListsEnd(long presentationTime, long timescale) {
-    return listEnd
+  private boolean startsAtOrAfterAdvertisedEnd(long presentationTime, long timescale) {
+    return advertisedEnd
         .filter(end -> presentationTime >= MediaTicks.firstTickAtOrAfter(end, timescale))
         .isPresent();
   }

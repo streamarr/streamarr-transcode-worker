@@ -70,7 +70,7 @@ public record TranscodeRequest(
         exactSegmentStarts
             .map(starts -> SegmentIntervals.onExactStarts(targetSegmentDuration, starts))
             .orElseGet(() -> SegmentIntervals.onPlainGrid(targetSegmentDuration));
-    return advertisedEnd.map(intervals::withLastListedSegmentEndingAt).orElse(intervals);
+    return advertisedEnd.map(intervals::withAdvertisedEnd).orElse(intervals);
   }
 
   private static boolean holdsOrPads(TranscodeDecision decision) {

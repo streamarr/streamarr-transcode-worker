@@ -184,7 +184,7 @@ class SegmentAssemblerTest {
         assemblerOfOneSecondSegments()
             .intervals(
                 SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L, 2L, 3L), 1, 1))
-                    .withLastListedSegmentEndingAt(Duration.ofSeconds(4)))
+                    .withAdvertisedEnd(Duration.ofSeconds(4)))
             .build();
 
     var closed = assembleEvery(assembler, output);
@@ -219,7 +219,7 @@ class SegmentAssemblerTest {
         assemblerOfOneSecondSegments()
             .intervals(
                 SegmentIntervals.onExactStarts(1, new ExactSegmentStarts(List.of(0L), 1, 1))
-                    .withLastListedSegmentEndingAt(Duration.ofSeconds(2)))
+                    .withAdvertisedEnd(Duration.ofSeconds(2)))
             .build();
 
     var closed = assembleEvery(assembler, output);
