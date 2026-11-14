@@ -6,6 +6,7 @@ import build.buf.gen.streamarr.transcode.v1.MatrixCoefficients;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.engine.AssumedSourceMatrix;
+import com.streamarr.transcode.engine.BitstreamRewrite;
 import com.streamarr.transcode.engine.CodecFamily;
 import com.streamarr.transcode.engine.Deinterlace;
 import com.streamarr.transcode.engine.TranscodeMode;
@@ -17,6 +18,7 @@ import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
 import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVision;
 import com.streamarr.transcode.engine.VideoDynamicRange.Presence;
 import java.util.Optional;
+import java.util.Set;
 
 // Translates the contract's video decision into the engine's, and refuses one that contradicts the
 // job or lacks a value that the worker forces or checks. Domain and protobuf contracts
@@ -81,7 +83,7 @@ final class VideoDecisions {
     if (carriesEncodeValues(video)) {
       throw new InvalidJobSpecificationException(
           "A stream copy carries a codec profile, tier, level, deinterlace instruction,"
-              + " instruction to hold the last frame or assumed source matrix");
+              + " instruction to hold the last frame");
     }
 
     if (video.hasSourceDynamicRange()) {
@@ -96,7 +98,32 @@ final class VideoDecisions {
         .keepsPacketBytes(video.getCopyKeepsPacketBytes())
         .bitstreamRewrites(rewrites)
         .plannedOutput(PlannedCopies.of(video, rewrites))
+        .assumedSourceMatrix(copyMatrix(video, rewrites))
         .build();
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static Optional<AssumedSourceMatrix> copyMatrix(
+      build.buf.gen.streamarr.transcode.v1.VideoDecision video, Set<BitstreamRewrite> rewrites) {
+    var matrix = assumedSourceMatrix(video.getAssumedSourceMatrix());
+    if (rewrites.contains(BitstreamRewrite.NAME_ASSUMED_SOURCE_MATRIX) != matrix.isPresent()) {
+      throw new InvalidJobSpecificationException(
+          "A copy carries an assumed source matrix exactly when it lists the rewrite");
+    }
+
+    if (matrix.isEmpty()) {
+      return matrix;
+    }
+
+    if (video.getCodecFamily() != VideoCodecFamily.VIDEO_CODEC_FAMILY_H264
+        || !AssumedSourceMatrix.isAssumableFor(VideoDynamicRanges.of(video.getSourceDynamicRange()))
+        || VideoDynamicRanges.of(video.getOutputDynamicRange()).compatibleBase()
+            != CompatibleBase.SDR) {
+      throw new InvalidJobSpecificationException(
+          "Only an SDR H.264 copy of an SDR or untagged source names an assumed source matrix");
+    }
+
+    return matrix;
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -110,9 +137,7 @@ final class VideoDecisions {
                 .VIDEO_CODEC_TIER_UNSPECIFIED_VALUE
         || video.hasLevel()
         || video.hasDeinterlace()
-        || video.getHoldLastFrameToAdvertisedEnd()
-        || video.getAssumedSourceMatrixValue()
-            != MatrixCoefficients.MATRIX_COEFFICIENTS_UNSPECIFIED_VALUE;
+        || video.getHoldLastFrameToAdvertisedEnd();
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -191,7 +216,7 @@ final class VideoDecisions {
         .build();
   }
 
-  // The contract lets an encode assume BT.709 or SMPTE 170M, whose matrix is BT.601's.
+  // SMPTE 170M names BT.601's matrix.
   private static Optional<AssumedSourceMatrix> assumedSourceMatrix(MatrixCoefficients matrix) {
     return switch (matrix) {
       case MATRIX_COEFFICIENTS_UNSPECIFIED -> Optional.empty();
@@ -210,7 +235,7 @@ final class VideoDecisions {
           MATRIX_COEFFICIENTS_ICTCP,
           UNRECOGNIZED ->
           throw new InvalidJobSpecificationException(
-              "An encode assumes BT.709 or SMPTE 170M as its source's matrix, not " + matrix);
+              "A job assumes BT.709 or SMPTE 170M as its source's matrix, not " + matrix);
     };
   }
 

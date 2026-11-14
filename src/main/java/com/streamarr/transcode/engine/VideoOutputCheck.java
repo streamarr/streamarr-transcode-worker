@@ -73,6 +73,14 @@ final class VideoOutputCheck {
       requirePlannedOutput(copy, copy.plannedOutput().get(), sampleEntry);
     }
 
+    if (decision instanceof VideoDecision.Copy copy && copy.assumedSourceMatrix().isPresent()) {
+      readable(
+          () -> {
+            AvcCopyColour.requireMatch(sampleEntry, copy.assumedSourceMatrix().get());
+            return true;
+          });
+    }
+
     boolean holdsParameterSets =
         readable(() -> CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry));
     if (!holdsParameterSets) {
