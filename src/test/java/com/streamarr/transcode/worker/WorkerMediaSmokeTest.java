@@ -133,6 +133,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -5966,7 +5967,7 @@ class WorkerMediaSmokeTest {
         Pattern.compile("SHA256:[a-f0-9]{64}")
             .matcher(listing)
             .results()
-            .map(result -> result.group())
+            .map(MatchResult::group)
             .toList();
     assertThat(hashes).isNotEmpty();
     return hashes;
