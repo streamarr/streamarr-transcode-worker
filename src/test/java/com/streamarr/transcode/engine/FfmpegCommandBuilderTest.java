@@ -390,8 +390,30 @@ class FfmpegCommandBuilderTest {
   }
 
   private static Stream<Arguments> toneMappedConversions() {
-    return Stream.of(CompatibleBase.PQ, CompatibleBase.HLG, CompatibleBase.NONE)
+    return Stream.of(CompatibleBase.PQ, CompatibleBase.HLG)
         .flatMap(source -> softwareEncodersFor(source, CompatibleBase.SDR));
+  }
+
+  // The scale filter refuses a frame whose matrix swscale cannot read, such as the IPT-C2 matrix
+  // that a profile 5 stream can name. Such a picture shows correctly only through its RPU (ADR
+  // 0013), whatever matrix the stream names, so every frame reaches the scale filter naming none.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "libsvtav1"})
+  @DisplayName(
+      "Should describe each frame as naming no matrix before scaling and tone mapping when a source"
+          + " without a compatible base requests SDR output")
+  void
+      shouldDescribeEachFrameAsNamingNoMatrixBeforeScalingAndToneMappingWhenASourceWithoutACompatibleBaseRequestsSdrOutput(
+          String encoder) {
+    var encode =
+        softwareEncode(encoder)
+            .sourceDynamicRange(dynamicRange(CompatibleBase.NONE))
+            .outputDynamicRange(dynamicRange(CompatibleBase.SDR));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), encoder);
+
+    assertThat(videoFilter(cmd))
+        .isEqualTo("setparams=colorspace=unknown,scale=-2:720," + TONE_MAPPED_TO_SDR + FRAME_GRID);
   }
 
   @Test
@@ -3320,7 +3342,11 @@ class FfmpegCommandBuilderTest {
     var encode = pipe.encodeCommand();
     assertThat(encode.subList(0, encode.indexOf("pipe:0"))).doesNotContain("-ss");
     assertThat(videoFilter(encode))
-        .isEqualTo("scale=-2:720," + TONE_MAPPED_TO_SDR + FRAME_GRID + ",trim=start_pts=432");
+        .isEqualTo(
+            "setparams=colorspace=unknown,scale=-2:720,"
+                + TONE_MAPPED_TO_SDR
+                + FRAME_GRID
+                + ",trim=start_pts=432");
   }
 
   @Test
@@ -3891,7 +3917,7 @@ class FfmpegCommandBuilderTest {
                 + aacShift("6")
                 + "',atrim=end=67");
     assertThat(videoFilter(pipe.encodeCommand()))
-        .startsWith("scale=")
+        .startsWith("setparams=colorspace=unknown,scale=")
         .endsWith(
             ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
   }
@@ -3907,7 +3933,7 @@ class FfmpegCommandBuilderTest {
         rpuMovingPipe(builder.buildPipeline(job(heldAndPaddedProfile5().build(), "libx264")));
 
     assertThat(videoFilter(pipe.encodeCommand()))
-        .startsWith("scale=")
+        .startsWith("setparams=colorspace=unknown,scale=")
         .endsWith(
             ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=0:end_pts=1583");
   }
