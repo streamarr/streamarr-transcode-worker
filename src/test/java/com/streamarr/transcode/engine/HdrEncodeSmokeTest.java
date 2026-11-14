@@ -369,18 +369,20 @@ class HdrEncodeSmokeTest {
   }
 
   private static VideoDecision.Encode profile5Encode() {
-    var profile5 =
-        new VideoDynamicRange(
-            VideoDynamicRange.CompatibleBase.NONE,
-            VideoDynamicRange.Presence.ABSENT,
-            new VideoDynamicRange.DolbyVision.Present(
-                Optional.empty(),
-                VideoDynamicRange.Presence.PRESENT,
-                VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
     return hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ))
-        .sourceDynamicRange(profile5)
+        .sourceDynamicRange(profile5())
         .staticHdrMetadata(Optional.of(FALLBACK_METADATA))
         .build();
+  }
+
+  private static VideoDynamicRange profile5() {
+    return new VideoDynamicRange(
+        VideoDynamicRange.CompatibleBase.NONE,
+        VideoDynamicRange.Presence.ABSENT,
+        new VideoDynamicRange.DolbyVision.Present(
+            Optional.empty(),
+            VideoDynamicRange.Presence.PRESENT,
+            VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
   }
 
   private static VideoDecision.Encode.EncodeBuilder hevcEncode(VideoDynamicRange output) {
