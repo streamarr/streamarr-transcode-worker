@@ -37,7 +37,9 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementIntervals;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
+import com.streamarr.transcode.probe.SyntheticMp4.CompositionRun;
 import com.streamarr.transcode.probe.SyntheticMp4.DurationRun;
+import com.streamarr.transcode.probe.SyntheticMp4.Edit;
 import com.streamarr.transcode.probe.SyntheticMp4.GroupRun;
 import com.streamarr.transcode.probe.SyntheticMp4.SampleToGroup;
 import java.io.ByteArrayInputStream;
@@ -1403,42 +1405,39 @@ class FfprobeExecutorKeyframeTest {
     }
 
     @Test
-    @DisplayName(
-        "Should report 50 fps when an MP4 at 25 fps holds a burst of eight frames at 50 fps")
-    void shouldReport50FpsWhenAnMp4At25FpsHoldsABurstOfEightFramesAt50Fps(@TempDir Path directory)
+    @DisplayName("Should keep 25 fps when an MP4 holds only eight consecutive intervals at 50 fps")
+    void shouldKeep25FpsWhenAnMp4HoldsOnlyEightConsecutiveIntervalsAt50Fps(@TempDir Path directory)
         throws Exception {
-      // Averaged over any 24 intervals, the burst would read only 30 fps.
       var intervals =
           IntStream.concat(IntStream.concat(repeated(40, 16), repeated(20, 8)), repeated(40, 16))
               .toArray();
 
       var video = probedVideo(directory, UNAGREED_RATES, SampleTimes.inMilliseconds(intervals));
 
-      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(50, 1));
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(25, 1));
     }
 
     @Test
     @DisplayName(
-        "Should report 60 fps when 1 ms sample times of a 60 fps stream alternate between 16 and"
-            + " 17 ms")
-    void shouldReport60FpsWhen1MsSampleTimesOfA60FpsStreamAlternateBetween16And17Ms(
+        "Should report the nearest supported rate when undeclared sample times alternate between 16 and 17 ms")
+    void shouldReportTheNearestSupportedRateWhenUndeclaredTimesAlternateBetween16And17Ms(
         @TempDir Path directory) throws Exception {
       // A single 16 ms interval alone would give 62.5 fps.
       var intervals = IntStream.range(0, 120).map(frame -> frame % 3 == 0 ? 16 : 17).toArray();
 
       var video = probedVideo(directory, UNAGREED_RATES, SampleTimes.inMilliseconds(intervals));
 
-      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(60, 1));
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(60_000, 1001));
     }
 
     @Test
     @DisplayName(
-        "Should report 60 fps when an MP4 in 1/60 s ticks holds one frame that lasts a single tick")
-    void shouldReport60FpsWhenAnMp4In160SecondTicksHoldsOneFrameThatLastsASingleTick(
+        "Should report no measured maximum when an undeclared stream has fewer than 25 pictures")
+    void shouldReportNoMeasuredMaximumWhenAnUndeclaredStreamHasFewerThan25Pictures(
         @TempDir Path directory) throws Exception {
       var video = probedVideo(directory, UNAGREED_RATES, new SampleTimes(60, List.of(2, 1, 2, 2)));
 
-      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(60, 1));
+      assertThat(video.hasMaximumFrameRate()).isFalse();
     }
 
     @Test
@@ -1464,11 +1463,9 @@ class FfprobeExecutorKeyframeTest {
     }
 
     @Test
-    @DisplayName(
-        "Should report the measured rate when the presentation times of a stream whose declared"
-            + " rates agree on 24 fps prove a faster interval")
-    void shouldReportTheMeasuredRateWhenTheTimesOfAStreamDeclaredAt24FpsProveAFasterInterval(
-        @TempDir Path directory) throws Exception {
+    @DisplayName("Should keep the declared base rate when only one picture interval is faster")
+    void shouldKeepTheDeclaredBaseRateWhenOnlyOnePictureIntervalIsFaster(@TempDir Path directory)
+        throws Exception {
       // 24 fps in 1/12288 s ticks, with one frame that lasts half as long: at least 47.8 fps.
       var video =
           probedVideo(
@@ -1476,7 +1473,75 @@ class FfprobeExecutorKeyframeTest {
               "\"r_frame_rate\":\"24/1\",\"avg_frame_rate\":\"24/1\"",
               new SampleTimes(12_288, List.of(512, 512, 256, 512, 512)));
 
-      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(48, 1));
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(24, 1));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"23,24", "24,48"})
+    @DisplayName(
+        "Should raise the declared base rate only when 24 consecutive picture intervals are faster")
+    void shouldRaiseTheDeclaredBaseRateOnlyWhen24ConsecutivePictureIntervalsAreFaster(
+        int fastIntervals, int expectedRate, @TempDir Path directory) throws Exception {
+      var intervals =
+          IntStream.concat(
+                  IntStream.concat(repeated(512, 30), repeated(256, fastIntervals)),
+                  repeated(512, 30))
+              .boxed()
+              .toList();
+
+      var video =
+          probedVideo(
+              directory,
+              "\"r_frame_rate\":\"24/1\",\"avg_frame_rate\":\"24/1\"",
+              new SampleTimes(12_288, intervals));
+
+      assertThat(video.getMaximumFrameRate()).isEqualTo(fraction(expectedRate, 1));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    @DisplayName(
+        "Should measure retained presentation times when composition offsets reorder an edited MP4")
+    void shouldMeasureRetainedPresentationTimesWhenCompositionOffsetsReorderAnEditedMp4(
+        boolean trimFasterSection, @TempDir Path directory) throws Exception {
+      var mp4 =
+          SyntheticMp4.builder()
+              .mediaTimescale(1_000)
+              .movieTimescale(1_000)
+              .durationRun(new DurationRun(25, 20))
+              .durationRun(new DurationRun(25, 40))
+              .sampleSizes(50, 10)
+              .syncSamples(List.of(1L, 26L, 50L))
+              .compositionRun(new CompositionRun(1, 0))
+              .compositionRun(new CompositionRun(1, 40))
+              .compositionRun(new CompositionRun(2, -20))
+              .compositionRun(new CompositionRun(46, 0));
+      if (trimFasterSection) {
+        mp4.edit(new Edit(1_000, 500));
+      }
+
+      var source = Files.write(directory.resolve("reordered.mp4"), mp4.build().bytes());
+      var lastTime = trimFasterSection ? 960 : 1_460;
+      var lastSeconds = BigDecimal.valueOf(lastTime, 3).setScale(6).toPlainString();
+      var ffprobe =
+          ScriptedFfprobe.builder()
+              .streams(
+                  """
+              {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+               "streams":[{"index":0,"codec_type":"video","id":"0x1",%s}]}
+              """
+                      .formatted(UNAGREED_RATES))
+              .packet(
+                  lastSeconds + "%+#1",
+                  "{\"packets\":[{\"pts\":%d,\"dts\":%d,\"flags\":\"K__\"}]}"
+                      .formatted(lastTime, lastTime))
+              .build();
+
+      var media = ffprobe.executor().probe(source, keyframeRequest()).getResult().getMedia();
+
+      assertThat(media.getKeyframes().hasPositions()).isTrue();
+      assertThat(media.getStreams(0).getMaximumFrameRate())
+          .isEqualTo(fraction(trimFasterSection ? 25 : 50, 1));
     }
 
     @Test
