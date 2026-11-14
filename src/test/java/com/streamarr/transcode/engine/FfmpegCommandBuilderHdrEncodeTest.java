@@ -85,25 +85,29 @@ class FfmpegCommandBuilderHdrEncodeTest {
       "Should hand a hardware encoder biplanar p010 after the planar reshape when a profile 5"
           + " source encodes to PQ")
   void shouldHandAHardwareEncoderBiplanarP010AfterThePlanarReshapeWhenAProfile5SourceEncodesToPq() {
-    var encode =
-        hevcMain10Encode(range(VideoDynamicRange.CompatibleBase.PQ))
-            .sourceDynamicRange(
-                new VideoDynamicRange(
-                    VideoDynamicRange.CompatibleBase.NONE,
-                    VideoDynamicRange.Presence.ABSENT,
-                    new VideoDynamicRange.DolbyVision.Present(
-                        Optional.empty(),
-                        VideoDynamicRange.Presence.PRESENT,
-                        VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE)))
-            .staticHdrMetadata(Optional.of(STATIC_HDR_METADATA))
-            .build();
-
-    var command = commandOf(encode, "hevc_vaapi");
+    var command = commandOf(profile5ToPq(), "hevc_vaapi");
 
     assertThat(command.get(command.indexOf("-vf") + 1))
         .contains(
             "format=yuv420p10le,tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=yuv420p10le,"
                 + "format=p010le,");
+  }
+
+  // The scale filter refuses a frame whose matrix swscale cannot read, such as the IPT-C2 matrix
+  // that a profile 5 stream can name. Such a picture shows correctly only through its RPU (ADR
+  // 0013), whatever matrix the stream names, so every frame reaches the scale filter naming none.
+  @Test
+  @DisplayName(
+      "Should describe each frame as naming no matrix before scaling and reshaping when a profile 5"
+          + " source encodes to PQ")
+  void
+      shouldDescribeEachFrameAsNamingNoMatrixBeforeScalingAndReshapingWhenAProfile5SourceEncodesToPq() {
+    var command = commandOf(profile5ToPq(), "libx265");
+
+    assertThat(command.get(command.indexOf("-vf") + 1))
+        .startsWith(
+            "setparams=colorspace=unknown,scale=-2:1080,format=yuv420p10le,"
+                + "tonemapx=t=smpte2084:p=bt2020:m=bt2020:r=tv:format=yuv420p10le,");
   }
 
   private List<String> commandOf(VideoDecision.Encode encode, String encoder) {
@@ -138,6 +142,20 @@ class FfmpegCommandBuilderHdrEncodeTest {
         builder.buildPipeline(
             TranscodeJob.builder().request(request).videoEncoder(encoder).build());
     return ((FfmpegPipeline.SingleProcess) pipeline).command();
+  }
+
+  private static VideoDecision.Encode profile5ToPq() {
+    return hevcMain10Encode(range(VideoDynamicRange.CompatibleBase.PQ))
+        .sourceDynamicRange(
+            new VideoDynamicRange(
+                VideoDynamicRange.CompatibleBase.NONE,
+                VideoDynamicRange.Presence.ABSENT,
+                new VideoDynamicRange.DolbyVision.Present(
+                    Optional.empty(),
+                    VideoDynamicRange.Presence.PRESENT,
+                    VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE)))
+        .staticHdrMetadata(Optional.of(STATIC_HDR_METADATA))
+        .build();
   }
 
   private static VideoDecision.Encode.EncodeBuilder hevcMain10Encode(VideoDynamicRange output) {

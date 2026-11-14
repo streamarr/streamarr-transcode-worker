@@ -22,11 +22,16 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Runs 10-bit and HDR encodes (streamarr/streamarr-transcode-worker#27) through the producer over
@@ -37,7 +42,8 @@ import org.junit.jupiter.api.io.TempDir;
  * sample-entry fixture, whose RPUs come from dovi_tool's generator: these tests check the reshape's
  * plumbing, not its colours. Each job asks for the software encoder, which carries the encode
  * features also on a host whose codec family resolves to a hardware encoder. The SDR encodes that
- * assume a source matrix (ADR 0013) run here too, on a source that names none.
+ * assume a source matrix (ADR 0013) run here too, on a source that names none, and so do the
+ * encodes of a profile 5 source that names the IPT-C2 matrix.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")
@@ -75,6 +81,7 @@ class HdrEncodeSmokeTest {
   private static Path fullRangeHdr10;
   private static Path bt709MatrixHdr10;
   private static Path sdr10WithoutMatrix;
+  private static Path profile5NamingTheIptC2Matrix;
 
   @BeforeAll
   static void writeTheSources() throws Exception {
@@ -101,6 +108,7 @@ class HdrEncodeSmokeTest {
             "sdr10-without-matrix",
             List.of("-vf", "drawbox=c=0xC02060:t=fill,format=yuv420p10le"),
             "range=limited");
+    profile5NamingTheIptC2Matrix = profile5SourceNamingTheIptC2Matrix();
   }
 
   @Test
@@ -353,6 +361,42 @@ class HdrEncodeSmokeTest {
         .isEqualTo(staticMetadataLines(probed(fromStart.acceptedBytes())));
   }
 
+  // x265 4.3 describes a profile 5 stream as BT.2020 PQ with the IPT-C2 matrix, which swscale
+  // cannot read. A profile 5 picture shows correctly only through its RPU (ADR 0013), whatever
+  // matrix the stream names, so the encode delivers the pictures and the colour description that
+  // it delivers from the same stream without a colour description.
+  @ParameterizedTest(name = "{0}, from segment {1}")
+  @MethodSource("profile5EncodesAndFirstSegments")
+  @DisplayName(
+      "Should deliver the same pictures and colour description as from the same stream naming no"
+          + " matrix when a profile 5 source names the IPT-C2 matrix")
+  void
+      shouldDeliverTheSamePicturesAndColourDescriptionAsFromTheSameStreamNamingNoMatrixWhenAProfile5SourceNamesTheIptC2Matrix(
+          VideoDecision.Encode encode, int firstSegment) throws Exception {
+    assertThat(probed(Files.readAllBytes(profile5NamingTheIptC2Matrix)))
+        .contains("color_space=ipt-c2");
+    assertThat(probed(Files.readAllBytes(profile5Source()))).contains("color_space=unknown");
+    var engine = engine(withOneEncoderThread(new ProcessBuilderLauncher()));
+
+    var delivered =
+        deliveriesOf(engine, request(profile5NamingTheIptC2Matrix, encode, firstSegment));
+
+    var fromTheStreamWithoutAMatrix =
+        deliveriesOf(engine, request(profile5Source(), encode, firstSegment));
+    assertThat(decodedPictures(delivered.acceptedBytes()))
+        .hasSize((PROFILE_5_SOURCE_SECONDS - firstSegment * PROFILE_5_PERIOD_SECONDS) * 24)
+        .isEqualTo(decodedPictures(fromTheStreamWithoutAMatrix.acceptedBytes()));
+    assertThat(probed(delivered.acceptedBytes()))
+        .isEqualTo(probed(fromTheStreamWithoutAMatrix.acceptedBytes()));
+  }
+
+  static Stream<Arguments> profile5EncodesAndFirstSegments() {
+    return Stream.of(
+            Named.of("tone-mapped to SDR", profile5SdrEncode()),
+            Named.of("reshaped into PQ", profile5Encode()))
+        .flatMap(encode -> Stream.of(0, 2).map(firstSegment -> Arguments.of(encode, firstSegment)));
+  }
+
   // Every delivered sample within 4 code values (out of 1023) of the source's.
   private static void assertCloseSamples(int[] delivered, int[] source) {
     assertThat(delivered).hasSameSizeAs(source);
@@ -369,18 +413,29 @@ class HdrEncodeSmokeTest {
   }
 
   private static VideoDecision.Encode profile5Encode() {
-    var profile5 =
-        new VideoDynamicRange(
-            VideoDynamicRange.CompatibleBase.NONE,
-            VideoDynamicRange.Presence.ABSENT,
-            new VideoDynamicRange.DolbyVision.Present(
-                Optional.empty(),
-                VideoDynamicRange.Presence.PRESENT,
-                VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
     return hevcEncode(range(VideoDynamicRange.CompatibleBase.PQ))
-        .sourceDynamicRange(profile5)
+        .sourceDynamicRange(profile5())
         .staticHdrMetadata(Optional.of(FALLBACK_METADATA))
         .build();
+  }
+
+  private static VideoDecision.Encode profile5SdrEncode() {
+    return VideoDecisionFixtures.encodeBuilder()
+        .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
+        .sourcePacketsCarryPresentationTimes(true)
+        .sourceDynamicRange(profile5())
+        .softwareEncoder(true)
+        .build();
+  }
+
+  private static VideoDynamicRange profile5() {
+    return new VideoDynamicRange(
+        VideoDynamicRange.CompatibleBase.NONE,
+        VideoDynamicRange.Presence.ABSENT,
+        new VideoDynamicRange.DolbyVision.Present(
+            Optional.empty(),
+            VideoDynamicRange.Presence.PRESENT,
+            VideoDynamicRange.DolbyVisionRpuPlacement.AFTER_OWN_PICTURE));
   }
 
   private static VideoDecision.Encode.EncodeBuilder hevcEncode(VideoDynamicRange output) {
@@ -450,6 +505,48 @@ class HdrEncodeSmokeTest {
             .toURI());
   }
 
+  // The profile 5 fixture with the colour description that x265 4.3 writes for profile 5: BT.2020
+  // primaries, the PQ transfer and the IPT-C2 matrix, the code points 9, 16 and 15 of ITU-T H.273.
+  // The copy keeps every picture and every RPU.
+  private static Path profile5SourceNamingTheIptC2Matrix() throws Exception {
+    var source = root.resolve("profile-5-ipt-c2.mp4");
+    runToCompletion(
+        List.of(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            profile5Source().toString(),
+            "-c",
+            "copy",
+            "-bsf:v",
+            "hevc_metadata=colour_primaries=9:transfer_characteristics=16:matrix_coefficients=15",
+            "-strict",
+            "unofficial",
+            "-tag:v",
+            "dvh1",
+            source.toString()));
+    return source;
+  }
+
+  // The frame threads of libx264 and libx265 can let rate control depend on when each frame
+  // arrives. With one thread, the same frames encode to the same packets, which a comparison of
+  // two encodes needs.
+  private static ProcessLauncher withOneEncoderThread(ProcessLauncher launcher) {
+    return (command, jobAttemptId) -> {
+      var adjusted = new ArrayList<>(command);
+      adjusted.addAll(adjusted.indexOf("-c:v") + 2, List.of("-threads:v", "1"));
+      var x265Parameters = adjusted.indexOf("-x265-params") + 1;
+      if (x265Parameters > 0) {
+        adjusted.set(x265Parameters, adjusted.get(x265Parameters) + ":pools=none:frame-threads=1");
+      }
+
+      return launcher.launch(adjusted, jobAttemptId);
+    };
+  }
+
   private static RecordingSegmentSink encoded(
       Path source, VideoDecision.Encode encode, int firstSegment) {
     return deliveriesOf(
@@ -502,7 +599,12 @@ class HdrEncodeSmokeTest {
     var period = profile5 ? PROFILE_5_PERIOD_SECONDS : PERIOD_SECONDS;
     var seconds = profile5 ? PROFILE_5_SOURCE_SECONDS : SOURCE_SECONDS;
     var height = profile5 ? 64 : 36;
-    var codecFamily = encode.codecProfile() == VideoCodecProfile.AV1_MAIN ? "av1" : "hevc";
+    var codecFamily =
+        switch (encode.codecProfile()) {
+          case H264_HIGH -> "h264";
+          case HEVC_MAIN, HEVC_MAIN_10 -> "hevc";
+          case AV1_MAIN -> "av1";
+        };
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())
         .sourcePath(source)
@@ -650,6 +752,26 @@ class HdrEncodeSmokeTest {
     }
 
     return samples;
+  }
+
+  // The time and the MD5 of each decoded picture of the delivered stream.
+  private static List<String> decodedPictures(byte[] delivered) throws Exception {
+    var media = Files.createTempFile(root, "pictures", ".mp4");
+    Files.write(media, delivered);
+    return runToCompletion(
+            List.of(
+                "ffmpeg",
+                "-hide_banner",
+                "-v",
+                "error",
+                "-i",
+                media.toString(),
+                "-f",
+                "framemd5",
+                "-"))
+        .lines()
+        .filter(line -> !line.startsWith("#"))
+        .toList();
   }
 
   // The largest luma sample of any decoded frame, in the stream's bit depth. The metadata key is

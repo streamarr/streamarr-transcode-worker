@@ -44,5 +44,10 @@ package index supplies x265, so a later run can get a newer x265.
 `HdrEncodeSmokeTest` reshapes `dolby-vision-5-dvh1.mp4` into PQ with the worker and real FFmpeg.
 Its base layer holds the test pattern's samples, which mean nothing as IPT, so that test checks
 the reshape's plumbing and the delivered HDR10 signalling, not colours.
+x265 3.6 wrote the file without a colour description. x265 4.3 describes a profile 5 stream as
+BT.2020 PQ with the IPT-C2 matrix. `HdrEncodeSmokeTest` therefore also encodes a copy of the file
+that names that colour description, which FFmpeg's `hevc_metadata` bitstream filter writes at test
+time. The test compares what the worker delivers from the copy with what the worker delivers from
+the committed file.
 `record-dolby-vision-5-fixture.sh` regenerates only that file, with the same images as
 `record-fixtures.sh`, and leaves `versions.txt` alone.

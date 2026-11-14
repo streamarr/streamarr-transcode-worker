@@ -1234,6 +1234,7 @@ public class FfmpegCommandBuilder {
     var videoFilter =
         deinterlaceFilter(job)
             + trimBeforeTheScale(request, input)
+            + noMatrixFilter(job)
             + "scale=-2:"
             + request.height()
             + colorConversion
@@ -1488,6 +1489,20 @@ public class FfmpegCommandBuilder {
         .assumedSourceMatrix()
         .map(matrix -> ":in_color_matrix=" + matrix.scaleFilterName())
         .orElse("");
+  }
+
+  // A picture of a source without a compatible base shows correctly only through its RPU (ADR
+  // 0013), whatever matrix the stream names. The scale filter refuses a frame whose matrix
+  // swscale cannot read, such as the IPT-C2 matrix that x265 4.3 writes for profile 5, even though
+  // these encodes ask it to convert no colour. setparams therefore makes every frame of such a
+  // source name no matrix, as the usual profile 5 stream does. It changes no sample.
+  private static String noMatrixFilter(TranscodeJob job) {
+    if (!(job.request().transcodeDecision().videoDecision() instanceof VideoDecision.Encode encode)
+        || encode.sourceDynamicRange().compatibleBase() != VideoDynamicRange.CompatibleBase.NONE) {
+      return "";
+    }
+
+    return "setparams=colorspace=unknown,";
   }
 
   private static Optional<HdrTransfer> hdrTransferOf(TranscodeJob job) {
