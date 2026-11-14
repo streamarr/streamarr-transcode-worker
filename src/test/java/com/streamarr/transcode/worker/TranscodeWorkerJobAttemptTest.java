@@ -112,6 +112,8 @@ class TranscodeWorkerJobAttemptTest {
 
   // The 10.01 s keyframes of the recording 10-copy-gop-exceeds-period in its 1/24000 time base.
   private static final List<Long> TEN_SECOND_KEYFRAME_TICKS = List.of(0L, 240_240L, 480_480L);
+  // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s.
+  private static final String AUDIO_TAIL_RECORDING = "06-encode-audio-tail.fmp4";
   // The server lists an encode's segment starts in whole seconds.
   private static final Fraction WHOLE_SECONDS =
       Fraction.newBuilder().setNumerator(1).setDenominator(1).build();
@@ -773,6 +775,32 @@ class TranscodeWorkerJobAttemptTest {
     job.getExecutionBuilder().setMediaSegmentCount(15);
     job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(84).setNanos(500_000_000);
     return job;
+  }
+
+  // A copy holds no frame and pads no audio, and the worker still checks the advertised end that
+  // its job carries. Its segments start at 0 s, 6 s and 12 s.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("advertisedEndsThatAStreamCopyCannotCarry")
+  @DisplayName(
+      "Should refuse a stream copy as an invalid specification when its advertised end is not"
+          + " positive or does not follow its last listed segment's start")
+  void shouldRefuseAStreamCopyWhenItsAdvertisedEndIsNotPositiveOrDoesNotFollowItsLastListedStart(
+      String contradiction, long advertisedEndSeconds) throws Exception {
+    var copy = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX);
+    copy.getExecutionBuilder()
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartTicks(List.of(0L, 6L, 12L))
+        .setSegmentStartTimeBase(WHOLE_SECONDS)
+        .getAdvertisedEndBuilder()
+        .setSeconds(advertisedEndSeconds);
+
+    assertRefusedAsAnInvalidSpecification(copy.build());
+  }
+
+  static Stream<Arguments> advertisedEndsThatAStreamCopyCannotCarry() {
+    return Stream.of(
+        Arguments.of("the advertised end is zero", 0L),
+        Arguments.of("the advertised end lies at the last listed segment's start", 12L));
   }
 
   @Test
@@ -1916,19 +1944,16 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("jobsOfARecordingWhoseAudioOutlastsItsVideo")
   @DisplayName(
-      "Should close the last listed segment's audio at the job's advertised end when a held"
-          + " encode's audio outlasts the video and that end")
-  void shouldCloseTheLastListedSegmentsAudioAtTheAdvertisedEndWhenAHeldEncodesAudioOutlastsIt()
-      throws Exception {
-    // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s.
-    var recording = recording("06-encode-audio-tail.fmp4");
-    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
-    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+      "Should close the last listed segment's audio at the job's advertised end when the attempt's"
+          + " audio outlasts the video and that end")
+  void shouldCloseTheLastListedSegmentsAudioAtTheAdvertisedEndWhenTheAudioOutlastsIt(
+      String attempt, VariantJob.Builder job) throws Exception {
+    var recording = recording(AUDIO_TAIL_RECORDING);
     // Segment 1 runs from 6 s to 18 s, twice the period, and segment 2 from 18 s to 21 s.
     job.getExecutionBuilder()
-        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
         .setMediaSegmentCount(3)
         .addAllSegmentStartTicks(List.of(0L, 6L, 18L))
         .setSegmentStartTimeBase(WHOLE_SECONDS)
@@ -1954,6 +1979,18 @@ class TranscodeWorkerJobAttemptTest {
           .isNotEmpty()
           .allMatch(start -> start >= 18 * audioTimescale && start < 21 * audioTimescale);
     }
+  }
+
+  static Stream<Arguments> jobsOfARecordingWhoseAudioOutlastsItsVideo() {
+    var heldEncode = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    heldEncode.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    heldEncode
+        .getExecutionBuilder()
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001));
+    // A copy holds no frame and pads no audio, and its job still carries the advertised end.
+    var copy = copyJobBuilderFor(recording(AUDIO_TAIL_RECORDING));
+    return Stream.of(
+        Arguments.of("a held encode", heldEncode), Arguments.of("a copy of video and audio", copy));
   }
 
   @Test
