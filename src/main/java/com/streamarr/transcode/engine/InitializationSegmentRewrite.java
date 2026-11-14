@@ -57,6 +57,7 @@ final class InitializationSegmentRewrite {
   // encode.
   private final Optional<Av1SequenceHeader> inBandSequenceHeader;
   private final boolean encodesHevcMain;
+  private final Optional<AssumedSourceMatrix> assumedSourceMatrix;
 
   private InitializationSegmentRewrite(
       VideoDecision decision, Optional<Av1SequenceHeader> inBandSequenceHeader) {
@@ -75,6 +76,8 @@ final class InitializationSegmentRewrite {
     this.encodesHevcMain =
         decision instanceof VideoDecision.Encode encode
             && encode.codecProfile() == VideoCodecProfile.HEVC_MAIN;
+    this.assumedSourceMatrix =
+        decision instanceof VideoDecision.Copy copy ? copy.assumedSourceMatrix() : Optional.empty();
   }
 
   private static Optional<Av1SampleRewrite> configurationObuRewriteOf(VideoDecision decision) {
@@ -199,6 +202,10 @@ final class InitializationSegmentRewrite {
       case "moov", "trak", "mdia", "minf", "stbl" -> rebuiltChildren(type, body, Set.of());
       case "stsd" -> rebuiltAfter(type, body, STSD_FIELDS);
       case "hvc1", "av01" -> rebuiltVideoSampleEntry(type, body);
+      case "avc1", "avc3" ->
+          assumedSourceMatrix
+              .map(matrix -> readable(() -> AvcCopyColour.rewriteSampleEntry(body, matrix)))
+              .orElseGet(() -> bytesOf(body));
       case "hvcC" -> readable(() -> rewrittenHevcRecord(body));
       case "av1C" -> withInBandSequenceHeader(withoutStrippedConfigurationObus(body));
       default -> bytesOf(body);

@@ -157,7 +157,8 @@ class TranscodeWorkerHdrCopyTest {
               BitstreamRewrite.BITSTREAM_REWRITE_STRIP_DOLBY_VISION,
               BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS,
               BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD,
-              BitstreamRewrite.BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1);
+              BitstreamRewrite.BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1,
+              BitstreamRewrite.BITSTREAM_REWRITE_NAME_ASSUMED_SOURCE_MATRIX);
       assertThat(capabilities.getVideoCopyFeaturesList())
           .containsExactlyInAnyOrder(
               VideoCopyFeature.VIDEO_COPY_FEATURE_PLANNED_OUTPUT,

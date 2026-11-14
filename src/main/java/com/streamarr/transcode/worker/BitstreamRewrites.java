@@ -52,6 +52,9 @@ final class BitstreamRewrites {
       case CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1 ->
           build.buf.gen.streamarr.transcode.v1.BitstreamRewrite
               .BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1;
+      case NAME_ASSUMED_SOURCE_MATRIX ->
+          build.buf.gen.streamarr.transcode.v1.BitstreamRewrite
+              .BITSTREAM_REWRITE_NAME_ASSUMED_SOURCE_MATRIX;
     };
   }
 
@@ -64,6 +67,8 @@ final class BitstreamRewrites {
           BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD;
       case BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1 ->
           BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1;
+      case BITSTREAM_REWRITE_NAME_ASSUMED_SOURCE_MATRIX ->
+          BitstreamRewrite.NAME_ASSUMED_SOURCE_MATRIX;
       case BITSTREAM_REWRITE_UNSPECIFIED, UNRECOGNIZED ->
           throw new InvalidJobSpecificationException("The worker does not apply " + value);
     };

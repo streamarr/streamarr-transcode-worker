@@ -29,6 +29,8 @@ public sealed interface VideoDecision {
    *     copy that passes it through unchanged
    * @param plannedOutput the output that the server planned for the copy; empty for a copy that
    *     passes the source's range through
+   * @param assumedSourceMatrix the matrix named by every H.264 SPS and the colour box; present
+   *     exactly when the copy lists the assumed source matrix rewrite
    */
   @Builder
   record Copy(
@@ -36,11 +38,29 @@ public sealed interface VideoDecision {
       @NonNull String codecString,
       boolean keepsPacketBytes,
       @NonNull Set<BitstreamRewrite> bitstreamRewrites,
-      @NonNull Optional<PlannedCopyOutput> plannedOutput)
+      @NonNull Optional<PlannedCopyOutput> plannedOutput,
+      @NonNull Optional<AssumedSourceMatrix> assumedSourceMatrix)
       implements VideoDecision {
 
     public Copy {
       bitstreamRewrites = Set.copyOf(bitstreamRewrites);
+      if (bitstreamRewrites.contains(BitstreamRewrite.NAME_ASSUMED_SOURCE_MATRIX)
+          != assumedSourceMatrix.isPresent()) {
+        throw new IllegalArgumentException(
+            "a copy names an assumed source matrix exactly when it lists the rewrite");
+      }
+
+      if (assumedSourceMatrix.isPresent()
+          && plannedOutput
+              .filter(
+                  output ->
+                      output.dynamicRange().compatibleBase()
+                          == VideoDynamicRange.CompatibleBase.SDR)
+              .isEmpty()) {
+        throw new IllegalArgumentException(
+            "a copy that names an assumed source matrix plans SDR output");
+      }
+
       var dolbyVision = plannedOutput.flatMap(PlannedCopyOutput::dolbyVision);
       if (bitstreamRewrites.contains(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
           && dolbyVision.isEmpty()) {
@@ -69,6 +89,7 @@ public sealed interface VideoDecision {
     public static class CopyBuilder {
       private Set<BitstreamRewrite> bitstreamRewrites = Set.of();
       private Optional<PlannedCopyOutput> plannedOutput = Optional.empty();
+      private Optional<AssumedSourceMatrix> assumedSourceMatrix = Optional.empty();
     }
   }
 
