@@ -164,15 +164,10 @@ class FfprobeExecutorKeyframeTest {
 
     var report = randomAccessFfprobe().executor().probe(randomAccessSource(directory), request);
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(3);
-    assertThat(report.keyframePositionsParts())
-        .containsExactly(
-            ProbeKeyframePositionsPart.newBuilder()
-                .setProbeAttemptId(request.getProbeAttemptId())
-                .addAllPresentationTimeDeltas(List.of(0L, 1_000L, 1_000L))
-                .addAllDecodeTimeDeltas(List.of(0L, 1_000L, 1_000L))
-                .build());
+    assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(0L, 1_000L, 1_000L);
+    assertThat(report.getKeyframeDecodeTimeDeltasList()).containsExactly(0L, 1_000L, 1_000L);
   }
 
   // A stream copy's keyframe intervals start at the packets that the demuxer flags as keyframes.
