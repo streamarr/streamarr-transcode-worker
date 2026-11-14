@@ -200,9 +200,9 @@ class SegmentAssemblerTest {
 
   @Test
   @DisplayName(
-      "Should keep the video past the advertised end in the last listed segment when a copied"
+      "Should end the video at the advertised end in the last listed segment when a copied"
           + " video runs past that end")
-  void shouldKeepTheVideoPastTheAdvertisedEndInTheLastListedSegmentWhenACopiedVideoRunsPastIt()
+  void shouldEndTheVideoAtTheAdvertisedEndInTheLastListedSegmentWhenACopiedVideoRunsPastIt()
       throws IOException {
     var output =
         Mp4Stream.read(
@@ -230,8 +230,8 @@ class SegmentAssemblerTest {
             IsoBoxes.concat(output.initializationSegment().bytes(), bytesOf(closed.getLast())));
     assertThat(segment.samplesOf(segment.videoTrack()))
         .extracting(Sample::presentationTime)
-        .as("segment 0 holds every video sample")
-        .containsExactly(0L, 24_000L, 48_000L);
+        .as("segment 0 holds only the video before the advertised end")
+        .containsExactly(0L, 24_000L);
     assertThat(audioStartsOf(output, closed.getLast()))
         .as("segment 0's audio stops at the advertised end")
         .containsExactly(0L, 24_000L, 48_000L, 72_000L);

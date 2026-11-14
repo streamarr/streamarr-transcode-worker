@@ -5,6 +5,7 @@ import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.ReadingEnding.Abandoned;
+import com.streamarr.transcode.engine.ReadingEnding.AdvertisedEnd;
 import com.streamarr.transcode.engine.ReadingEnding.Decided;
 import com.streamarr.transcode.engine.ReadingEnding.EndOfOutput;
 import com.streamarr.transcode.engine.ReadingEnding.EndOfOutputWithFailedExit;
@@ -641,11 +642,29 @@ public final class Producer {
           case EndOfOutput() -> this::settleCompleteOutputOnceAccepted;
           case EndOfOutputWithFailedExit(var failure) -> () -> settleUnlessDecided(failure);
           case EndOfOutputWithoutExit() -> () -> failAndTerminateFfmpeg(notExited());
+          case AdvertisedEnd() -> this::completeAtAdvertisedEnd;
           case TruncatedOutput(var failure) -> () -> settleTruncatedOutputAtExit(failure);
           case Abandoned(var failure) -> () -> abandon(failure);
           case Decided() -> ffmpeg::discardRemainingOutput;
         };
     conclusion.run();
+  }
+
+  private void completeAtAdvertisedEnd() {
+    if (!tryAwaitAcceptanceOfDeliveryInFlight()) {
+      return;
+    }
+
+    var completed =
+        new Completed(
+            assembler.droppedLateAudioSampleCount(), new SourceEnd(List.of(), Optional.empty()));
+    if (!tryDecide(completed)) {
+      return;
+    }
+
+    ffmpeg.requestTermination();
+    ffmpeg.awaitExitWithinGracePeriod();
+    settle(completed);
   }
 
   // FFmpeg has exited cleanly, so only the acceptance of the last segment is outstanding.
@@ -787,7 +806,21 @@ public final class Producer {
     }
 
     advanceOutputEnd(unit.orElseThrow());
-    return closeSegmentsOf(unit.orElseThrow(), closedSegments);
+    var ending = closeSegmentsOf(unit.orElseThrow(), closedSegments);
+    if (ending.isPresent() || !videoHasPassedAdvertisedEnd()) {
+      return ending;
+    }
+
+    var finalSegments = closeLastSegments(closedSegments);
+    return Optional.of(finalSegments instanceof Decided ? finalSegments : new AdvertisedEnd());
+  }
+
+  private boolean videoHasPassedAdvertisedEnd() {
+    synchronized (lock) {
+      return sourceEndRule.intervals().advertisedEnd().isPresent()
+          && sourceEndRule.mediaSegmentCount() > 0
+          && assembler.videoHasPassed(sourceEndRule.mediaSegmentCount() - 1L);
+    }
   }
 
   // FFmpeg's output ends where the source ends only when FFmpeg then exits cleanly. An FFmpeg that

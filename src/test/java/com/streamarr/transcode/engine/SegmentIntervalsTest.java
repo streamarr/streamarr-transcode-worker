@@ -130,14 +130,15 @@ class SegmentIntervalsTest {
   }
 
   @Test
-  @DisplayName(
-      "Should keep each segment of the plain grid one period long when the job carries an"
-          + " advertised end")
-  void shouldKeepEachSegmentOfThePlainGridOnePeriodLongWhenTheJobCarriesAnAdvertisedEnd() {
+  @DisplayName("Should end the plain grid at the advertised end when the job carries one")
+  void shouldEndThePlainGridAtTheAdvertisedEndWhenTheJobCarriesOne() {
     var intervals = SegmentIntervals.onPlainGrid(3).withAdvertisedEnd(Duration.ofMillis(34_500));
 
-    assertThat(intervals.endOf(11, MILLISECONDS)).hasValue(36_000);
-    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(11);
+    assertThat(intervals.endOf(10, MILLISECONDS)).hasValue(33_000);
+    assertThat(intervals.endOf(11, MILLISECONDS)).hasValue(34_500);
+    assertThat(intervals.endTimeOf(11)).contains(MediaTime.of(Duration.ofMillis(34_500)));
+    assertThat(intervals.numberOfAudioSampleAt(34_499, MILLISECONDS)).isEqualTo(11);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(12);
   }
 
   @Test

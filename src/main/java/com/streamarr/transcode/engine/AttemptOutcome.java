@@ -6,12 +6,13 @@ import lombok.NonNull;
 public sealed interface AttemptOutcome {
 
   /**
-   * FFmpeg exited cleanly after the producer read all of its output and the sink accepted every
-   * segment the producer closed.
+   * The sink accepted every delivered segment and FFmpeg exited, either cleanly at the end of its
+   * output or after the producer stopped it at the advertised end.
    *
    * @param droppedLateAudioSampleCount the audio samples the producer dropped because they arrived
    *     after it closed the media segment whose interval holds their start
-   * @param sourceEnd where the chosen source streams ended, as FFmpeg read them
+   * @param sourceEnd where the chosen source streams ended, as FFmpeg read them; empty after a stop
+   *     at the advertised end, which does not establish where the source ends
    */
   record Completed(long droppedLateAudioSampleCount, @NonNull SourceEnd sourceEnd)
       implements AttemptOutcome {}

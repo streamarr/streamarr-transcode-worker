@@ -69,6 +69,17 @@ final class RecordingSegmentSink implements SegmentSink {
     return held.getCount() == 0 && release.getCount() > 0;
   }
 
+  void awaitHeldDelivery() {
+    try {
+      if (!held.await(HOLD_LIMIT_SECONDS, TimeUnit.SECONDS)) {
+        throw new AssertionError("the delivery was never held");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError("interrupted while waiting for a held delivery", e);
+    }
+  }
+
   void release() {
     release.countDown();
   }

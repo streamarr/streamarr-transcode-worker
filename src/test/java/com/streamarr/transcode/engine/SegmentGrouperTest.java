@@ -10,6 +10,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -41,6 +42,41 @@ class SegmentGrouperTest {
     var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
 
     assertThat(grouper.accept(keyframeAt(0))).isEqualTo(NOTHING_CLOSED);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, true", "true, false", "false, true", "false, false"})
+  @DisplayName("Should discard dependent pictures when their reference is at the advertised end")
+  void shouldDiscardDependentPicturesWhenTheirReferenceIsAtTheAdvertisedEnd(
+      boolean keyframe, boolean sameFragment) {
+    var grouper =
+        new SegmentGrouper(
+            SIX_SECOND_INTERVALS.withAdvertisedEnd(Duration.ofSeconds(4)), 0, SEGMENT_CAP);
+    var first = keyframeAt(0);
+    var reference =
+        Sample.builder()
+            .decodeTime(4_000)
+            .duration(100)
+            .flags(keyframe ? IsoBoxes.SYNC_SAMPLE_FLAGS : IsoBoxes.NON_SYNC_SAMPLE_FLAGS)
+            .build();
+    var leading =
+        Sample.builder()
+            .decodeTime(4_100)
+            .compositionOffset(-200)
+            .duration(100)
+            .flags(IsoBoxes.NON_SYNC_SAMPLE_FLAGS)
+            .build();
+    var groups =
+        sameFragment
+            ? List.of(List.of(reference, leading))
+            : List.of(List.of(reference), List.of(leading));
+
+    grouper.accept(first);
+    groups.forEach(
+        samples ->
+            grouper.accept(fragmentBuilder().tracks(first.tracks()).videoSamples(samples).build()));
+
+    assertThat(grouper.finish()).contains(segment(0, first));
   }
 
   @Test

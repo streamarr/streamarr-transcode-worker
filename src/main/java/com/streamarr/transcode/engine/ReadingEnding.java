@@ -30,6 +30,9 @@ sealed interface ReadingEnding {
   /** The output ended on a box boundary, and FFmpeg then outlived the grace period. */
   record EndOfOutputWithoutExit() implements ReadingEnding {}
 
+  /** Every advertised segment is complete, although the source may continue. */
+  record AdvertisedEnd() implements ReadingEnding {}
+
   /** The output ended inside a box or after a moof with no mdat. */
   record TruncatedOutput(Failed failure) implements ReadingEnding {}
 

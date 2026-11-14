@@ -272,6 +272,10 @@ final class SegmentAssembler {
     return closed;
   }
 
+  boolean videoHasPassed(long sequenceNumber) {
+    return video.hasPassed(sequenceNumber);
+  }
+
   private boolean hasPassed(long sequenceNumber) {
     return audio.hasPassed(sequenceNumber) || video.hasPassed(sequenceNumber);
   }
