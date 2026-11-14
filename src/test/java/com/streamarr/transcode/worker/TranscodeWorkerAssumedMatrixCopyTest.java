@@ -20,12 +20,15 @@ import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.RecordingEdits;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
@@ -35,7 +38,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 @Tag("UnitTest")
@@ -45,16 +48,22 @@ class TranscodeWorkerAssumedMatrixCopyTest {
   @TempDir Path tempDir;
 
   @ParameterizedTest
-  @EnumSource(
-      value = MatrixCoefficients.class,
-      names = {"MATRIX_COEFFICIENTS_BT709", "MATRIX_COEFFICIENTS_SMPTE170M"})
+  @CsvSource({
+    "MATRIX_COEFFICIENTS_BT709, false",
+    "MATRIX_COEFFICIENTS_SMPTE170M, false",
+    "MATRIX_COEFFICIENTS_BT709, true",
+    "MATRIX_COEFFICIENTS_SMPTE170M, true"
+  })
   @DisplayName("Should deliver the assumed matrix when an H.264 copy lists its rewrite")
-  void shouldDeliverTheAssumedMatrixWhenAnH264CopyListsItsRewrite(MatrixCoefficients matrix)
-      throws Exception {
+  void shouldDeliverTheAssumedMatrixWhenAnH264CopyListsItsRewrite(
+      MatrixCoefficients matrix, boolean trailingBytes) throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
     var recording = recording(ENCODED_RECORDING);
     var runtime = new ScriptedWorkerRuntime();
-    var launcher = ScriptedProcessLauncher.writing(recording.file());
+    var output = bytesOf(recording.file());
+    var delivered = trailingBytes ? withSpsTrailingBytes(output) : output;
+    var launcher =
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(delivered).build());
     var job = copyJobBuilderFor(recording);
     job.getDecisionBuilder()
         .getVideoBuilder()
@@ -86,6 +95,16 @@ class TranscodeWorkerAssumedMatrixCopyTest {
               : "6e636c7800010001000600";
       assertThat(uploaded.toByteArray()).containsSubsequence(HexFormat.of().parseHex(colour));
     }
+  }
+
+  private static byte[] withSpsTrailingBytes(byte[] output) {
+    var record = new String(output, StandardCharsets.ISO_8859_1).indexOf("avcC");
+    assertThat(record).isPositive();
+    var length = Short.toUnsignedInt(ByteBuffer.wrap(output).getShort(record + 10));
+    var sps = Arrays.copyOfRange(output, record + 12, record + 12 + length + 1);
+    sps[length] = (byte) 0xA5;
+    var sample = ByteBuffer.allocate(4 + sps.length).putInt(sps.length).put(sps).array();
+    return RecordingEdits.withBytesAfterTheFirstVideoSample(output, sample);
   }
 
   @Test

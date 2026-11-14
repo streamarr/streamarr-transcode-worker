@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.Set;
 import lombok.Builder;
 
@@ -19,7 +20,12 @@ final class AvcSequenceParameterSet {
 
   @Builder
   private record ColourLayout(
-      int start, int end, boolean addsVui, int videoFormat, ColourDescription colour) {}
+      int start,
+      int end,
+      int stopBit,
+      boolean addsVui,
+      int videoFormat,
+      ColourDescription colour) {}
 
   static ColourDescription colourDescriptionOf(byte[] nalUnit) {
     return colourLayout(new RbspBits(nalUnit)).colour();
@@ -46,8 +52,8 @@ final class AvcSequenceParameterSet {
     }
 
     // Retain the unmodified syntax through rbsp_stop_one_bit, then align the new length.
-    output.copy(source.bytes, layout.end(), source.stopBit() + 1);
-    return output.nalUnit();
+    output.copy(source.bytes, layout.end(), layout.stopBit() + 1);
+    return output.nalUnit(source.trailingBytesAfter(layout.stopBit()));
   }
 
   private static ColourLayout colourLayout(RbspBits source) {
@@ -79,9 +85,10 @@ final class AvcSequenceParameterSet {
     var start = source.position;
     var defaultColour = ColourDescription.builder().primaries(2).transfer(2).matrix(2).build();
     if (source.bits(1) == 0) {
-      requireTrailingBits(source);
+      var stopBit = trailingBits(source);
       return ColourLayout.builder()
           .start(start)
+          .stopBit(stopBit)
           .end(start + 1)
           .addsVui(true)
           .videoFormat(5)
@@ -100,9 +107,10 @@ final class AvcSequenceParameterSet {
 
     var end = source.position;
     skipRemainingVui(source);
-    requireTrailingBits(source);
+    var stopBit = trailingBits(source);
     return ColourLayout.builder()
         .start(start)
+        .stopBit(stopBit)
         .end(end)
         .videoFormat(videoFormat)
         .colour(colour)
@@ -182,10 +190,15 @@ final class AvcSequenceParameterSet {
     return true;
   }
 
-  private static void requireTrailingBits(RbspBits source) {
-    if (source.position != source.stopBit()) {
+  // Locate the stop bit from the syntax, not the last set bit: decoders may ignore bytes
+  // following the aligned RBSP. Keep those bytes after the rewritten RBSP as well.
+  private static int trailingBits(RbspBits source) {
+    var stopBit = source.position;
+    if (source.bits(1) != 1 || source.bits((-source.position) & 7) != 0) {
       throw new RbspBits.EndOfSequenceParameterSet();
     }
+
+    return stopBit;
   }
 
   static boolean codesFields(byte[] nalUnit) {
@@ -271,9 +284,11 @@ final class AvcSequenceParameterSet {
     private static final int LONGEST_EXP_GOLOMB_PREFIX = 31;
 
     private final byte[] bytes;
+    private final byte[] original;
     private int position;
 
     RbspBits(byte[] nalUnit) {
+      this.original = nalUnit;
       this.bytes = withoutEmulationPrevention(nalUnit);
     }
 
@@ -293,6 +308,24 @@ final class AvcSequenceParameterSet {
       return payload.toByteArray();
     }
 
+    byte[] trailingBytesAfter(int stopBit) {
+      var remaining = stopBit / 8 + 1;
+      var offset = 0;
+      var zeros = 0;
+      while (remaining > 0) {
+        var value = original[offset++];
+        if (zeros >= 2 && value == 3) {
+          zeros = 0;
+          continue;
+        }
+
+        zeros = value == 0 ? zeros + 1 : 0;
+        remaining--;
+      }
+
+      return Arrays.copyOfRange(original, offset, original.length);
+    }
+
     int bits(int count) {
       var value = 0;
       for (var bit = 0; bit < count; bit++) {
@@ -305,16 +338,6 @@ final class AvcSequenceParameterSet {
       }
 
       return value;
-    }
-
-    int stopBit() {
-      if (bytes.length == 0 || bytes[bytes.length - 1] == 0) {
-        throw new EndOfSequenceParameterSet();
-      }
-
-      return bytes.length * 8
-          - Integer.numberOfTrailingZeros(Byte.toUnsignedInt(bytes[bytes.length - 1]))
-          - 1;
     }
 
     void skip(int count) {
@@ -377,7 +400,7 @@ final class AvcSequenceParameterSet {
       }
     }
 
-    byte[] nalUnit() {
+    byte[] nalUnit(byte[] trailingBytes) {
       if (filled != 0) {
         bytes.write(current << (8 - filled));
       }
@@ -394,6 +417,7 @@ final class AvcSequenceParameterSet {
         zeros = value == 0 ? zeros + 1 : 0;
       }
 
+      escaped.writeBytes(trailingBytes);
       return escaped.toByteArray();
     }
   }
