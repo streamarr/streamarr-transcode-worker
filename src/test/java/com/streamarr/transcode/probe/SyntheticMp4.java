@@ -17,7 +17,8 @@ import lombok.Singular;
  * an mdat between the ftyp and the moov, or a co64 of that chunk with {@code largeChunkOffsets}. A
  * track with a {@code largeChunkOffset} has a co64 of one chunk at that offset instead. With {@code
  * compactSampleSizes}, the sizes take fields of {@code compactFieldBits} bits in an stz2, 8 unless
- * set.
+ * set. A track writes each of its {@code sampleToGroups} as an sbgp after its stss. With {@code
+ * randomAccessDescription}, an sgpd that holds one 'rap ' description precedes them.
  */
 @Builder
 record SyntheticMp4(
@@ -35,6 +36,8 @@ record SyntheticMp4(
     int compositionOffset,
     @Singular List<CompositionRun> compositionRuns,
     List<Long> syncSamples,
+    @Singular List<SampleToGroup> sampleToGroups,
+    boolean randomAccessDescription,
     int editListVersion,
     @Singular List<Edit> edits,
     boolean fragmented,
@@ -50,6 +53,8 @@ record SyntheticMp4(
 
   /** The track ID of {@code secondTrack}, whose own movie-level fields the file ignores. */
   static final long SECOND_TRACK_ID = 2;
+
+  static final String RANDOM_ACCESS = "rap ";
 
   /** One elst entry; {@code rate} is a 16.16 fixed-point number. */
   record Edit(long duration, long mediaTime, int rate) {
@@ -68,6 +73,32 @@ record SyntheticMp4(
    * writes them in place of its single {@code sampleCount} entry.
    */
   record DurationRun(int count, int duration) {}
+
+  /**
+   * One sbgp (ISO/IEC 14496-12, 8.9.2): its version, its grouping type, and its entries in decode
+   * order. A version 1 box carries a grouping type parameter of 0.
+   */
+  @Builder
+  record SampleToGroup(int version, String groupingType, @Singular List<GroupRun> runs) {
+
+    private byte[] box() {
+      var fields = new ArrayList<byte[]>();
+      fields.add(ascii(groupingType));
+      if (version == 1) {
+        fields.add(int32(0));
+      }
+
+      fields.add(int32(runs.size()));
+      runs.forEach(run -> fields.add(concat(int32(run.count()), int32(run.descriptionIndex()))));
+      return fullBox("sbgp", version, fields.toArray(byte[][]::new));
+    }
+  }
+
+  /**
+   * One sbgp entry: {@code count} samples whose group description index is {@code
+   * descriptionIndex}, where 0 means that the samples belong to no group.
+   */
+  record GroupRun(int count, int descriptionIndex) {}
 
   byte[] bytes() {
     var fileType = box("ftyp", ascii("isom"), int32(0));
@@ -132,6 +163,13 @@ record SyntheticMp4(
       syncSamples.forEach(sample -> entries.add(int32(sample.intValue())));
       sampleTable.add(fullBox("stss", 0, entries.toArray(byte[][]::new)));
     }
+
+    if (randomAccessDescription) {
+      // Version 1, default length 1: one description whose leading-sample fields are 0.
+      sampleTable.add(fullBox("sgpd", 1, ascii(RANDOM_ACCESS), int32(1), int32(1), new byte[] {0}));
+    }
+
+    sampleToGroups.forEach(group -> sampleTable.add(group.box()));
 
     var media =
         box(

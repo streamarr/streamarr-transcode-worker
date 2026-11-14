@@ -44,6 +44,11 @@ final class Mp4SampleTables {
   static List<Run> runs(ByteBuffer box) {
     // ctts version 0 declares unsigned offsets; FFmpeg reads every version as signed.
     box.getInt();
+    return runEntries(box);
+  }
+
+  /** The entry count at the buffer's position, then that many runs. */
+  static List<Run> runEntries(ByteBuffer box) {
     var entries = Integer.toUnsignedLong(box.getInt());
     var runs = new ArrayList<Run>();
     for (long i = 0; i < entries; i++) {

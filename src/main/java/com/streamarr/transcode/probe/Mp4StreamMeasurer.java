@@ -550,6 +550,8 @@ final class Mp4StreamMeasurer {
         }
       }
 
+      Mp4RandomAccessGroup.members(sampleTable, count).stream()
+          .forEach(sample -> sync[sample] = true);
       return sync;
     }
 

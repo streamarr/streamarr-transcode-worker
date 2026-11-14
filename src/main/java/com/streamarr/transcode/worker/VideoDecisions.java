@@ -2,8 +2,10 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.DeinterlaceOutput;
 import build.buf.gen.streamarr.transcode.v1.FieldOrder;
+import build.buf.gen.streamarr.transcode.v1.MatrixCoefficients;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
+import com.streamarr.transcode.engine.AssumedSourceMatrix;
 import com.streamarr.transcode.engine.CodecFamily;
 import com.streamarr.transcode.engine.Deinterlace;
 import com.streamarr.transcode.engine.TranscodeMode;
@@ -78,8 +80,8 @@ final class VideoDecisions {
   private static VideoDecision.Copy copy(build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
     if (carriesEncodeValues(video)) {
       throw new InvalidJobSpecificationException(
-          "A stream copy carries a codec profile, tier, level, deinterlace instruction or"
-              + " instruction to hold the last frame");
+          "A stream copy carries a codec profile, tier, level, deinterlace instruction,"
+              + " instruction to hold the last frame or assumed source matrix");
     }
 
     if (video.hasSourceDynamicRange()) {
@@ -108,7 +110,9 @@ final class VideoDecisions {
                 .VIDEO_CODEC_TIER_UNSPECIFIED_VALUE
         || video.hasLevel()
         || video.hasDeinterlace()
-        || video.getHoldLastFrameToAdvertisedEnd();
+        || video.getHoldLastFrameToAdvertisedEnd()
+        || video.getAssumedSourceMatrixValue()
+            != MatrixCoefficients.MATRIX_COEFFICIENTS_UNSPECIFIED_VALUE;
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -143,6 +147,15 @@ final class VideoDecisions {
               + outputDynamicRange.compatibleBase());
     }
 
+    var assumedSourceMatrix = assumedSourceMatrix(video.getAssumedSourceMatrix());
+    if (assumedSourceMatrix.isPresent()
+        && !AssumedSourceMatrix.isAssumableFor(sourceDynamicRange)) {
+      throw new InvalidJobSpecificationException(
+          "Only an encode of an SDR or untagged source assumes a source matrix, and this source's"
+              + " compatible base is "
+              + sourceDynamicRange.compatibleBase());
+    }
+
     var profile = codecProfile(video.getCodecProfile());
     if (!familyOf(profile).equals(video.getCodecFamily())) {
       throw new InvalidJobSpecificationException(
@@ -174,7 +187,31 @@ final class VideoDecisions {
         .softwareEncoder(video.getSoftwareEncoder())
         .outputPictureFormat(pictureFormat)
         .staticHdrMetadata(staticHdrMetadata)
+        .assumedSourceMatrix(assumedSourceMatrix)
         .build();
+  }
+
+  // The contract lets an encode assume BT.709 or SMPTE 170M, whose matrix is BT.601's.
+  private static Optional<AssumedSourceMatrix> assumedSourceMatrix(MatrixCoefficients matrix) {
+    return switch (matrix) {
+      case MATRIX_COEFFICIENTS_UNSPECIFIED -> Optional.empty();
+      case MATRIX_COEFFICIENTS_BT709 -> Optional.of(AssumedSourceMatrix.BT709);
+      case MATRIX_COEFFICIENTS_SMPTE170M -> Optional.of(AssumedSourceMatrix.BT601);
+      case MATRIX_COEFFICIENTS_IDENTITY,
+          MATRIX_COEFFICIENTS_FCC,
+          MATRIX_COEFFICIENTS_BT470BG,
+          MATRIX_COEFFICIENTS_SMPTE240M,
+          MATRIX_COEFFICIENTS_YCGCO,
+          MATRIX_COEFFICIENTS_BT2020_NCL,
+          MATRIX_COEFFICIENTS_BT2020_CL,
+          MATRIX_COEFFICIENTS_SMPTE2085,
+          MATRIX_COEFFICIENTS_CHROMA_DERIVED_NCL,
+          MATRIX_COEFFICIENTS_CHROMA_DERIVED_CL,
+          MATRIX_COEFFICIENTS_ICTCP,
+          UNRECOGNIZED ->
+          throw new InvalidJobSpecificationException(
+              "An encode assumes BT.709 or SMPTE 170M as its source's matrix, not " + matrix);
+    };
   }
 
   // An encode writes SDR, PQ or HLG without HDR10+ or Dolby Vision (ADR 0036).

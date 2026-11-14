@@ -7,6 +7,8 @@ import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
+import com.streamarr.transcode.probe.SyntheticMp4.GroupRun;
+import com.streamarr.transcode.probe.SyntheticMp4.SampleToGroup;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -14,6 +16,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -506,6 +509,229 @@ class Mp4SyncSampleReaderTest {
                 .build());
 
     assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  // FFmpeg's mov demuxer reads the sbgp boxes of grouping type 'rap ' (ISO/IEC 14496-12, 10.4) and
+  // gives the keyframe flag to every sample whose entry has a group description index other than
+  // 0, beside the samples that the stss lists. It reads no sgpd for that grouping type.
+  @Nested
+  @DisplayName("Random-Access Sample Group Tests")
+  class RandomAccessSampleGroupTests {
+
+    @Test
+    @DisplayName(
+        "Should list the random-access samples as keyframes when the sync-sample table lists only"
+            + " the first sample")
+    void shouldListRandomAccessSamplesAsKeyframesWhenSyncSampleTableListsOnlyFirstSample()
+        throws Exception {
+      // The group covers 8 of the 9 samples; the 9th sample belongs to no group.
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .sampleToGroup(
+                      randomAccessGroup()
+                          .run(new GroupRun(3, 0))
+                          .run(new GroupRun(1, 1))
+                          .run(new GroupRun(2, 0))
+                          .run(new GroupRun(1, 1))
+                          .run(new GroupRun(1, 0))
+                          .build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 300, 600));
+    }
+
+    @Test
+    @DisplayName(
+        "Should skip the grouping type parameter when the sample-to-group box is version 1")
+    void shouldSkipGroupingTypeParameterWhenSampleToGroupBoxIsVersionOne() throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .sampleToGroup(
+                      randomAccessGroup()
+                          .version(1)
+                          .run(new GroupRun(3, 0))
+                          .run(new GroupRun(1, 1))
+                          .build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 300));
+    }
+
+    // ISO/IEC 14496-12 defines versions 0 and 1. FFmpeg reads a box of any other version as
+    // version 0.
+    @Test
+    @DisplayName("Should read no grouping type parameter when the sample-to-group box is version 2")
+    void shouldReadNoGroupingTypeParameterWhenSampleToGroupBoxIsVersionTwo() throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .sampleToGroup(
+                      randomAccessGroup()
+                          .version(2)
+                          .run(new GroupRun(3, 0))
+                          .run(new GroupRun(1, 1))
+                          .build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 300));
+    }
+
+    @Test
+    @DisplayName(
+        "Should list only the sync samples when the sample-to-group box has another grouping type")
+    void shouldListOnlySyncSamplesWhenSampleToGroupBoxHasAnotherGroupingType() throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .sampleToGroup(
+                      SampleToGroup.builder().groupingType("roll").run(new GroupRun(9, 1)).build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0));
+    }
+
+    // FFmpeg replaces the table of an earlier 'rap ' box with each later one, except one that has
+    // no entries.
+    @Test
+    @DisplayName(
+        "Should read the last random-access box that has entries when the track holds several")
+    void shouldReadLastRandomAccessBoxThatHasEntriesWhenTrackHoldsSeveral() throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .sampleToGroup(
+                      randomAccessGroup()
+                          .run(new GroupRun(3, 0))
+                          .run(new GroupRun(1, 1))
+                          .run(new GroupRun(2, 0))
+                          .run(new GroupRun(1, 1))
+                          .build())
+                  .sampleToGroup(
+                      randomAccessGroup().run(new GroupRun(6, 0)).run(new GroupRun(1, 1)).build())
+                  .sampleToGroup(randomAccessGroup().build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 600));
+    }
+
+    // FFmpeg moves to the next entry only after it has counted as many samples as the entry
+    // declares, so an entry that declares no samples covers every later sample.
+    @Test
+    @DisplayName(
+        "Should list every later sample as a keyframe when a random-access entry counts no samples")
+    void shouldListEveryLaterSampleAsKeyframeWhenRandomAccessEntryCountsNoSamples()
+        throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .sampleToGroup(
+                      randomAccessGroup()
+                          .run(new GroupRun(6, 0))
+                          .run(new GroupRun(0, 1))
+                          .run(new GroupRun(1, 0))
+                          .build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID))
+          .isEqualTo(keyframesAt(0, 600, 700, 800));
+    }
+
+    // The index is an unsigned 32-bit number. This one is above 2^31, and also above 65,536, where
+    // an index inside a movie fragment names a description of that fragment.
+    @Test
+    @DisplayName(
+        "Should list a random-access sample as a keyframe when the track has no group description")
+    void shouldListRandomAccessSampleAsKeyframeWhenTrackHasNoGroupDescription() throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .randomAccessDescription(false)
+                  .sampleToGroup(
+                      randomAccessGroup()
+                          .run(new GroupRun(3, 0))
+                          .run(new GroupRun(1, 0x8001_0001))
+                          .build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 300));
+    }
+
+    @Test
+    @DisplayName(
+        "Should require a packet scan when the sample-to-group box counts more entries than it"
+            + " holds")
+    void shouldRequirePacketScanWhenSampleToGroupBoxCountsMoreEntriesThanItHolds()
+        throws Exception {
+      var bytes =
+          nineSamplesSyncingFirst()
+              .sampleToGroup(randomAccessGroup().run(new GroupRun(3, 0)).build())
+              .build()
+              .bytes();
+      // The entry count follows the type, the version, the flags and the grouping type.
+      putInt32(bytes, indexOf(bytes, "sbgp") + 12, 2);
+
+      assertThat(Mp4SyncSampleReader.read(write(bytes), TRACK_ID)).isEqualTo(INCOMPLETE);
+    }
+
+    @Test
+    @DisplayName(
+        "Should list every sample when the track has a random-access group and no sync-sample"
+            + " table")
+    void shouldListEverySampleWhenTrackHasRandomAccessGroupAndNoSyncSampleTable() throws Exception {
+      var source =
+          write(
+              SyntheticMp4.builder()
+                  .mediaTimescale(1_000)
+                  .sampleDurations(3, 100)
+                  .sampleToGroup(
+                      randomAccessGroup().run(new GroupRun(1, 0)).run(new GroupRun(2, 1)).build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(keyframesAt(0, 100, 200));
+    }
+
+    // FFmpeg parses the packets of a video track whose stss is empty, and the parser decides which
+    // of them are keyframes.
+    @Test
+    @DisplayName(
+        "Should require a packet scan when the sync-sample table is empty beside a random-access"
+            + " group")
+    void shouldRequirePacketScanWhenSyncSampleTableIsEmptyBesideRandomAccessGroup()
+        throws Exception {
+      var source =
+          write(
+              nineSamplesSyncingFirst()
+                  .syncSamples(List.of())
+                  .sampleToGroup(randomAccessGroup().run(new GroupRun(9, 1)).build())
+                  .build());
+
+      assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+    }
+
+    /**
+     * Nine samples of 100 ms each, of which the stss lists only the first, and one 'rap ' group
+     * description.
+     */
+    private static SyntheticMp4.SyntheticMp4Builder nineSamplesSyncingFirst() {
+      return SyntheticMp4.builder()
+          .mediaTimescale(1_000)
+          .sampleDurations(9, 100)
+          .syncSamples(List.of(1L))
+          .randomAccessDescription(true);
+    }
+
+    private static SampleToGroup.SampleToGroupBuilder randomAccessGroup() {
+      return SampleToGroup.builder().groupingType(SyntheticMp4.RANDOM_ACCESS);
+    }
+
+    /** Keyframes in milliseconds, each of which presents at its decode time. */
+    private static Listed keyframesAt(long... times) {
+      return new Listed(
+          new TimeBase(1, 1_000),
+          Arrays.stream(times).mapToObj(time -> new KeyframeTime(time, time)).toList());
+    }
   }
 
   private static void putInt32(byte[] bytes, int offset, int value) {

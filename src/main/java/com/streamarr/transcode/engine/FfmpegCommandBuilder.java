@@ -1222,7 +1222,8 @@ public class FfmpegCommandBuilder {
     var colorConversion =
         switch (pictureConversion(job)) {
           case CONVERT_TO_BT709 ->
-              ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
+              assumedSourceMatrixOption(job)
+                  + ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
           case KEEP_THE_SOURCES_RANGE ->
               ":out_color_matrix=bt2020nc:out_range=tv:out_primaries=bt2020:out_transfer="
                   + hdrTransferOf(job).orElseThrow().ffmpegName();
@@ -1473,6 +1474,20 @@ public class FfmpegCommandBuilder {
                     "-color_range",
                     "tv"))
         .orElse(List.of());
+  }
+
+  // swscale reads a frame that names no matrix as BT.601 at every picture size. The option makes
+  // it read every frame of the source with the matrix that the job assumes (ADR 0013).
+  private static String assumedSourceMatrixOption(TranscodeJob job) {
+    if (!(job.request().transcodeDecision().videoDecision()
+        instanceof VideoDecision.Encode encode)) {
+      return "";
+    }
+
+    return encode
+        .assumedSourceMatrix()
+        .map(matrix -> ":in_color_matrix=" + matrix.scaleFilterName())
+        .orElse("");
   }
 
   private static Optional<HdrTransfer> hdrTransferOf(TranscodeJob job) {

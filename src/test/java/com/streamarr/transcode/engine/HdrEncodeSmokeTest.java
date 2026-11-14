@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -35,7 +36,8 @@ import org.junit.jupiter.api.io.TempDir;
  * keyframe every second. The profile 5 source is the synthetic {@code dolby-vision-5-dvh1.mp4}
  * sample-entry fixture, whose RPUs come from dovi_tool's generator: these tests check the reshape's
  * plumbing, not its colours. Each job asks for the software encoder, which carries the encode
- * features also on a host whose codec family resolves to a hardware encoder.
+ * features also on a host whose codec family resolves to a hardware encoder. The SDR encodes that
+ * assume a source matrix (ADR 0013) run here too, on a source that names none.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Encode Smoke Tests")
@@ -72,6 +74,7 @@ class HdrEncodeSmokeTest {
   private static Path sdr10;
   private static Path fullRangeHdr10;
   private static Path bt709MatrixHdr10;
+  private static Path sdr10WithoutMatrix;
 
   @BeforeAll
   static void writeTheSources() throws Exception {
@@ -93,6 +96,11 @@ class HdrEncodeSmokeTest {
             "bt709-matrix-hdr10",
             List.of("-vf", "drawbox=c=0xC02060:t=fill,format=yuv420p10le"),
             "colorprim=bt2020:transfer=smpte2084:colormatrix=bt709");
+    sdr10WithoutMatrix =
+        encoded(
+            "sdr10-without-matrix",
+            List.of("-vf", "drawbox=c=0xC02060:t=fill,format=yuv420p10le"),
+            "range=limited");
   }
 
   @Test
@@ -131,19 +139,7 @@ class HdrEncodeSmokeTest {
           + " metadata when an HDR10 source encodes to AV1 HDR10")
   void shouldDeliverTenBitAv1WithThePqColourDescriptionAndTheJobsMetadataWhenEncodingAv1Hdr10()
       throws Exception {
-    var encode =
-        VideoDecision.Encode.builder()
-            .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
-            .sourceDynamicRange(range(VideoDynamicRange.CompatibleBase.PQ))
-            .outputDynamicRange(range(VideoDynamicRange.CompatibleBase.PQ))
-            .codecProfile(VideoCodecProfile.AV1_MAIN)
-            .tier(Optional.of(VideoCodecTier.MAIN))
-            .level(AV1_LEVEL)
-            .codecString(AV1_TEN_BIT_CODEC_STRING)
-            .softwareEncoder(true)
-            .outputPictureFormat(tenBit())
-            .staticHdrMetadata(Optional.of(SOURCE_METADATA))
-            .build();
+    var encode = av1Encode(range(VideoDynamicRange.CompatibleBase.PQ)).build();
 
     var probed = probed(encoded(hdr10, encode, 0).acceptedBytes());
 
@@ -160,6 +156,29 @@ class HdrEncodeSmokeTest {
             "side_data_type=Content light level metadata",
             "max_content=1000",
             "max_average=400");
+  }
+
+  @Test
+  @DisplayName("Should encode AV1 HDR10 when FFmpeg fails on a parameter that SVT-AV1 rejects")
+  void shouldEncodeAv1Hdr10WhenFfmpegFailsOnAParameterThatSvtAv1Rejects() throws Exception {
+    var encode = av1Encode(range(VideoDynamicRange.CompatibleBase.PQ)).build();
+
+    var delivered = deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(hdr10, encode);
+
+    assertThat(probed(delivered)).contains("color_transfer=smpte2084");
+  }
+
+  @Test
+  @DisplayName("Should encode AV1 HLG when FFmpeg fails on a parameter that SVT-AV1 rejects")
+  void shouldEncodeAv1HlgWhenFfmpegFailsOnAParameterThatSvtAv1Rejects() throws Exception {
+    var encode =
+        av1Encode(range(VideoDynamicRange.CompatibleBase.HLG))
+            .staticHdrMetadata(Optional.empty())
+            .build();
+
+    var delivered = deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(hlg, encode);
+
+    assertThat(probed(delivered)).contains("color_transfer=arib-std-b67");
   }
 
   @Test
@@ -256,12 +275,48 @@ class HdrEncodeSmokeTest {
                     0)
                 .acceptedBytes());
 
-    assertThat(delivered).hasSameSizeAs(source);
-    for (var component = 0; component < source.length; component++) {
-      assertThat(delivered[component])
-          .as("component %d", component)
-          .isCloseTo(source[component], within(4));
-    }
+    assertCloseSamples(delivered, source);
+  }
+
+  // swscale reads a frame that names no matrix as BT.601. Converted from BT.601 to BT.709, this
+  // magenta's luma falls by about 57 code values (out of 1023).
+  @Test
+  @DisplayName(
+      "Should deliver the source's samples as BT.709 when an SDR source that names no matrix"
+          + " encodes with BT.709 assumed")
+  void
+      shouldDeliverTheSourcesSamplesAsBt709WhenAnSdrSourceThatNamesNoMatrixEncodesWithBt709Assumed()
+          throws Exception {
+    var source = Files.readAllBytes(sdr10WithoutMatrix);
+    assertThat(probed(source)).contains("color_space=unknown");
+
+    var delivered =
+        encoded(sdr10WithoutMatrix, sdrEncodeAssuming(AssumedSourceMatrix.BT709), 0)
+            .acceptedBytes();
+
+    assertThat(probed(delivered)).contains("color_space=bt709");
+    assertCloseSamples(
+        centreSamples(delivered, "yuv444p10le"), centreSamples(source, "yuv444p10le"));
+  }
+
+  // FFmpeg decodes a stream that names no matrix as BT.601, so centreRgb reads the source's
+  // colours as the job assumes them.
+  @Test
+  @DisplayName(
+      "Should deliver the source's BT.601 colours as BT.709 when an SDR source that names no matrix"
+          + " encodes with BT.601 assumed")
+  void
+      shouldDeliverTheSourcesBt601ColoursAsBt709WhenAnSdrSourceThatNamesNoMatrixEncodesWithBt601Assumed()
+          throws Exception {
+    var source = Files.readAllBytes(sdr10WithoutMatrix);
+    assertThat(probed(source)).contains("color_space=unknown");
+
+    var delivered =
+        encoded(sdr10WithoutMatrix, sdrEncodeAssuming(AssumedSourceMatrix.BT601), 0)
+            .acceptedBytes();
+
+    assertThat(probed(delivered)).contains("color_space=bt709");
+    assertCloseSamples(centreRgb(delivered), centreRgb(source));
   }
 
   @Test
@@ -298,6 +353,21 @@ class HdrEncodeSmokeTest {
         .isEqualTo(staticMetadataLines(probed(fromStart.acceptedBytes())));
   }
 
+  // Every delivered sample within 4 code values (out of 1023) of the source's.
+  private static void assertCloseSamples(int[] delivered, int[] source) {
+    assertThat(delivered).hasSameSizeAs(source);
+    for (var sample = 0; sample < source.length; sample++) {
+      assertThat(delivered[sample]).as("sample %d", sample).isCloseTo(source[sample], within(4));
+    }
+  }
+
+  private static VideoDecision.Encode sdrEncodeAssuming(AssumedSourceMatrix matrix) {
+    return hevcEncode(VideoDynamicRange.sdr())
+        .staticHdrMetadata(Optional.empty())
+        .assumedSourceMatrix(Optional.of(matrix))
+        .build();
+  }
+
   private static VideoDecision.Encode profile5Encode() {
     var profile5 =
         new VideoDynamicRange(
@@ -323,6 +393,20 @@ class HdrEncodeSmokeTest {
         .tier(Optional.of(VideoCodecTier.MAIN))
         .level(HEVC_LEVEL)
         .codecString(HEVC_MAIN_10_CODEC_STRING)
+        .softwareEncoder(true)
+        .outputPictureFormat(tenBit())
+        .staticHdrMetadata(Optional.of(SOURCE_METADATA));
+  }
+
+  private static VideoDecision.Encode.EncodeBuilder av1Encode(VideoDynamicRange output) {
+    return VideoDecision.Encode.builder()
+        .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
+        .sourceDynamicRange(output)
+        .outputDynamicRange(output)
+        .codecProfile(VideoCodecProfile.AV1_MAIN)
+        .tier(Optional.of(VideoCodecTier.MAIN))
+        .level(AV1_LEVEL)
+        .codecString(AV1_TEN_BIT_CODEC_STRING)
         .softwareEncoder(true)
         .outputPictureFormat(tenBit())
         .staticHdrMetadata(Optional.of(SOURCE_METADATA));
@@ -366,13 +450,46 @@ class HdrEncodeSmokeTest {
             .toURI());
   }
 
-  // The attempt's deliveries, after the producer accepted its output against the job.
   private static RecordingSegmentSink encoded(
       Path source, VideoDecision.Encode encode, int firstSegment) {
-    var sink = new RecordingSegmentSink();
-    var request = request(source, encode, firstSegment);
+    return deliveriesOf(
+        engine(new ProcessBuilderLauncher()), request(source, encode, firstSegment));
+  }
 
-    var producer = engine().startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
+  // FFmpeg's libsvtav1 wrapper logs a parameter that SVT-AV1 rejects and encodes without it. With
+  // err_detect explode on the video encoder, the wrapper fails instead, so the attempt completes
+  // only when SVT-AV1 takes every parameter that the job gives it.
+  private static byte[] deliveredWhenFfmpegFailsOnARejectedSvtAv1Parameter(
+      Path source, VideoDecision.Encode encode) {
+    var launcher = new ProcessBuilderLauncher();
+    var encodes = new AtomicInteger();
+    ProcessLauncher failingOnARejectedParameter =
+        (command, jobAttemptId) -> {
+          var parameters = command.indexOf("-svtav1-params");
+          if (parameters < 0) {
+            return launcher.launch(command, jobAttemptId);
+          }
+
+          encodes.incrementAndGet();
+          var failing = new ArrayList<>(command);
+          failing.addAll(parameters + 2, List.of("-err_detect:v", "explode"));
+          return launcher.launch(failing, jobAttemptId);
+        };
+
+    var delivered =
+        deliveriesOf(engine(failingOnARejectedParameter), request(source, encode, 0))
+            .acceptedBytes();
+
+    assertThat(encodes).as("the FFmpeg processes that SVT-AV1 encoded in").hasValue(1);
+    return delivered;
+  }
+
+  // The attempt's deliveries, after the producer accepted its output against the job.
+  private static RecordingSegmentSink deliveriesOf(
+      FfmpegTranscodeEngine engine, TranscodeRequest request) {
+    var sink = new RecordingSegmentSink();
+
+    var producer = engine.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
     return sink;
@@ -408,11 +525,11 @@ class HdrEncodeSmokeTest {
         .build();
   }
 
-  private static FfmpegTranscodeEngine engine() {
+  private static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
         .capabilityService(DetectedCapabilities.realCapabilities())
-        .launcher(new ProcessBuilderLauncher())
+        .launcher(launcher)
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
   }
@@ -499,6 +616,11 @@ class HdrEncodeSmokeTest {
   // The G, B and R planes of the first frame's centre 2x2 pixels, decoded to 10-bit RGB from the
   // colour description that the stream declares.
   private static int[] centreRgb(byte[] media) throws Exception {
+    return centreSamples(media, "gbrp10le");
+  }
+
+  // The planes of the first frame's centre 2x2 pixels in the 10-bit pixel format.
+  private static int[] centreSamples(byte[] media, String pixelFormat) throws Exception {
     var file = Files.createTempFile(root, "colour", ".mp4");
     Files.write(file, media);
     var process =
@@ -512,22 +634,22 @@ class HdrEncodeSmokeTest {
                 "-frames:v",
                 "1",
                 "-vf",
-                "crop=2:2:32:18,format=gbrp10le",
+                "crop=2:2:32:18,format=" + pixelFormat,
                 "-f",
                 "rawvideo",
                 "-")
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start();
-    var samples = process.getInputStream().readAllBytes();
+    var bytes = process.getInputStream().readAllBytes();
     assertThat(process.waitFor(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS)).isTrue();
     assertThat(process.exitValue()).isZero();
-    var buffer = ByteBuffer.wrap(samples).order(ByteOrder.LITTLE_ENDIAN);
-    var rgb = new int[samples.length / 2];
-    for (var index = 0; index < rgb.length; index++) {
-      rgb[index] = Short.toUnsignedInt(buffer.getShort());
+    var buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+    var samples = new int[bytes.length / 2];
+    for (var index = 0; index < samples.length; index++) {
+      samples[index] = Short.toUnsignedInt(buffer.getShort());
     }
 
-    return rgb;
+    return samples;
   }
 
   // The largest luma sample of any decoded frame, in the stream's bit depth. The metadata key is
