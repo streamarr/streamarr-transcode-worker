@@ -981,7 +981,7 @@ class FfprobeExecutorKeyframeTest {
             entry(3, Duration.ofMillis(5_016)));
     assertThat(ffprobe.packetScanArguments())
         .containsSubsequence("-map", "0:0", "-map", "0:1", "-map", "0:3", "-c", "copy");
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(1);
   }
 
@@ -1111,7 +1111,7 @@ class FfprobeExecutorKeyframeTest {
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
     assertThat(scannedEnds(report)).containsExactly(entry(0, Duration.ofNanos(3_981_555_667L)));
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(1);
   }
 
@@ -1161,7 +1161,7 @@ class FfprobeExecutorKeyframeTest {
     var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
 
     assertThat(scannedEnds(report)).isEmpty();
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(2);
   }
 
@@ -1217,7 +1217,7 @@ class FfprobeExecutorKeyframeTest {
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
     assertThat(scannedEnds(report)).isEmpty();
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(2);
   }
 
@@ -1338,7 +1338,7 @@ class FfprobeExecutorKeyframeTest {
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
     assertThat(scannedEnds(report)).isEmpty();
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(1);
   }
 
@@ -1357,7 +1357,8 @@ class FfprobeExecutorKeyframeTest {
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
 
-    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.getResult().getFailure())
+        .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   @Test
@@ -2329,7 +2330,7 @@ class FfprobeExecutorKeyframeTest {
   // The end that the scan reports for each source stream, by stream index, in the report's order.
   private static Map<Integer, Duration> scannedEnds(ProbeAttemptReport report) {
     var ends = new LinkedHashMap<Integer, Duration>();
-    for (var end : report.result().getMedia().getStreamEndsList()) {
+    for (var end : report.getResult().getMedia().getStreamEndsList()) {
       ends.put(
           end.getStreamIndex(),
           Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()));

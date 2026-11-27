@@ -80,7 +80,6 @@ import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.probe.FfprobeExecutor;
-import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.worker.support.FfprobePackets;
 import com.streamarr.transcode.worker.support.FfprobePackets.Packet;
 import com.streamarr.transcode.worker.support.ReceivedProbeReports;
@@ -1126,7 +1125,7 @@ class WorkerMediaSmokeTest {
     assertThat(listedEnds)
         .as("the video stream and at least one audio stream")
         .hasSizeGreaterThanOrEqualTo(2)
-        .containsKey(report.result().getMedia().getKeyframes().getPositions().getStreamIndex());
+        .containsKey(report.getResult().getMedia().getKeyframes().getPositions().getStreamIndex());
     assertThat(scannedEnds(report)).isEqualTo(listedEnds);
   }
 
@@ -10420,7 +10419,7 @@ class WorkerMediaSmokeTest {
   // The end that the scan reports for each source stream, by stream index.
   private static Map<Integer, Duration> scannedEnds(ProbeAttemptReport report) {
     var ends = new LinkedHashMap<Integer, Duration>();
-    for (var end : report.result().getMedia().getStreamEndsList()) {
+    for (var end : report.getResult().getMedia().getStreamEndsList()) {
       ends.put(
           end.getStreamIndex(),
           Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()));
