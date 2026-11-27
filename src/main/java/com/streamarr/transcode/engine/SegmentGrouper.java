@@ -15,7 +15,8 @@ import lombok.NonNull;
  * grid. A keyframe that opens the next segment closes the open one, even inside a fragment, and the
  * end of the stream closes the last; segments below the start sequence number are preroll and are
  * never returned. A keyframe that skips a segment number closes the open segment and ends the
- * grouping.
+ * grouping. Video stops before the first sample at or after the job's advertised end in decode
+ * order, including any later leading pictures that could depend on that sample.
  */
 final class SegmentGrouper {
 
@@ -27,6 +28,7 @@ final class SegmentGrouper {
   private long openVideoFragmentBytes;
   private OptionalLong openSequenceNumber = OptionalLong.empty();
   private OptionalLong lastKeyframeTime = OptionalLong.empty();
+  private boolean videoCutAtAdvertisedEnd;
   private boolean ended;
 
   /**
@@ -68,7 +70,11 @@ final class SegmentGrouper {
    */
   GroupingOutcome accept(@NonNull Fragment fragment) {
     requireNotEnded();
-    var samples = CarriedSample.videoOf(fragment).toList();
+    var samples = videoBeforeAdvertisedEnd(fragment);
+    if (samples.isEmpty() && !fragment.videoSamples().isEmpty()) {
+      return new NothingClosed();
+    }
+
     var closed = new ArrayList<MediaSegment>();
     var firstOpenSample = 0;
     for (var index = 0; index < samples.size(); index++) {
@@ -99,6 +105,25 @@ final class SegmentGrouper {
     }
 
     return new SegmentsClosed(closed);
+  }
+
+  private List<CarriedSample> videoBeforeAdvertisedEnd(Fragment fragment) {
+    if (videoCutAtAdvertisedEnd) {
+      return List.of();
+    }
+
+    var samples = CarriedSample.videoOf(fragment).takeWhile(this::beforeAdvertisedEnd).toList();
+    videoCutAtAdvertisedEnd = samples.size() < fragment.videoSamples().size();
+    return samples;
+  }
+
+  private boolean beforeAdvertisedEnd(CarriedSample sample) {
+    var start = sample.sample().presentationTime();
+    var timescale = sample.fragment().tracks().video().orElseThrow().timescale();
+    return intervals
+        .advertisedEnd()
+        .map(end -> start < MediaTicks.firstTickAtOrAfter(end, timescale))
+        .orElse(true);
   }
 
   /**

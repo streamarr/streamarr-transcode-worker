@@ -722,6 +722,101 @@ class ProducerTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
   }
 
+  @Test
+  @DisplayName("Should finish and stop FFmpeg when the advertised end has been delivered")
+  void shouldFinishAndStopFfmpegWhenTheAdvertisedEndHasBeenDelivered() {
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var bytes = bytesOf(recording.file());
+    var process =
+        ScriptedProcess.builder()
+            .output(bytes)
+            .pauseAfter(bytes.length)
+            .exitTiming(ExitTiming.AT_QUIT)
+            .resumesOnQuit(true)
+            .build();
+    var producer = producerEndingAtTwelveSeconds(process, recording).start();
+
+    try {
+      assertThat(producer.outcome())
+          .succeedsWithin(OUTCOME_LIMIT)
+          .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+      assertThat(process.isAlive()).isFalse();
+      assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    } finally {
+      producer.stop();
+    }
+  }
+
+  @Test
+  @DisplayName("Should wait for acceptance when the last advertised segment is still uploading")
+  void shouldWaitForAcceptanceWhenTheLastAdvertisedSegmentIsStillUploading() {
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(recording.file()))
+            .exitTiming(ExitTiming.AT_QUIT)
+            .build();
+    sink.holding(2);
+    var producer = producerEndingAtTwelveSeconds(process, recording).start();
+
+    try {
+      sink.awaitHeldDelivery();
+      assertThat(producer.outcome()).isNotDone();
+      assertThat(process.isAlive()).isTrue();
+      sink.release();
+      assertThat(producer.outcome())
+          .succeedsWithin(OUTCOME_LIMIT)
+          .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+      assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+      assertThat(process.isAlive()).isFalse();
+    } finally {
+      producer.stop();
+    }
+  }
+
+  @Test
+  @DisplayName("Should fail delivery when the last advertised segment is refused")
+  void shouldFailDeliveryWhenTheLastAdvertisedSegmentIsRefused() {
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    sink.refusing(2);
+    var producer = producerEndingAtTwelveSeconds(process, recording).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+    assertThat(process.isAlive()).isFalse();
+  }
+
+  @Test
+  @DisplayName("Should settle only the stop when stopped during the last advertised segment upload")
+  void shouldSettleOnlyTheStopWhenStoppedDuringTheLastAdvertisedSegmentUpload() {
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(recording.file()))
+            .exitTiming(ExitTiming.AT_QUIT)
+            .build();
+    sink.holding(2);
+    var producer = producerEndingAtTwelveSeconds(process, recording).start();
+    sink.awaitHeldDelivery();
+
+    producer.stop();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.wasCancelled()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+    assertThat(process.isAlive()).isFalse();
+  }
+
+  private Producer.ProducerBuilder producerEndingAtTwelveSeconds(
+      ScriptedProcess process, Recording recording) {
+    return producerFor(process, recording)
+        .intervals(
+            SegmentIntervals.onExactStarts(6, new ExactSegmentStarts(List.of(0L, 6L), 1, 1))
+                .withAdvertisedEnd(Duration.ofSeconds(12)))
+        .mediaSegmentCount(2);
+  }
+
   // FFmpeg flushes an audio encoder only once the whole input has ended, so the encoder's last
   // frames of audio that ends long before the video arrive after their segment was delivered.
   @ParameterizedTest(name = "{0}")

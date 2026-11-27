@@ -133,6 +133,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -2830,6 +2831,48 @@ class WorkerMediaSmokeTest {
     assertThat(presentationTimes(keyframesOf(copiedPackets)))
         .usingElementComparator(WITHIN_PRINTED_ROUNDING)
         .containsExactlyElementsOf(presentationTimes(keyframesOf(sourcePackets)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should decode the last segment when copied open-GOP video ends at a keyframe with leading pictures")
+  void shouldDecodeTheLastSegmentWhenCopiedOpenGopVideoEndsAtAKeyframeWithLeadingPictures()
+      throws Exception {
+    var source = openGopHevcSource("mp4");
+    var job = sampleEntryCopyJob(source, "hvc1.1.6.L30.90");
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, 30_030L))
+        .setSegmentStartTimeBase(Fraction.newBuilder().setNumerator(1).setDenominator(30_000))
+        .getAdvertisedEndBuilder()
+        .setSeconds(1)
+        .setNanos(668_333_333);
+
+    var uploads = execute(engine(realCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    var content = uploads.contentOf(uploads.names());
+    assertDecodes(playable(content));
+    var decoded = decodedPictures(content);
+    var original = decodedPictures(Files.readAllBytes(source));
+    assertThat(decoded).hasSize(46);
+    assertThat(decoded.stream().map(DecodedPicture::md5).toList())
+        .containsExactlyElementsOf(
+            original.subList(0, decoded.size()).stream().map(DecodedPicture::md5).toList());
+
+    var replacement = job.clone().setJobAttemptId(toProto(UUID.randomUUID()));
+    replacement.getExecutionBuilder().setStartSequenceNumber(1);
+    var replacementUploads = execute(engine(realCapabilities()), root, replacement.build());
+
+    assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment1.m4s");
+    var replacementContent = replacementUploads.contentOf(replacementUploads.names());
+    assertThat(videoSamplesOf(replacementUploads, "segment1.m4s"))
+        .usingRecursiveFieldByFieldElementComparatorIgnoringFields("decodeTime")
+        .containsExactlyElementsOf(videoSamplesOf(uploads, "segment1.m4s"));
+    assertThat(decodedPictures(replacementContent).stream().map(DecodedPicture::md5).toList())
+        .containsExactlyElementsOf(
+            original.subList(30, 46).stream().map(DecodedPicture::md5).toList());
+    assertDecodes(playable(replacementContent));
   }
 
   // libx265 at 29.97 fps, whose open GOPs make each keyframe after the first a CRA picture with
@@ -5857,6 +5900,79 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"aac", "flac"})
+  @DisplayName(
+      "Should preserve copied audio and decode the last video segment when the job ends early")
+  void shouldPreserveCopiedAudioAndDecodeTheLastVideoSegmentWhenTheJobEndsEarly(String codec)
+      throws Exception {
+    var source =
+        codec.equals("flac") ? flacAudioEndsBeforeVideoSource() : audioEndsLongBeforeVideoSource();
+    var packets = videoPacketsOnZeroBasedTimeline(source);
+    var secondStart = packets.get(firstKeyframeIndexOfSegment(packets, 1)).presentationTime();
+    var end = packets.get(firstKeyframeIndexOfSegment(packets, 2)).presentationTime();
+    var endTime = Duration.ofNanos(end.movePointRight(9).longValueExact());
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec).setChannels(1);
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(2)
+        .addAllSegmentStartTicks(List.of(0L, secondStart.movePointRight(9).longValueExact()))
+        .setSegmentStartTimeBase(
+            Fraction.newBuilder().setNumerator(1).setDenominator(1_000_000_000))
+        .getAdvertisedEndBuilder()
+        .setSeconds(endTime.getSeconds())
+        .setNanos(endTime.getNano());
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    var uploaded = uploads.contentOf(uploads.names());
+    var movie = Mp4Samples.read(uploaded);
+    assertThat(movie.samplesOf(movie.videoTrack()))
+        .hasSize(288)
+        .allSatisfy(
+            sample ->
+                assertThat(sample.presentationTime() * 1_000_000_000L)
+                    .isLessThan(endTime.toNanos() * movie.videoTrack().timescale()));
+    assertThat(audioPacketHashes(playable(uploaded))).isEqualTo(audioPacketHashes(source));
+    assertDecodes(playable(uploaded));
+
+    var replacement = job.clone().setJobAttemptId(toProto(UUID.randomUUID()));
+    replacement.getExecutionBuilder().setStartSequenceNumber(1);
+    var replacementUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), replacement.build());
+
+    assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment1.m4s");
+    assertThat(videoSamplesOf(replacementUploads, "segment1.m4s"))
+        .containsExactlyElementsOf(videoSamplesOf(uploads, "segment1.m4s"));
+    var lastSegment = uploads.contentOf(List.of("init.mp4", "segment1.m4s"));
+    var replacementContent = replacementUploads.contentOf(replacementUploads.names());
+    assertThat(audioPacketHashes(playable(replacementContent)))
+        .isEqualTo(audioPacketHashes(playable(lastSegment)));
+    assertDecodes(playable(replacementContent));
+  }
+
+  private static List<String> audioPacketHashes(Path media) throws Exception {
+    var listing =
+        ffprobe(
+            List.of(
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "packet=data_hash",
+                "-show_data_hash",
+                "sha256"),
+            media);
+    var hashes =
+        Pattern.compile("SHA256:[a-f0-9]{64}")
+            .matcher(listing)
+            .results()
+            .map(MatchResult::group)
+            .toList();
+    assertThat(hashes).isNotEmpty();
+    return hashes;
+  }
+
   @Test
   @DisplayName(
       "Should upload a media segment after the audio's end while FFmpeg's output continues when the"
@@ -8038,7 +8154,7 @@ class WorkerMediaSmokeTest {
             .findFirst()
             .orElseThrow();
     return lines.stream()
-        .filter(line -> !line.startsWith("#") && !line.isBlank())
+        .filter(line -> line.startsWith("0,"))
         .map(line -> line.split(",\\s*"))
         .map(
             fields ->
