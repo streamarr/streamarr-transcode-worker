@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
+import lombok.Builder;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import tools.jackson.databind.JsonNode;
@@ -435,6 +436,7 @@ final class KeyframePacketScan {
 
   private record PacketTimes(OptionalLong presentation, OptionalLong decode) {}
 
+  @Builder
   private record Packet(
       int outputStream, OptionalLong pts, OptionalLong dts, long duration, int flags) {
 
@@ -451,12 +453,13 @@ final class KeyframePacketScan {
               .findFirst()
               .map(field -> Integer.decode(field.substring("F=".length())))
               .orElse(KEYFRAME_FLAG);
-      return new Packet(
-          Integer.parseInt(fields.get(0)),
-          time(fields.get(2)),
-          time(fields.get(1)),
-          Long.parseLong(fields.get(3)),
-          flags);
+      return Packet.builder()
+          .outputStream(Integer.parseInt(fields.get(0)))
+          .pts(time(fields.get(2)))
+          .dts(time(fields.get(1)))
+          .duration(Long.parseLong(fields.get(3)))
+          .flags(flags)
+          .build();
     }
 
     boolean isKeyframe() {
