@@ -354,6 +354,7 @@ class WorkerMediaSmokeTest {
   private static final String MPEG2_TS_INSIDE_GROUP_SOURCE = "mpeg2-ac3-mp2-inside-a-group.ts";
   private static final String SPARSE_CUES_SOURCE = "h264-aac-ac3-sparse-cues.mkv";
   private static final String MPEG4_AVI_SOURCE = "mpeg4-mp3.avi";
+  private static final String AUDIO_COMPOSITION_OFFSETS_SOURCE = "audio-presentation-offsets.mp4";
   private static final String H264_AC3_SOURCE = "h264-ac3.mkv";
   private static final String MOVED_AUDIO_BLOCK_SOURCE = "h264-ac3-moved-audio-block.mkv";
   private static final String AUDIO_BLOCK_ONE_TICK_EARLY_SOURCE =
@@ -1334,6 +1335,29 @@ class WorkerMediaSmokeTest {
     assertThat(result.getMedia().getStreamEndsList())
         .extracting(end -> end.getStreamIndex())
         .containsExactly(0);
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure audio in its source presentation intervals when the audio presents after it decodes")
+  void shouldMeasureAudioInItsSourcePresentationIntervalsWhenTheAudioPresentsAfterItDecodes()
+      throws Exception {
+    var source = measuredSource(AUDIO_COMPOSITION_OFFSETS_SOURCE);
+    var offsets =
+        ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=pts,dts"), source)
+            .lines()
+            .map(line -> line.split(","))
+            .map(times -> Long.parseLong(times[0]) - Long.parseLong(times[1]));
+    assertThat(offsets).isNotEmpty().containsOnly(3072L);
+
+    var report = packetScanThroughWorker(source);
+
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getSource())
+        .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN);
+    assertThat(reportedMeasurements(report))
+        .hasSize(3)
+        .isEqualTo(
+            listedMeasurements(source, report.getResult().getMedia().getChosenVideoStreamIndex()));
   }
 
   // ADR 0054: a keyframe packet scan measures the chosen video stream and every audio stream in the
@@ -10687,6 +10711,21 @@ class WorkerMediaSmokeTest {
             whole);
         Files.write(output, withSparseCues(Files.readAllBytes(whole)));
       }
+      case AUDIO_COMPOSITION_OFFSETS_SOURCE ->
+          runFfmpeg(
+              measuredSourceArguments(
+                  List.of(
+                      "-c:v",
+                      "libx264",
+                      "-bf",
+                      "2",
+                      "-c:a",
+                      "aac",
+                      "-bsf:a",
+                      "setts=pts=PTS+3072",
+                      "-movflags",
+                      "frag_keyframe+empty_moov+default_base_moof")),
+              output);
       case MPEG4_AVI_SOURCE ->
           runFfmpeg(
               measuredSourceArguments(
