@@ -180,14 +180,14 @@ class FfprobeExecutorPacketScanMeasurementTest {
         new StringBuilder("0, 0, 0, 3750, 4000, 0x00000000\n2, 0, 0, 2351, 417, 0x00000000\n");
     for (var packet = 1L; packet <= audioPackets; packet++) {
       packetScan
-          .append("0, %d, %d, 3750, 1, 0x00000000, F=0x0\n".formatted(packet * 3750, packet * 3750))
+          .append("0, %d, %d, 3750, 1, 0x00000000, F=0x0%n".formatted(packet * 3750, packet * 3750))
           .append(
-              "1, %d, %d, 2880, 1, 0x00000000\n"
+              "1, %d, %d, 2880, 1, 0x00000000%n"
                   .formatted(packet * 3750 - 3750, packet * 3750 - 3750));
     }
 
     var keyframe = (audioPackets + 1L) * 3750;
-    packetScan.append("0, %d, %d, 3750, 6000, 0x00000000\n".formatted(keyframe, keyframe));
+    packetScan.append("0, %d, %d, 3750, 6000, 0x00000000%n".formatted(keyframe, keyframe));
     var scan =
         ScriptedScan.builder().streams(MPEG2_AC3_MP2).packetScan(packetScan.toString()).build();
     var request = request();
@@ -454,7 +454,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
     var waiting = new StringBuilder("0, 0, 0, 3750, 4000, 0x00000000\n2, 0, 0, 2351, 417, 0\n");
     for (var packet = 0; packet <= WAITING_AUDIO_PACKETS_THAT_THE_SCAN_HOLDS; packet++) {
       waiting.append(
-          "1, %d, %d, 2880, 768, 0x00000000\n".formatted(packet * 2880L, packet * 2880L));
+          "1, %d, %d, 2880, 768, 0x00000000%n".formatted(packet * 2880L, packet * 2880L));
     }
 
     waiting.append("0, 3750, 18750, 3750, 6000, 0x00000000\n");
@@ -539,7 +539,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
             Unmeasured.builder()
                 .packetScan(
                     KEYFRAMES_AND_THREE_STREAMS
-                        + "2, %s, %s, 2351, 417, 0x00000000\n".formatted(NO_TIME, NO_TIME))),
+                        + "2, %s, %s, 2351, 417, 0x00000000%n".formatted(NO_TIME, NO_TIME))),
         unmeasured(
             "a keyframe interval that holds more bytes than an unsigned 32-bit count carries",
             Unmeasured.builder().packetScan(fourGibibytes.toString())),

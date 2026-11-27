@@ -40,6 +40,8 @@ final class KeyframePacketScan {
   /** framecrc prints FFmpeg's AV_NOPTS_VALUE for a packet time that the source does not give. */
   private static final String NO_TIME = Long.toString(Long.MIN_VALUE);
 
+  private static final String STREAMS = "streams";
+
   /** framecrc omits the flags of a packet whose only flag is AV_PKT_FLAG_KEY. */
   private static final int KEYFRAME_FLAG = 1;
 
@@ -83,7 +85,7 @@ final class KeyframePacketScan {
 
   ProbeAttemptReport addKeyframes(ProbedSource probed)
       throws ExecutionException, InterruptedException {
-    var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path("streams"));
+    var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path(STREAMS));
     if (chosen.isEmpty()) {
       return failed(probed, ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
     }
@@ -157,7 +159,7 @@ final class KeyframePacketScan {
       ProbedSource probed, ChosenVideoStream chosen, TimeBase videoTimeBase) {
     var scanned = new ArrayList<ScannedStream>();
     scanned.add(new ScannedStream(chosen.streamIndex(), videoTimeBase, chosen.description()));
-    for (var stream : probed.ffprobeOutput().path("streams")) {
+    for (var stream : probed.ffprobeOutput().path(STREAMS)) {
       var audioTimeBase = ProbeTimeline.timeBase(stream, "time_base");
       if (isCopiedAudio(stream) && audioTimeBase.isPresent()) {
         scanned.add(new ScannedStream(stream.path("index").asInt(), audioTimeBase.get(), stream));
@@ -175,7 +177,7 @@ final class KeyframePacketScan {
   private List<MeasuredStream> measuredStreams(ProbedSource probed, List<ScannedStream> scanned)
       throws ExecutionException, InterruptedException {
     var audioStreams = 0;
-    for (var stream : probed.ffprobeOutput().path("streams")) {
+    for (var stream : probed.ffprobeOutput().path(STREAMS)) {
       if (isAudio(stream)) {
         audioStreams++;
       }

@@ -81,11 +81,11 @@ final class PacketScanBoundedHeapProbe {
   private static byte[] packetScan(int audioStreams, int keyframes) {
     var lines = new StringBuilder("0, 0, 0, 3750, 1, 0x00000000\n");
     for (var output = 1; output <= audioStreams; output++) {
-      lines.append("%d, 0, 0, 2880, 1, 0x00000000\n".formatted(output));
+      lines.append("%d, 0, 0, 2880, 1, 0x00000000%n".formatted(output));
     }
 
     for (var keyframe = 1L; keyframe < keyframes; keyframe++) {
-      lines.append("0, %d, %d, 3750, 1, 0x00000000\n".formatted(keyframe * 3750, keyframe * 3750));
+      lines.append("0, %d, %d, 3750, 1, 0x00000000%n".formatted(keyframe * 3750, keyframe * 3750));
     }
 
     return lines.toString().getBytes(StandardCharsets.UTF_8);

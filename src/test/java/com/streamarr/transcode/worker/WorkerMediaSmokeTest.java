@@ -10784,7 +10784,7 @@ class WorkerMediaSmokeTest {
   // The transport stream with its first three packets, which hold FFmpeg's SDT, PAT and PMT, and
   // its last two thirds, as a recording that starts inside a group of pictures: the video's first
   // packet is no keyframe.
-  private static byte[] startingInsideAGroupOfPictures(byte[] transportStream) throws Exception {
+  private static byte[] startingInsideAGroupOfPictures(byte[] transportStream) {
     var packets = transportStream.length / 188;
     var cut = packets / 3 * 188;
     var changed = new ByteArrayOutputStream();
@@ -11122,7 +11122,7 @@ class WorkerMediaSmokeTest {
       var fields = line.split(",", -1);
       return ListedPacket.builder()
           .streamIndex(Integer.parseInt(fields[0]))
-          .time(Long.parseLong("N/A".equals(fields[1]) ? fields[2] : fields[1]))
+          .time(Long.parseLong(fields["N/A".equals(fields[1]) ? 2 : 1]))
           .duration("N/A".equals(fields[3]) ? 0 : Long.parseLong(fields[3]))
           .size(Long.parseLong(fields[4]))
           .isKeyframe(fields[5].startsWith("K"))
