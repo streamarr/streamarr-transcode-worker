@@ -18,8 +18,17 @@ sealed interface ReadingEnding {
     return new Abandoned(failure);
   }
 
-  /** The output ended on a box boundary. */
+  /** The output ended on a box boundary, and FFmpeg then exited cleanly. */
   record EndOfOutput() implements ReadingEnding {}
+
+  /**
+   * The output ended on a box boundary, and FFmpeg then exited with the failure, so the output
+   * ended where FFmpeg stopped writing and not where the source ends.
+   */
+  record EndOfOutputWithFailedExit(Failed failure) implements ReadingEnding {}
+
+  /** The output ended on a box boundary, and FFmpeg then outlived the grace period. */
+  record EndOfOutputWithoutExit() implements ReadingEnding {}
 
   /** The output ended inside a box or after a moof with no mdat. */
   record TruncatedOutput(Failed failure) implements ReadingEnding {}

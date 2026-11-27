@@ -96,6 +96,8 @@ class ProducerTest {
   private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 40 * 1024 * 1024;
   private static final long ONE_SLOT_CAPACITY = 2 * SERVER_SEGMENT_CAP_BYTES;
   private static final int RACE_ITERATIONS = 200;
+  // The exit code of a process that SIGKILL ended: 128 plus the signal's number, 9.
+  private static final int KILLED_EXIT_CODE = 137;
   private static final int BURSTS = 12;
   private static final int BURST_SLOTS = 3;
 
@@ -1046,6 +1048,34 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should leave the wait for FFmpeg's exit out of the last media segment's production time"
+          + " when FFmpeg exits after its output ends")
+  void
+      shouldLeaveTheWaitForFfmpegsExitOutOfTheLastMediaSegmentsProductionTimeWhenFfmpegExitsAfterItsOutputEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var clock = new SteppedClock();
+    var producer = producerFor(process, recording).clock(clock).start();
+    assertThat(process.exitAwaitedWithinABound()).succeedsWithin(OUTCOME_LIMIT);
+
+    clock.advance(Duration.ofSeconds(3));
+    process.exit();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(sink.mediaTimings())
+        .hasSize(recording.segments().size())
+        .extracting(ProductionTiming::productionTime)
+        .containsOnly(Duration.ZERO);
+  }
+
+  @Test
+  @DisplayName(
       "Should leave the time the worker pauses FFmpeg for a seek out of a media segment's"
           + " production time")
   void shouldLeaveTheTimeTheWorkerPausesFfmpegForASeekOutOfAMediaSegmentsProductionTime() {
@@ -1521,6 +1551,31 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should leave FFmpeg running when the worker holds it back after its output has ended and"
+          + " before it has exited")
+  void
+      shouldLeaveFfmpegRunningWhenTheWorkerHoldsItBackAfterItsOutputHasEndedAndBeforeItHasExited() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).start();
+    assertThat(process.exitAwaitedWithinABound()).succeedsWithin(OUTCOME_LIMIT);
+
+    var held = producer.holdBackFfmpeg();
+
+    assertThat(held).isFalse();
+    assertThat(process.isPausedBySignal()).isFalse();
+    process.exit();
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
       "Should time the first media segment from FFmpeg's start and each segment's media duration"
           + " from its video")
   void shouldTimeTheFirstMediaSegmentFromFfmpegsStartAndEachSegmentsMediaDurationFromItsVideo() {
@@ -1840,8 +1895,10 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should not complete the attempt when the output has ended but FFmpeg has not exited")
-  void shouldNotCompleteTheAttemptWhenTheOutputHasEndedButFfmpegHasNotExited() {
+      "Should deliver the last media segment and complete the attempt only once FFmpeg has exited"
+          + " cleanly when the output has ended")
+  void
+      shouldDeliverTheLastMediaSegmentAndCompleteTheAttemptOnlyOnceFfmpegHasExitedCleanlyWhenTheOutputHasEnded() {
     var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
@@ -1851,13 +1908,15 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    awaiting().until(() -> sink.accepted().size() == recording.segments().size() + 1);
+    assertThat(process.exitAwaitedWithinABound()).succeedsWithin(OUTCOME_LIMIT);
     assertThat(process.hasReadToEndOfOutput()).isTrue();
+    assertThat(sink.startedNames()).containsExactlyElementsOf(allButTheLast(recording));
     assertThat(producer.outcome()).isNotDone();
     process.exit();
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
         .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    assertDeliveredInOrder(recording);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1897,6 +1956,68 @@ class ProducerTest {
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
     assertThat(failure.detail()).contains("exit code 1").endsWith("Conversion failed!");
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver no media segment that the end of the output leaves open when FFmpeg exits"
+          + " non-zero after its output ends inside a media segment")
+  void
+      shouldDeliverNoMediaSegmentThatTheEndOfTheOutputLeavesOpenWhenFfmpegExitsNonZeroAfterItsOutputEndsInsideAMediaSegment() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(outputEndingInsideTheThirdMediaSegment(recording))
+            .exitCode(KILLED_EXIT_CODE)
+            .build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the media segment that the end of the output leaves open when FFmpeg exits"
+          + " cleanly after its output ends inside a media segment")
+  void
+      shouldDeliverTheMediaSegmentThatTheEndOfTheOutputLeavesOpenWhenFfmpegExitsCleanlyAfterItsOutputEndsInsideAMediaSegment() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder().output(outputEndingInsideTheThirdMediaSegment(recording)).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  // Segment 1's keyframe arrives before any audio at or after segment 0's end, so the end of the
+  // output finds segment 0 awaiting its audio and segment 1 open.
+  @Test
+  @DisplayName(
+      "Should deliver no media segment that awaits its audio at the end of the output when FFmpeg"
+          + " exits non-zero")
+  void shouldDeliverNoMediaSegmentThatAwaitsItsAudioAtTheEndOfTheOutputWhenFfmpegExitsNonZero() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).videoDuration(12_000).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000)
+                .videoDuration(12_000)
+                .audioFrom(24_000, 12_000, 9_600)
+                .build());
+    var process =
+        ScriptedProcess.builder().output(output.bytes()).exitCode(KILLED_EXIT_CODE).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
   }
 
   @Test
@@ -4117,10 +4238,11 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt and terminate FFmpeg when FFmpeg does not exit within the grace"
-          + " period after its output ends")
+      "Should fail the attempt, terminate FFmpeg and deliver no media segment that the end of the"
+          + " output leaves open when FFmpeg does not exit within the grace period after its"
+          + " output ends")
   void
-      shouldFailTheAttemptAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds() {
+      shouldFailTheAttemptTerminateFfmpegAndDeliverNoMediaSegmentThatTheEndOfTheOutputLeavesOpenWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds() {
     var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
@@ -4132,11 +4254,10 @@ class ProducerTest {
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_DID_NOT_EXIT);
-    assertThat(failure.detail())
-        .contains("after its output ended and its last segment was accepted");
+    assertThat(failure.detail()).contains("after its output ended");
     assertThat(process.wasTerminated()).isTrue();
     assertThat(process.wasDestroyedForcibly()).isFalse();
-    assertDeliveredInOrder(recording);
+    assertThat(sink.acceptedNames()).containsExactlyElementsOf(allButTheLast(recording));
   }
 
   @Test
@@ -4309,6 +4430,53 @@ class ProducerTest {
 
     assertThat(process.stdinText()).isEmpty();
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
+  // The sink holds the media segment before the last, so the reader reads the last segment's
+  // fragments to the end of the output while that delivery awaits acceptance.
+  @Test
+  @DisplayName(
+      "Should settle the stop and deliver no further media segment when stopped while the end of"
+          + " the output awaits the acceptance of the media segment in delivery")
+  void
+      shouldSettleTheStopAndDeliverNoFurtherMediaSegmentWhenStoppedWhileTheEndOfTheOutputAwaitsTheAcceptanceOfTheMediaSegmentInDelivery() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var deliveryBeforeTheLast = recording.segments().size() - 1;
+    sink.holding(deliveryBeforeTheLast);
+    var producer = producerFor(process, recording).start();
+    awaiting().until(process::hasReadToEndOfOutput);
+    awaiting().until(() -> process.reader().map(Thread::getState).orElseThrow() == State.WAITING);
+
+    producer.stop();
+    sink.release();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.startedNames())
+        .containsExactlyElementsOf(uploadNames(recording).subList(0, deliveryBeforeTheLast + 1));
+  }
+
+  @Test
+  @DisplayName(
+      "Should settle only the stop when stopped while FFmpeg has not exited after its output ends"
+          + " and FFmpeg then exits non-zero")
+  void
+      shouldSettleOnlyTheStopWhenStoppedWhileFfmpegHasNotExitedAfterItsOutputEndsAndFfmpegThenExitsNonZero() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(outputEndingInsideTheThirdMediaSegment(recording))
+            .exitCode(KILLED_EXIT_CODE)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).start();
+    assertThat(process.exitAwaitedWithinABound()).succeedsWithin(OUTCOME_LIMIT);
+
+    producer.requestStop();
+    process.exit();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
   }
 
   private static void awaitLatch(CountDownLatch latch) {
@@ -4666,6 +4834,14 @@ class ProducerTest {
     var earlierSegments =
         recording.segments().stream().limit(position).mapToLong(SegmentSummary::byteLength).sum();
     return Math.toIntExact(recording.initializationSegment().byteLength() + earlierSegments);
+  }
+
+  // The recording up to the end of the second fragment of its third media segment, so that the
+  // output ends on a box boundary inside that segment, as it does when FFmpeg is killed there.
+  private static byte[] outputEndingInsideTheThirdMediaSegment(Recording recording) {
+    var output = bytesOf(recording.file());
+    var endOfItsFirstFragment = endOfFragmentAt(output, offsetOfMediaSegment(recording, 2));
+    return Arrays.copyOf(output, endOfFragmentAt(output, endOfItsFirstFragment));
   }
 
   // An offset inside the second fragment of a recording whose preroll follows its initialization
@@ -5087,6 +5263,13 @@ class ProducerTest {
   // The output without the last bytes of its final box.
   private static byte[] truncated(byte[] output) {
     return Arrays.copyOf(output, output.length - 100);
+  }
+
+  // The names of the recording's segments without its last media segment, which is still open when
+  // the output ends.
+  private static List<String> allButTheLast(Recording recording) {
+    var names = uploadNames(recording);
+    return names.subList(0, names.size() - 1);
   }
 
   // Every segment the recording groups, in order, each with the length its delivery declared.
