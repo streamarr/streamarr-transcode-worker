@@ -10640,7 +10640,7 @@ class WorkerMediaSmokeTest {
       var countsAtDecodeTime =
           "N/A".equals(packet[0])
               || (packetAtItsDecodeTime.isPresent() && packetAtItsDecodeTime.getAsInt() == number);
-      var time = Long.parseLong(countsAtDecodeTime ? packet[1] : packet[0]);
+      var time = Long.parseLong(packet[countsAtDecodeTime ? 1 : 0]);
       var duration = Long.parseLong(packet[2]);
       latestEnd = Math.max(latestEnd, time + duration);
       latestTime = Math.max(latestTime, time);
