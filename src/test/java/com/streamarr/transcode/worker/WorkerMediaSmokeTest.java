@@ -11023,42 +11023,54 @@ class WorkerMediaSmokeTest {
     var measured = new ArrayList<StreamCounts>();
     for (var entry : timeBases.entrySet()) {
       var index = entry.getKey();
-      var streamPackets = packets.stream().filter(packet -> packet.streamIndex() == index).toList();
+      measured.add(
+          ListedStream.builder()
+              .index(index)
+              .timeBase(entry.getValue())
+              .packets(packets.stream().filter(packet -> packet.streamIndex() == index).toList())
+              .build()
+              .counts(keyframes, index == chosenStream));
+    }
+
+    return measured;
+  }
+
+  @Builder
+  private record ListedStream(int index, String timeBase, List<ListedPacket> packets) {
+
+    StreamCounts counts(List<BigFraction> keyframes, boolean chosenVideo) {
       var intervalBytes = new long[keyframes.size()];
       var intervalPackets = new long[keyframes.size()];
       var keyframesSeen = 0;
-      for (var packet : streamPackets) {
+      for (var packet : packets) {
         int interval;
-        if (index == chosenStream) {
+        if (chosenVideo) {
           keyframesSeen += packet.isKeyframe() ? 1 : 0;
           interval = Math.max(0, keyframesSeen - 1);
         } else {
-          interval = intervalHolding(seconds(packet.time(), entry.getValue()), keyframes);
+          interval = intervalHolding(seconds(packet.time(), timeBase), keyframes);
         }
 
         intervalBytes[interval] += packet.size();
         intervalPackets[interval]++;
       }
 
-      var first = streamPackets.stream().mapToLong(ListedPacket::time).min().orElseThrow();
+      var first = packets.stream().mapToLong(ListedPacket::time).min().orElseThrow();
       var end =
-          streamPackets.stream()
+          packets.stream()
               .mapToLong(packet -> packet.time() + Math.max(0, packet.duration()))
               .max()
               .orElseThrow();
-      measured.add(
-          StreamCounts.builder()
-              .streamIndex(index)
-              .bytes(Arrays.stream(intervalBytes).sum())
-              .packets(streamPackets.size())
-              .timeBase(entry.getValue())
-              .duration(end - first)
-              .intervalBytes(Arrays.stream(intervalBytes).boxed().toList())
-              .intervalPackets(Arrays.stream(intervalPackets).boxed().toList())
-              .build());
+      return StreamCounts.builder()
+          .streamIndex(index)
+          .bytes(Arrays.stream(intervalBytes).sum())
+          .packets(packets.size())
+          .timeBase(timeBase)
+          .duration(end - first)
+          .intervalBytes(Arrays.stream(intervalBytes).boxed().toList())
+          .intervalPackets(Arrays.stream(intervalPackets).boxed().toList())
+          .build();
     }
-
-    return measured;
   }
 
   // One line of ffprobe's packet list: the stream, presentation time, decode time, duration, size
