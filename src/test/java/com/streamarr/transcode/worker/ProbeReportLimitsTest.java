@@ -19,9 +19,11 @@ import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementIntervals;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
+import com.google.protobuf.Duration;
 import com.streamarr.transcode.probe.ProbeReports;
 import java.util.List;
 import java.util.Locale;
@@ -117,6 +119,25 @@ class ProbeReportLimitsTest {
                                                 KeyframesUnavailableReason
                                                     .KEYFRAMES_UNAVAILABLE_REASON_TOO_MANY_KEYFRAMES))))
                     .build()));
+  }
+
+  @Test
+  @DisplayName("Should omit scanned stream ends when the keyframe limit removes their positions")
+  void shouldOmitScannedStreamEndsWhenTheKeyframeLimitRemovesTheirPositions() {
+    var original = reportOf(KEYFRAME_PACKET_SCAN, 2, List.of(2));
+    var media =
+        original.getResult().getMedia().toBuilder()
+            .addStreamEnds(
+                SourceStreamEnd.newBuilder()
+                    .setStreamIndex(0)
+                    .setEndTime(Duration.newBuilder().setSeconds(3)));
+    var report =
+        original.toBuilder().setResult(original.getResult().toBuilder().setMedia(media)).build();
+
+    var sent = ProbeReportLimits.builder().keyframes(1).build().apply(KEYFRAME_PACKET_SCAN, report);
+
+    assertThat(sent.getResult().getMedia().getKeyframes().hasUnavailable()).isTrue();
+    assertThat(sent.getResult().getMedia().getStreamEndsList()).isEmpty();
   }
 
   @ParameterizedTest(name = "scanning keyframe packets: {0}")
