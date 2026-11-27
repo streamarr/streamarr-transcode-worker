@@ -43,11 +43,8 @@ final class KeyframePacketScan {
    */
   private static final String DEMUXING_ERROR = "Error during demuxing";
 
-  /**
-   * Matroska rounds each packet's time and duration to a whole millisecond, so an audio stream's
-   * last sample can end up to 1 ms after its last packet counted at the stream's longest duration.
-   */
-  private static final BigDecimal AUDIO_END_MARGIN_SECONDS = new BigDecimal("0.001");
+  // Packet timestamps and durations can both round early; coarse time bases need two whole ticks.
+  private static final BigDecimal AUDIO_END_MARGIN_SECONDS = new BigDecimal("0.002");
 
   @NonNull private final PacketScanRunner ffmpeg;
 
@@ -160,6 +157,9 @@ final class KeyframePacketScan {
       arguments.addAll(FfprobeExecutor.MPEG_TS_READ_LIMITS);
     }
 
+    // Audio stream copy replaces PTS with DTS. Preserve the source PTS before that rewrite,
+    // retaining DTS only for packets whose source has no PTS.
+    arguments.addAll(List.of("-bsf:a", "setts=dts=if(eq(PTS\\,NOPTS)\\,DTS\\,PTS)"));
     arguments.addAll(List.of("-i", probed.source().toString()));
     for (var stream : scanned) {
       arguments.add("-map");
@@ -173,7 +173,7 @@ final class KeyframePacketScan {
   // FFmpeg's output stream 0 is the chosen video stream, and each later one an audio stream. An
   // audio stream's last packet can state less time than its samples last: Matroska states each
   // packet's duration in whole milliseconds. So the last audio packet counts at the stream's
-  // longest packet duration, and the audio ends 1 ms after that (ADR 0032, probe version 9).
+  // longest packet duration, with the rounding margin from ADR 0032, probe version 9.
   private static List<ScannedStreamEnd> streamEnds(
       List<ScannedStream> scanned, PacketKeyframes packets) {
     var ends = new ArrayList<ScannedStreamEnd>();
@@ -188,10 +188,22 @@ final class KeyframePacketScan {
       packets
           .streamEnd(output)
           .lastPacketAtLongestDuration()
-          .ifPresent(ticks -> ends.add(endOf(audio, ticks, AUDIO_END_MARGIN_SECONDS)));
+          .ifPresent(ticks -> ends.add(audioEndOf(audio, ticks)));
     }
 
     return ends;
+  }
+
+  private static ScannedStreamEnd audioEndOf(ScannedStream stream, BigInteger ticks) {
+    var twoTicksNumerator =
+        BigDecimal.valueOf(stream.timeBase().numerator()).multiply(BigDecimal.valueOf(2));
+    var minimumMarginNumerator =
+        AUDIO_END_MARGIN_SECONDS.multiply(BigDecimal.valueOf(stream.timeBase().denominator()));
+    if (twoTicksNumerator.compareTo(minimumMarginNumerator) > 0) {
+      return endOf(stream, ticks.add(BigInteger.TWO), BigDecimal.ZERO);
+    }
+
+    return endOf(stream, ticks, AUDIO_END_MARGIN_SECONDS);
   }
 
   private static ScannedStreamEnd endOf(
@@ -368,6 +380,7 @@ final class KeyframePacketScan {
     private long latestEnd = Long.MIN_VALUE;
     private long latestTime = Long.MIN_VALUE;
     private long longestDuration;
+    private int positiveDurationPackets;
     private boolean latestPacketHasDuration;
     private boolean isUnknown;
 
@@ -382,6 +395,10 @@ final class KeyframePacketScan {
       if (time.getAsLong() >= latestTime) {
         latestTime = time.getAsLong();
         latestPacketHasDuration = duration > 0;
+      }
+
+      if (duration > 0) {
+        positiveDurationPackets = Math.min(2, positiveDurationPackets + 1);
       }
 
       latestEnd = Math.max(latestEnd, time.getAsLong() + duration);
@@ -404,11 +421,11 @@ final class KeyframePacketScan {
     /**
      * The time of the packet that presents last plus the stream's longest packet duration, in ticks
      * from the demuxer's zero, when known. That packet then counts as long as the stream's longest
-     * packet, whatever duration it states. It is also unknown when no packet has a positive
-     * duration.
+     * packet, whatever duration it states. A single positive duration could describe only a partial
+     * final frame, so at least two are required.
      */
     Optional<BigInteger> lastPacketAtLongestDuration() {
-      if (isUnknown || longestDuration == 0) {
+      if (isUnknown || positiveDurationPackets < 2) {
         return Optional.empty();
       }
 

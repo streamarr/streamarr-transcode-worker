@@ -85,7 +85,7 @@ scan() {
   # FFmpeg names each logging context by its address, which changes from run to run.
   # shellcheck disable=SC2086 # the maps are separate arguments
   ffmpeg -nostdin -hide_banner -nostats -v error -copyts -analyzeduration 200M -probesize 1G \
-    -i "$source" -map 0:0 $audio_maps -c copy \
+    -bsf:a 'setts=dts=if(eq(PTS\,NOPTS)\,DTS\,PTS)' -i "$source" -map 0:0 $audio_maps -c copy \
     -f framecrc - > "scans/$name.framecrc" 2> "scans/$name.log"
   sed -E 's/ @ 0x[0-9a-f]+\]/]/' "scans/$name.log" > "scans/$name.diagnostics"
   rm "scans/$name.log"

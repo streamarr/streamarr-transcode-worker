@@ -1162,7 +1162,7 @@ class WorkerMediaSmokeTest {
   // duration in whole milliseconds, so the last frame, which holds 1,098 samples, states 24 ms
   // from 4.075 s, and the packet ends 1 ms before the samples do. Matroska written to a pipe states
   // no duration, so nothing else tells the server where the audio ends. Counted at the stream's
-  // longest packet duration, plus 1 ms, the end lies at most one frame and 1 ms after the last
+  // longest packet duration, plus 2 ms, the end lies at most one frame and 2 ms after the last
   // sample (ADR 0032, probe version 9).
   @Test
   @DisplayName(
@@ -1197,7 +1197,129 @@ class WorkerMediaSmokeTest {
             1,
             end ->
                 assertThat(end)
-                    .isBetween(lastSampleEnd, lastSampleEnd.plus(oneFrame).plusMillis(1)));
+                    .isBetween(lastSampleEnd, lastSampleEnd.plus(oneFrame).plusMillis(2)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the scanned audio end after the last decoded sample when timestamp and duration"
+          + " rounding together exceed one millisecond")
+  void
+      shouldKeepTheScannedAudioEndAfterTheLastDecodedSampleWhenBothRoundingErrorsExceedOneMillisecond()
+          throws Exception {
+    var source = root.resolve("rounded-audio.mkv");
+    runToCompletion(
+        List.of(
+            "sh",
+            "-c",
+            "ffmpeg -nostdin -v error -f lavfi -i testsrc=size=64x36:rate=24:duration=4"
+                + " -f lavfi -i 'sine=r=44100,atrim=end_sample=192512'"
+                + " -map 0:v -map 1:a -c:v libx264 -preset ultrafast -c:a flac"
+                + " -frame_size 4096 -f matroska - > '"
+                + source
+                + "'"),
+        source);
+    assertThat(decodedSampleCount(source, "a:0")).isEqualTo(192_512);
+    var lastSampleEnd = Duration.ofNanos(192_512 * 1_000_000_000L / 44_100);
+
+    var result = packetScanThroughWorker(source);
+
+    assertThat(result.getMedia().getStreamEndsList())
+        .filteredOn(end -> end.getStreamIndex() == 1)
+        .extracting(
+            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .singleElement()
+        .satisfies(end -> assertThat(end).isBetween(lastSampleEnd, lastSampleEnd.plusMillis(2)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should end scanned audio on its source timeline when its presentation times differ from its decode times")
+  void shouldEndScannedAudioOnItsSourceTimelineWhenItsPresentationTimesDifferFromItsDecodeTimes()
+      throws Exception {
+    var source = root.resolve("audio-composition-offset.mp4");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=r=48000:d=2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-g",
+            "24",
+            "-c:a",
+            "aac",
+            "-bsf:a",
+            "setts=pts=PTS+3072",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof"),
+        source);
+    assertThat(
+            ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=pts,dts"), source))
+        .startsWith("3072,0\n4096,1024\n");
+    var expectedEnds = listedStreamEnds(source, OptionalInt.empty());
+
+    var result = packetScanThroughWorker(source);
+
+    assertThat(result.getMedia().getStreamEndsList())
+        .filteredOn(end -> end.getStreamIndex() == 1)
+        .extracting(
+            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .containsExactly(expectedEnds.get(1));
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the scanned audio end unknown when a short track holds only one packet")
+  void shouldLeaveTheScannedAudioEndUnknownWhenAShortTrackHoldsOnlyOnePacket() throws Exception {
+    var source = root.resolve("single-audio-packet.mkv");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24:duration=0.1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=r=48000:d=0.015",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "ac3",
+            "-f",
+            "matroska"),
+        source);
+    assertThat(
+            ffprobe(
+                List.of(
+                    "-select_streams",
+                    "a:0",
+                    "-count_packets",
+                    "-show_entries",
+                    "stream=nb_read_packets"),
+                source))
+        .isEqualToIgnoringWhitespace("1");
+
+    var result = packetScanThroughWorker(source);
+
+    assertThat(result.getMedia().getKeyframes().getPositions().getKeyframeCount()).isPositive();
+    assertThat(result.getMedia().getStreamEndsList())
+        .extracting(end -> end.getStreamIndex())
+        .containsExactly(0);
   }
 
   @Test
@@ -10146,6 +10268,21 @@ class WorkerMediaSmokeTest {
     return probeExecutor().probe(source, keyframeRequest()).getResult();
   }
 
+  private ProbeAttemptResult packetScanThroughWorker(Path source) throws Exception {
+    var runtime = new ScriptedWorkerRuntime();
+    var request = packetScanRequest().toBuilder();
+    request.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    try (var worker = workerBuilder(root).runtime(runtime).ffprobe(probeExecutor()).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request.build());
+      runtime.probes().drain();
+
+      var results = runtime.connection().results();
+      assertThat(results).hasSize(1);
+      return results.getFirst();
+    }
+  }
+
   private static FfprobeExecutor probeExecutor() {
     return FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
   }
@@ -10432,7 +10569,8 @@ class WorkerMediaSmokeTest {
   // ffprobe's packet list, less the container's start time, rounded to the nearest nanosecond
   // (ADR 0032, probe version 9). A video stream ends at the latest sum of a packet's presentation
   // time and duration. An audio stream's last packet counts at the stream's longest packet
-  // duration, and the audio stream ends 1 ms after that. MPEG-TS lists each stream under its
+  // duration, plus the greater of 2 ms and two source time-base ticks. MPEG-TS lists each stream
+  // under its
   // program and again by itself. The named packet of stream 0 counts at its decode time.
   private static Map<Integer, Duration> listedStreamEnds(
       Path source, OptionalInt firstStreamPacketAtItsDecodeTime) throws Exception {
@@ -10458,7 +10596,11 @@ class WorkerMediaSmokeTest {
       var marginSeconds = BigDecimal.ZERO;
       if ("audio".equals(stream[1])) {
         endTicks = packets.latestTime() + packets.longestDuration();
-        marginSeconds = new BigDecimal("0.001");
+        marginSeconds =
+            new BigDecimal(timeBase[0])
+                .multiply(BigDecimal.valueOf(2))
+                .divide(new BigDecimal(timeBase[1]), 20, RoundingMode.HALF_UP)
+                .max(new BigDecimal("0.002"));
       }
 
       var endSeconds =
