@@ -112,6 +112,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -346,6 +347,7 @@ class WorkerMediaSmokeTest {
   private static final String NEGATIVE_OFFSETS_SOURCE = "mp4-negative-offsets.mp4";
   private static final String NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE =
       "mp4-negative-offsets-empty-edit.mp4";
+  private static final String LATE_AUDIO_SOURCE = "mpegts-late-audio.ts";
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
@@ -1075,7 +1077,8 @@ class WorkerMediaSmokeTest {
         "mkv-pipe.mkv",
         "mp4-fragmented.mp4",
         "mp4-truncated.mp4",
-        "mkv-truncated-cues-front.mkv"
+        "mkv-truncated-cues-front.mkv",
+        LATE_AUDIO_SOURCE
       })
   @DisplayName(
       "Should report the keyframes that FFmpeg passes to a muxer when a packet scan reads a source"
@@ -1086,10 +1089,237 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
+    assertThat(report.getResult().getMedia().getKeyframes().hasPositions())
+        .as("whether the scan reports keyframe positions")
+        .isTrue();
     var positions = report.getResult().getMedia().getKeyframes().getPositions();
     var packetKeyframes = packetKeyframes(source, positions);
     assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size()).isPositive();
     assertThat(keyframeTimes(report)).isEqualTo(packetKeyframes);
+  }
+
+  // The two truncated sources end before the duration that their headers state. The oracle is
+  // ffprobe's own list of each stream's packets, which the scan's FFmpeg command does not print.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "mpegts.ts",
+        "avi.avi",
+        "mkv-pipe.mkv",
+        "mp4-fragmented.mp4",
+        "mp4-truncated.mp4",
+        "mkv-truncated-cues-front.mkv",
+        "mp4-h264-aac-ac3.mp4",
+        LATE_AUDIO_SOURCE
+      })
+  @DisplayName(
+      "Should end the video stream and each audio stream where ffprobe lists the stream's last"
+          + " packet end when a packet scan reads the source")
+  void shouldEndTheVideoStreamAndEachAudioStreamWhereFfprobeListsItsLastPacketEnd(String fixture)
+      throws Exception {
+    var source = keyframeSource(fixture);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    var listedEnds = listedStreamEnds(source, OptionalInt.empty());
+    assertThat(listedEnds)
+        .as("the video stream and at least one audio stream")
+        .hasSizeGreaterThanOrEqualTo(2)
+        .containsKey(report.getResult().getMedia().getKeyframes().getPositions().getStreamIndex());
+    assertThat(scannedEnds(report)).isEqualTo(listedEnds);
+  }
+
+  // FFmpeg's MPEG-TS demuxer gives a packet neither time when its PES header carries none. FFmpeg's
+  // stream copy then fills the packet's decode time from the packets before it and passes the
+  // packet on without a presentation time, and the fMP4 muxer writes it at its decode time. The
+  // oracle is ffprobe's packet list of the whole fixture, with that one packet counted at its
+  // decode time. Video packet 40 presents in the middle of the stream and packet 95 presents last.
+  @ParameterizedTest(name = "video packet {0}")
+  @ValueSource(ints = {40, 95})
+  @DisplayName(
+      "Should end each stream where a copy of it ends when a packet scan reads an MPEG-TS source"
+          + " in which one video packet has no presentation time")
+  void shouldEndEachStreamWhereACopyOfItEndsWhenOneVideoPacketOfAnMpegTsSourceHasNoPresentationTime(
+      int packetWithoutTimes) throws Exception {
+    var whole = keyframeSource("mpegts.ts");
+    var source = root.resolve("without-times.ts");
+    Files.write(source, withoutTimesOnVideoPacket(Files.readAllBytes(whole), packetWithoutTimes));
+    var listedTimes =
+        ffprobe(List.of("-select_streams", "0", "-show_entries", "packet=pts,dts"), source);
+    assertThat(listedTimes.lines().toList().get(packetWithoutTimes))
+        .as("the times that ffprobe lists for the changed packet")
+        .startsWith("N/A,N/A");
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    assertThat(scannedEnds(report))
+        .hasSize(2)
+        .isEqualTo(listedStreamEnds(whole, OptionalInt.of(packetWithoutTimes)));
+  }
+
+  // The source's 4.1 s of sine at 44.1 kHz holds 180,810 samples from time zero, so its samples end
+  // at 4.100 s. The FLAC encoder writes 4,608 samples a frame. Matroska states each frame's
+  // duration in whole milliseconds, so the last frame, which holds 1,098 samples, states 24 ms
+  // from 4.075 s, and the packet ends 1 ms before the samples do. Matroska written to a pipe states
+  // no duration, so nothing else tells the server where the audio ends. Counted at the stream's
+  // longest packet duration, plus 2 ms, the end lies at most one frame and 2 ms after the last
+  // sample (ADR 0032, probe version 9).
+  @Test
+  @DisplayName(
+      "Should end a Matroska audio stream no earlier than its last decoded sample when the stream's"
+          + " last packet states less time than its samples last")
+  void shouldEndAMatroskaAudioStreamNoEarlierThanItsLastDecodedSampleWhenItsLastPacketStatesLess()
+      throws Exception {
+    var source = root.resolve("flac-pipe.mkv");
+    runToCompletion(
+        List.of(
+            "sh",
+            "-c",
+            "ffmpeg -nostdin -v error -f lavfi -i testsrc=size=64x36:rate=24:duration=4"
+                + " -f lavfi -i sine=r=44100:d=4.1 -map 0:v -map 1:a -c:v libx264"
+                + " -preset ultrafast -c:a flac -frame_size 4608 -f matroska - > '"
+                + source
+                + "'"),
+        source);
+    assertThat(ffprobe(List.of("-show_entries", "format=duration"), source))
+        .as("the duration that the Matroska file states")
+        .isEqualToIgnoringWhitespace("N/A");
+    assertThat(decodedSampleCount(source, "a:0"))
+        .as("the samples that the FLAC track decodes to")
+        .isEqualTo(180_810);
+    var lastSampleEnd = Duration.ofMillis(4_100);
+    var oneFrame = Duration.ofNanos(4_608 * 1_000_000_000L / 44_100);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    assertThat(scannedEnds(report))
+        .hasEntrySatisfying(
+            1,
+            end ->
+                assertThat(end)
+                    .isBetween(lastSampleEnd, lastSampleEnd.plus(oneFrame).plusMillis(2)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the scanned audio end after the last decoded sample when timestamp and duration"
+          + " rounding together exceed one millisecond")
+  void
+      shouldKeepTheScannedAudioEndAfterTheLastDecodedSampleWhenBothRoundingErrorsExceedOneMillisecond()
+          throws Exception {
+    var source = root.resolve("rounded-audio.mkv");
+    runToCompletion(
+        List.of(
+            "sh",
+            "-c",
+            "ffmpeg -nostdin -v error -f lavfi -i testsrc=size=64x36:rate=24:duration=4"
+                + " -f lavfi -i 'sine=r=44100,atrim=end_sample=192512'"
+                + " -map 0:v -map 1:a -c:v libx264 -preset ultrafast -c:a flac"
+                + " -frame_size 4096 -f matroska - > '"
+                + source
+                + "'"),
+        source);
+    assertThat(decodedSampleCount(source, "a:0")).isEqualTo(192_512);
+    var lastSampleEnd = Duration.ofNanos(192_512 * 1_000_000_000L / 44_100);
+
+    var result = packetScanThroughWorker(source);
+
+    assertThat(result.getMedia().getStreamEndsList())
+        .filteredOn(end -> end.getStreamIndex() == 1)
+        .extracting(
+            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .singleElement()
+        .satisfies(end -> assertThat(end).isBetween(lastSampleEnd, lastSampleEnd.plusMillis(2)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should end scanned audio on its source timeline when its presentation times differ from its decode times")
+  void shouldEndScannedAudioOnItsSourceTimelineWhenItsPresentationTimesDifferFromItsDecodeTimes()
+      throws Exception {
+    var source = root.resolve("audio-composition-offset.mp4");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=r=48000:d=2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-g",
+            "24",
+            "-c:a",
+            "aac",
+            "-bsf:a",
+            "setts=pts=PTS+3072",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof"),
+        source);
+    assertThat(
+            ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=pts,dts"), source))
+        .startsWith("3072,0\n4096,1024\n");
+    var expectedEnds = listedStreamEnds(source, OptionalInt.empty());
+
+    var result = packetScanThroughWorker(source);
+
+    assertThat(result.getMedia().getStreamEndsList())
+        .filteredOn(end -> end.getStreamIndex() == 1)
+        .extracting(
+            end -> Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+        .containsExactly(expectedEnds.get(1));
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the scanned audio end unknown when a short track holds only one packet")
+  void shouldLeaveTheScannedAudioEndUnknownWhenAShortTrackHoldsOnlyOnePacket() throws Exception {
+    var source = root.resolve("single-audio-packet.mkv");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24:duration=0.1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=r=48000:d=0.015",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "ac3",
+            "-f",
+            "matroska"),
+        source);
+    assertThat(
+            ffprobe(
+                List.of(
+                    "-select_streams",
+                    "a:0",
+                    "-count_packets",
+                    "-show_entries",
+                    "stream=nb_read_packets"),
+                source))
+        .isEqualToIgnoringWhitespace("1");
+
+    var result = packetScanThroughWorker(source);
+
+    assertThat(result.getMedia().getKeyframes().getPositions().getKeyframeCount()).isPositive();
+    assertThat(result.getMedia().getStreamEndsList())
+        .extracting(end -> end.getStreamIndex())
+        .containsExactly(0);
   }
 
   @Test
@@ -10038,6 +10268,21 @@ class WorkerMediaSmokeTest {
     return probeExecutor().probe(source, keyframeRequest()).getResult();
   }
 
+  private ProbeAttemptResult packetScanThroughWorker(Path source) throws Exception {
+    var runtime = new ScriptedWorkerRuntime();
+    var request = packetScanRequest().toBuilder();
+    request.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    try (var worker = workerBuilder(root).runtime(runtime).ffprobe(probeExecutor()).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request.build());
+      runtime.probes().drain();
+
+      var results = runtime.connection().results();
+      assertThat(results).hasSize(1);
+      return results.getFirst();
+    }
+  }
+
   private static FfprobeExecutor probeExecutor() {
     return FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
   }
@@ -10187,6 +10432,38 @@ class WorkerMediaSmokeTest {
         runFfmpeg(List.of("-ss", "1", "-i", basePath, "-c", "copy"), output);
         yield output;
       }
+      // The audio starts 25 s in. ffprobe reads a source for up to 200 s or 1 GB to find each
+      // stream's parameters. FFmpeg reads for 5 s or 5 MB unless it is told otherwise. With its
+      // defaults, FFmpeg does not know the audio's sample rate, and it refuses to write the audio.
+      case LATE_AUDIO_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x36:rate=24:duration=30",
+                "-itsoffset",
+                "25",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=r=48000:d=5",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                "-f",
+                "mpegts"),
+            output);
+        yield output;
+      }
       default -> {
         assertThat(resource).as("fixture %s", fixture).isNotNull();
         yield Path.of(resource.toURI());
@@ -10213,8 +10490,9 @@ class WorkerMediaSmokeTest {
   // earliest start of every stream, as ADR 0037 requires; without it, FFmpeg starts the timeline at
   // the earliest mapped stream. framecrc adds the packet flags to every line whose packet is not
   // only a keyframe, and side data after them. A Matroska keyframe's decode time is its cue time,
-  // which equals its presentation time.
-  private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
+  // which equals its presentation time. Each packet is its framecrc line's fields: the stream,
+  // decode time, presentation time, duration, size and checksum, then any flags and side data.
+  private static List<List<String>> muxedPackets(Path source, KeyframePositions positions)
       throws Exception {
     var process =
         new ProcessBuilder(
@@ -10248,10 +10526,17 @@ class WorkerMediaSmokeTest {
         .contains(
             "#tb 0: %d/%d"
                 .formatted(positions.getTimeBaseNumerator(), positions.getTimeBaseDenominator()));
+    return lines.stream()
+        .filter(line -> !line.startsWith("#"))
+        .map(line -> Arrays.stream(line.split(",")).map(String::trim).toList())
+        .toList();
+  }
+
+  private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
+      throws Exception {
     var isMatroska = source.toString().endsWith(".mkv");
     var keyframes = new ArrayList<KeyframeTime>();
-    for (var line : lines.stream().filter(line -> !line.startsWith("#")).toList()) {
-      var fields = Arrays.stream(line.split(",")).map(String::trim).toList();
+    for (var fields : muxedPackets(source, positions)) {
       var flags =
           fields.stream()
               .filter(field -> field.startsWith("F="))
@@ -10266,6 +10551,169 @@ class WorkerMediaSmokeTest {
     }
 
     return keyframes;
+  }
+
+  // The end that the scan reports for each source stream, by stream index.
+  private static Map<Integer, Duration> scannedEnds(ProbeAttemptReport report) {
+    var ends = new LinkedHashMap<Integer, Duration>();
+    for (var end : report.getResult().getMedia().getStreamEndsList()) {
+      ends.put(
+          end.getStreamIndex(),
+          Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()));
+    }
+
+    return ends;
+  }
+
+  // Where each video and audio stream ends on the keyframes' timeline, by stream index, from
+  // ffprobe's packet list, less the container's start time, rounded to the nearest nanosecond
+  // (ADR 0032, probe version 9). A video stream ends at the latest sum of a packet's presentation
+  // time and duration. An audio stream's last packet counts at the stream's longest packet
+  // duration, plus the greater of 2 ms and two source time-base ticks. MPEG-TS lists each stream
+  // under its
+  // program and again by itself. The named packet of stream 0 counts at its decode time.
+  private static Map<Integer, Duration> listedStreamEnds(
+      Path source, OptionalInt firstStreamPacketAtItsDecodeTime) throws Exception {
+    var containerStart =
+        new BigDecimal(
+            ffprobeWithTheProbesReadLimits(List.of("-show_entries", "format=start_time"), source));
+    var ends = new LinkedHashMap<Integer, Duration>();
+    var streams =
+        ffprobeWithTheProbesReadLimits(
+                List.of("-show_entries", "stream=index,codec_type,time_base"), source)
+            .lines();
+    for (var stream : streams.map(line -> line.split(",")).toList()) {
+      if (stream.length < 3 || !Set.of("video", "audio").contains(stream[1])) {
+        continue;
+      }
+
+      var index = Integer.parseInt(stream[0]);
+      var packetAtItsDecodeTime =
+          index == 0 ? firstStreamPacketAtItsDecodeTime : OptionalInt.empty();
+      var timeBase = stream[2].split("/");
+      var packets = listedPackets(source, index, packetAtItsDecodeTime);
+      var endTicks = packets.latestEnd();
+      var marginSeconds = BigDecimal.ZERO;
+      if ("audio".equals(stream[1])) {
+        endTicks = packets.latestTime() + packets.longestDuration();
+        marginSeconds =
+            new BigDecimal(timeBase[0])
+                .multiply(BigDecimal.valueOf(2))
+                .divide(new BigDecimal(timeBase[1]), 20, RoundingMode.HALF_UP)
+                .max(new BigDecimal("0.002"));
+      }
+
+      var endSeconds =
+          new BigDecimal(endTicks)
+              .multiply(new BigDecimal(timeBase[0]))
+              .divide(new BigDecimal(timeBase[1]), 20, RoundingMode.HALF_UP)
+              .add(marginSeconds)
+              .subtract(containerStart)
+              .setScale(9, RoundingMode.HALF_UP);
+      ends.put(index, Duration.ofNanos(endSeconds.movePointRight(9).longValueExact()));
+    }
+
+    return ends;
+  }
+
+  // Each line is a packet's presentation time, decode time and duration. Every packet of the
+  // keyframe fixtures has a positive duration. The AVI demuxer gives its packets a decode time
+  // only, and such a packet counts at its decode time.
+  private static ListedPackets listedPackets(
+      Path source, int streamIndex, OptionalInt packetAtItsDecodeTime) throws Exception {
+    var packets =
+        ffprobeWithTheProbesReadLimits(
+                List.of(
+                    "-select_streams",
+                    Integer.toString(streamIndex),
+                    "-show_entries",
+                    "packet=pts,dts,duration"),
+                source)
+            .lines()
+            .map(line -> line.split(","))
+            .toList();
+    var latestEnd = Long.MIN_VALUE;
+    var latestTime = Long.MIN_VALUE;
+    var longestDuration = 0L;
+    for (var number = 0; number < packets.size(); number++) {
+      var packet = packets.get(number);
+      var countsAtDecodeTime =
+          "N/A".equals(packet[0])
+              || (packetAtItsDecodeTime.isPresent() && packetAtItsDecodeTime.getAsInt() == number);
+      var time = Long.parseLong(packet[countsAtDecodeTime ? 1 : 0]);
+      var duration = Long.parseLong(packet[2]);
+      latestEnd = Math.max(latestEnd, time + duration);
+      latestTime = Math.max(latestTime, time);
+      longestDuration = Math.max(longestDuration, duration);
+    }
+
+    return new ListedPackets(latestEnd, latestTime, longestDuration);
+  }
+
+  /**
+   * One stream's packets in ffprobe's list: the latest sum of a packet's time and duration, the
+   * latest packet time, and the longest packet duration, in ticks of the stream's time base.
+   */
+  private record ListedPackets(long latestEnd, long latestTime, long longestDuration) {}
+
+  // The number of samples that the stream decodes to, by ffprobe's decoded frames.
+  private static long decodedSampleCount(Path media, String streamSpecifier) throws Exception {
+    return ffprobe(
+            List.of("-select_streams", streamSpecifier, "-show_entries", "frame=nb_samples"), media)
+        .lines()
+        .mapToLong(Long::parseLong)
+        .sum();
+  }
+
+  // ffprobe's output when it reads the source as far as the probe's own ffprobe run does. With
+  // ffprobe's default limits, a stream whose first packet comes late can list packets without
+  // times or durations.
+  private static String ffprobeWithTheProbesReadLimits(List<String> arguments, Path media)
+      throws Exception {
+    var limited =
+        new ArrayList<>(
+            List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0"));
+    limited.addAll(arguments);
+    return ffprobe(limited, media);
+  }
+
+  // The MPEG-TS bytes with the presentation and decode times removed from the PES header of one
+  // video packet, by its number among the video packets. The header keeps its length: the two flags
+  // are cleared and the bytes that held the times become stuffing.
+  private static byte[] withoutTimesOnVideoPacket(byte[] transportStream, int videoPacket) {
+    var changed = transportStream.clone();
+    var videoPacketsSeen = 0;
+    for (var offset = 0; offset + 188 <= changed.length; offset += 188) {
+      assertThat(changed[offset]).as("the sync byte at %d", offset).isEqualTo((byte) 0x47);
+      var startsAPayloadUnit = (changed[offset + 1] & 0x40) != 0;
+      var adaptationFieldControl = (changed[offset + 3] >> 4) & 3;
+      var payload = offset + 4;
+      if ((adaptationFieldControl & 2) != 0) {
+        payload += 1 + (changed[offset + 4] & 0xFF);
+      }
+
+      var hasPayload = (adaptationFieldControl & 1) != 0;
+      if (!hasPayload || !startsAPayloadUnit || !isVideoPesHeaderAt(changed, payload, offset)) {
+        continue;
+      }
+
+      if (videoPacketsSeen++ == videoPacket) {
+        changed[payload + 7] &= 0x3F;
+        var headerDataLength = changed[payload + 8] & 0xFF;
+        Arrays.fill(changed, payload + 9, payload + 9 + headerDataLength, (byte) 0xFF);
+        return changed;
+      }
+    }
+
+    throw new AssertionError("The transport stream has no video packet " + videoPacket);
+  }
+
+  private static boolean isVideoPesHeaderAt(byte[] transportStream, int payload, int packet) {
+    return payload + 9 <= packet + 188
+        && transportStream[payload] == 0
+        && transportStream[payload + 1] == 0
+        && transportStream[payload + 2] == 1
+        && (transportStream[payload + 3] & 0xF0) == 0xE0;
   }
 
   private record KeyframeTime(long presentation, long decode) {}

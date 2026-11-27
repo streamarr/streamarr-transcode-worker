@@ -141,6 +141,7 @@ class TranscodeWorkerKeyframeLimitTest {
     assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(2);
     assertThat(report.getKeyframePresentationTimeDeltasList()).containsExactly(0L, 180_000L);
+    assertThat(report.getResult().getMedia().getStreamEndsList()).hasSize(1);
   }
 
   @Test
@@ -154,6 +155,7 @@ class TranscodeWorkerKeyframeLimitTest {
     var media = report.getResult().getMedia();
     assertThat(media.getKeyframes()).isEqualTo(UNAVAILABLE_FOR_TOO_MANY_KEYFRAMES);
     assertThat(media.getContainer().getFormat()).isEqualTo("mpegts");
+    assertThat(media.getStreamEndsList()).isEmpty();
     assertThat(media.getStreamsList()).hasSize(1);
     assertThat(report).isEqualTo(ProbeReports.resultOnly(report.getResult()));
   }

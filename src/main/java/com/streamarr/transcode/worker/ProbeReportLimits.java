@@ -121,7 +121,10 @@ record ProbeReportLimits(
     return ProbeReports.resultOnly(
         result.toBuilder()
             .setMedia(
-                result.getMedia().toBuilder().clearStreamMeasurements().setKeyframes(unavailable))
+                result.getMedia().toBuilder()
+                    .clearStreamMeasurements()
+                    .clearStreamEnds()
+                    .setKeyframes(unavailable))
             .build());
   }
 
