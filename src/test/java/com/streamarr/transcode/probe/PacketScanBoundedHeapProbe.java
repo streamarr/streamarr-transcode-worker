@@ -51,14 +51,14 @@ final class PacketScanBoundedHeapProbe {
 
     var report = executor.probe(source, request);
 
-    var media = report.result().getMedia();
+    var media = report.getResult().getMedia();
     Files.writeString(
         Path.of(arguments[0]),
         "keyframes=%d measured=%s parts=%d"
             .formatted(
                 media.getKeyframes().getPositions().getKeyframeCount(),
                 media.hasStreamMeasurements(),
-                report.streamMeasurementParts().size()));
+                report.getStreamMeasurementIntervalsList().size()));
   }
 
   private static String streams(int audioStreams) {

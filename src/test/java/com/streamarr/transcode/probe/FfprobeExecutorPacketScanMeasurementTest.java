@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.MeasuredStream;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
+import build.buf.gen.streamarr.transcode.v1.StreamMeasurementIntervals;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import build.buf.gen.streamarr.transcode.v1.StreamMeasurements;
 import com.streamarr.transcode.fakes.ScriptedProcess;
@@ -110,7 +110,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request);
 
-    assertThat(report.result().getMedia().getStreamMeasurements())
+    assertThat(report.getResult().getMedia().getStreamMeasurements())
         .isEqualTo(
             StreamMeasurements.newBuilder()
                 .setSource(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN)
@@ -118,17 +118,17 @@ class FfprobeExecutorPacketScanMeasurementTest {
                 .addStreams(measured(1, 2_304, 3).setMeasuredDuration(23_040))
                 .addStreams(measured(2, 834, 2).setMeasuredDuration(18_101))
                 .build());
-    assertThat(report.streamMeasurementParts())
+    assertThat(report.getStreamMeasurementIntervalsList())
         .containsExactly(
-            part(request, 0)
+            part(0)
                 .addAllKeyframeIntervalBytes(List.of(4_900, 6_450))
                 .addAllKeyframeIntervalPacketCounts(List.of(3, 2))
                 .build(),
-            part(request, 1)
+            part(1)
                 .addAllKeyframeIntervalBytes(List.of(1_536, 768))
                 .addAllKeyframeIntervalPacketCounts(List.of(2, 1))
                 .build(),
-            part(request, 2)
+            part(2)
                 .addAllKeyframeIntervalBytes(List.of(417, 417))
                 .addAllKeyframeIntervalPacketCounts(List.of(1, 1))
                 .build());
@@ -159,10 +159,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request);
 
-    assertThat(report.streamMeasurementParts())
+    assertThat(report.getStreamMeasurementIntervalsList())
         .filteredOn(part -> part.getStreamIndex() == 1)
         .containsExactly(
-            part(request, 1)
+            part(1)
                 .addAllKeyframeIntervalBytes(List.of(700, 768))
                 .addAllKeyframeIntervalPacketCounts(List.of(1, 1))
                 .build());
@@ -194,10 +194,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request);
 
-    assertThat(report.streamMeasurementParts())
+    assertThat(report.getStreamMeasurementIntervalsList())
         .filteredOn(part -> part.getStreamIndex() == 1)
         .containsExactly(
-            part(request, 1)
+            part(1)
                 .addAllKeyframeIntervalBytes(List.of(audioPackets, 0))
                 .addAllKeyframeIntervalPacketCounts(List.of(audioPackets, 0))
                 .build());
@@ -241,10 +241,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request);
 
-    assertThat(report.streamMeasurementParts())
+    assertThat(report.getStreamMeasurementIntervalsList())
         .filteredOn(part -> part.getStreamIndex() == 1)
         .containsExactly(
-            part(request, 1)
+            part(1)
                 .addAllKeyframeIntervalBytes(List.of(0, 768))
                 .addAllKeyframeIntervalPacketCounts(List.of(0, 1))
                 .build());
@@ -276,10 +276,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
     var report = scan.executor().probe(source, request);
 
     assertThat(scan.packetScanArguments()).contains("-copyinkf");
-    assertThat(report.streamMeasurementParts())
+    assertThat(report.getStreamMeasurementIntervalsList())
         .filteredOn(part -> part.getStreamIndex() == 0)
         .containsExactly(
-            part(request, 0)
+            part(0)
                 .addAllKeyframeIntervalBytes(List.of(4_800, 6_000))
                 .addAllKeyframeIntervalPacketCounts(List.of(3, 1))
                 .build());
@@ -307,7 +307,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request());
 
-    assertThat(report.result().getMedia().getStreamMeasurements().getStreams(0))
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreams(0))
         .isEqualTo(measured(0, 4_500, 2).setMeasuredDuration(26_250).build());
   }
 
@@ -334,7 +334,7 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request);
 
-    assertThat(report.result().getMedia().getStreamMeasurements().getStreams(1))
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getStreams(1))
         .isEqualTo(
             MeasuredStream.newBuilder()
                 .setStreamIndex(1)
@@ -344,10 +344,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
                 .setTimeBaseDenominator(1_225)
                 .setMeasuredDuration(2)
                 .build());
-    assertThat(report.streamMeasurementParts())
+    assertThat(report.getStreamMeasurementIntervalsList())
         .filteredOn(part -> part.getStreamIndex() == 1)
         .containsExactly(
-            part(request, 1)
+            part(1)
                 .addAllKeyframeIntervalBytes(List.of(104, 105))
                 .addAllKeyframeIntervalPacketCounts(List.of(1, 1))
                 .build());
@@ -369,12 +369,12 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request());
 
-    assertThat(report.result().getMedia().getStreamMeasurements().getSource())
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getSource())
         .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN);
   }
 
-  // The contract carries at most 8,388,608 keyframe intervals across one attempt's measurement
-  // parts. The video and 1,023 AC-3 streams with 65,536 keyframes hold 1,024 x 65,536 intervals,
+  // The scan bounds storage at 8,388,608 measured keyframe intervals. The video and 1,023 AC-3
+  // streams with 65,536 keyframes hold 1,024 x 65,536 intervals,
   // 8 times that bound. A count of each AC-3 stream's interval takes 16 bytes, so counts of every
   // interval need more than 1 GiB, and counts up to the bound about 200 MiB. The probe's JVM exits
   // at its first OutOfMemoryError. Without that flag, an OutOfMemoryError on the thread that reads
@@ -383,9 +383,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
   @Timeout(120)
   @DisplayName(
       "Should report the keyframes without a measurement within a 512 MiB heap when the keyframe"
-          + " intervals of the scanned streams exceed what the contract carries")
-  void shouldReportKeyframesWithoutMeasurementWithinA512MibHeapWhenIntervalsExceedContractsBound()
-      throws IOException, InterruptedException {
+          + " intervals of the scanned streams exceed the scan's storage bound")
+  void
+      shouldReportKeyframesWithoutMeasurementWithinA512MibHeapWhenIntervalsExceedTheScanStorageBound()
+          throws IOException, InterruptedException {
     var outcome = source.resolveSibling("outcome.txt");
     var output = source.resolveSibling("output.txt");
     var command = new ArrayList<String>();
@@ -677,10 +678,10 @@ class FfprobeExecutorPacketScanMeasurementTest {
 
     var report = scan.executor().probe(source, request());
 
-    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+    assertThat(report.getResult().getMedia().getKeyframes().getPositions().getKeyframeCount())
         .isEqualTo(2);
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   private static MeasuredStream.Builder measured(int streamIndex) {
@@ -694,10 +695,8 @@ class FfprobeExecutorPacketScanMeasurementTest {
     return measured(streamIndex).setMeasuredBytes(bytes).setPacketCount(packets);
   }
 
-  private static ProbeStreamMeasurementPart.Builder part(ProbeRequest request, int streamIndex) {
-    return ProbeStreamMeasurementPart.newBuilder()
-        .setProbeAttemptId(request.getProbeAttemptId())
-        .setStreamIndex(streamIndex);
+  private static StreamMeasurementIntervals.Builder part(int streamIndex) {
+    return StreamMeasurementIntervals.newBuilder().setStreamIndex(streamIndex);
   }
 
   private static ProbeRequest request() {

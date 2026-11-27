@@ -29,13 +29,15 @@ import lombok.NonNull;
  * that does not hold six blocks, at an interval count beyond an unsigned 32-bit value, at a time or
  * a span beyond the long range, and when more audio packets wait than {@link
  * #MAXIMUM_WAITING_AUDIO_PACKETS}. The counts also stop when the intervals of every stream together
- * exceed the {@link KeyframePositionsReport#MAXIMUM_INTERVALS_PER_PROBE} entries that the contract
- * carries.
+ * exceed the internal interval-storage bound. The report sender separately applies the server
+ * session's advertised limits.
  */
 final class ScannedPacketCounts {
 
   /** The scan holds at most this many audio packets whose keyframe interval it cannot yet tell. */
   private static final int MAXIMUM_WAITING_AUDIO_PACKETS = 1 << 18;
+
+  private static final long MAXIMUM_COUNTED_INTERVALS = 1L << 23;
 
   private static final long LARGEST_INTERVAL_COUNT = 0xFFFF_FFFFL;
   private static final int FIRST_CAPACITY = 1;
@@ -117,10 +119,8 @@ final class ScannedPacketCounts {
 
   private void openInterval(TimeBase videoTimeBase, long keyframeTime) {
     keyframeCount++;
-    // Each stream keeps a count for every interval. The report carries no measurement beyond the
-    // contract's bound, so the counts stop there instead of growing with every later keyframe.
-    if ((long) keyframeCount * streams.size()
-        > KeyframePositionsReport.MAXIMUM_INTERVALS_PER_PROBE) {
+    // Bound interval storage before constructing a report; admission limits belong to the session.
+    if ((long) keyframeCount * streams.size() > MAXIMUM_COUNTED_INTERVALS) {
       isStopped = true;
       return;
     }

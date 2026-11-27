@@ -1236,7 +1236,7 @@ class WorkerMediaSmokeTest {
     assertThat(decodedSampleCount(source, "a:0")).isEqualTo(192_512);
     var lastSampleEnd = Duration.ofNanos(192_512 * 1_000_000_000L / 44_100);
 
-    var result = packetScanThroughWorker(source);
+    var result = packetScanThroughWorker(source).getResult();
 
     assertThat(result.getMedia().getStreamEndsList())
         .filteredOn(end -> end.getStreamIndex() == 1)
@@ -1280,7 +1280,7 @@ class WorkerMediaSmokeTest {
         .startsWith("3072,0\n4096,1024\n");
     var expectedEnds = listedStreamEnds(source, OptionalInt.empty());
 
-    var result = packetScanThroughWorker(source);
+    var result = packetScanThroughWorker(source).getResult();
 
     assertThat(result.getMedia().getStreamEndsList())
         .filteredOn(end -> end.getStreamIndex() == 1)
@@ -1328,7 +1328,7 @@ class WorkerMediaSmokeTest {
                 source))
         .isEqualToIgnoringWhitespace("1");
 
-    var result = packetScanThroughWorker(source);
+    var result = packetScanThroughWorker(source).getResult();
 
     assertThat(result.getMedia().getKeyframes().getPositions().getKeyframeCount()).isPositive();
     assertThat(result.getMedia().getStreamEndsList())
@@ -1360,11 +1360,9 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
-    var positions = report.result().getMedia().getKeyframes().getPositions();
-    assertThat(keyframeTimes(report.keyframePositionsParts()))
-        .isNotEmpty()
-        .isEqualTo(packetKeyframes(source, positions));
-    assertThat(report.result().getMedia().getStreamMeasurements().getSource())
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
+    assertThat(keyframeTimes(report)).isNotEmpty().isEqualTo(packetKeyframes(source, positions));
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getSource())
         .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN);
     assertThat(reportedMeasurements(report))
         .isEqualTo(listedMeasurements(source, positions.getStreamIndex()));
@@ -1383,12 +1381,10 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
-    var positions = report.result().getMedia().getKeyframes().getPositions();
-    assertThat(keyframeTimes(report.keyframePositionsParts()))
-        .isNotEmpty()
-        .isEqualTo(packetKeyframes(source, positions));
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
+    assertThat(keyframeTimes(report)).isNotEmpty().isEqualTo(packetKeyframes(source, positions));
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   // ADR 0054: a measurement counts the source's packets. FFmpeg's stream copy raises the decode
@@ -1407,12 +1403,10 @@ class WorkerMediaSmokeTest {
 
     var report = probeExecutor().probe(source, packetScanRequest());
 
-    var positions = report.result().getMedia().getKeyframes().getPositions();
-    assertThat(keyframeTimes(report.keyframePositionsParts()))
-        .isNotEmpty()
-        .isEqualTo(packetKeyframes(source, positions));
-    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
-    assertThat(report.streamMeasurementParts()).isEmpty();
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
+    assertThat(keyframeTimes(report)).isNotEmpty().isEqualTo(packetKeyframes(source, positions));
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
   }
 
   // The sparse Cues are what make the probe ask for a keyframe packet scan of this source.
@@ -10374,7 +10368,7 @@ class WorkerMediaSmokeTest {
     return probeExecutor().probe(source, keyframeRequest()).getResult();
   }
 
-  private ProbeAttemptResult packetScanThroughWorker(Path source) throws Exception {
+  private ProbeAttemptReport packetScanThroughWorker(Path source) throws Exception {
     var runtime = new ScriptedWorkerRuntime();
     var request = packetScanRequest().toBuilder();
     request.getSourceBuilder().setRelativeKey(source.getFileName().toString());
@@ -10383,9 +10377,9 @@ class WorkerMediaSmokeTest {
       start(runtime.connection(), request.build());
       runtime.probes().drain();
 
-      var results = runtime.connection().results();
-      assertThat(results).hasSize(1);
-      return results.getFirst();
+      var reports = runtime.connection().reports();
+      assertThat(reports).hasSize(1);
+      return reports.getFirst();
     }
   }
 
@@ -10971,9 +10965,9 @@ class WorkerMediaSmokeTest {
 
   private static List<StreamCounts> reportedMeasurements(ProbeAttemptReport report) {
     var counts = new ArrayList<StreamCounts>();
-    for (var stream : report.result().getMedia().getStreamMeasurements().getStreamsList()) {
+    for (var stream : report.getResult().getMedia().getStreamMeasurements().getStreamsList()) {
       var parts =
-          report.streamMeasurementParts().stream()
+          report.getStreamMeasurementIntervalsList().stream()
               .filter(part -> part.getStreamIndex() == stream.getStreamIndex())
               .toList();
       counts.add(

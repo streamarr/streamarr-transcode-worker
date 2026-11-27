@@ -177,7 +177,6 @@ record KeyframePositionsReport(
     return measurements;
   }
 
-
   static ProbeAttemptResult withKeyframes(
       ProbeAttemptResult result, ProbeKeyframes.Builder keyframes) {
     return result.toBuilder()
