@@ -8,7 +8,6 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * Strips Dolby Vision, HDR10+ or both from a sample whose NAL units each follow a big-endian length
@@ -22,8 +21,9 @@ import java.util.Set;
  * previous RPU's mapping that no RPU since the last random access point defined, as the decoder
  * resolves such a reuse from the mappings it holds. Stripping HDR10+ removes each HDR10+ message
  * from the SEI NAL units and keeps their other messages; a NAL unit left with no message goes.
- * Every other NAL unit keeps its bytes, and so does an SEI NAL unit that holds no HDR10+ message.
- * Bytes after the last NAL unit too few to hold a length stay where they are.
+ * Naming an assumed source matrix rewrites each H.264 SPS without reading slice headers. Every
+ * other NAL unit keeps its bytes, and so does an SEI NAL unit that holds no HDR10+ message. Bytes
+ * after the last NAL unit too few to hold a length stay where they are.
  */
 final class NalUnitSampleRewrite implements SampleRewrite {
 
@@ -44,23 +44,34 @@ final class NalUnitSampleRewrite implements SampleRewrite {
   private final boolean stripsDolbyVision;
   private final boolean stripsHdr10Plus;
   private final boolean convertsProfile7;
+  private final Optional<AssumedSourceMatrix> assumedSourceMatrix;
   private final DefinedRpuMappings definedMappings = new DefinedRpuMappings();
 
   /**
    * @param lengthSize the bytes of each NAL unit's length: 1, 2 or 4
    */
-  NalUnitSampleRewrite(NalSyntax syntax, int lengthSize, Set<BitstreamRewrite> rewrites) {
+  NalUnitSampleRewrite(NalSyntax syntax, int lengthSize, VideoDecision.Copy copy) {
+    var rewrites = copy.bitstreamRewrites();
     this.syntax = syntax;
     this.lengthSize = lengthSize;
     this.stripsDolbyVision = rewrites.contains(BitstreamRewrite.STRIP_DOLBY_VISION);
     this.stripsHdr10Plus = rewrites.contains(BitstreamRewrite.STRIP_HDR10_PLUS);
     this.convertsProfile7 =
         rewrites.contains(BitstreamRewrite.CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1);
+    this.assumedSourceMatrix = copy.assumedSourceMatrix();
   }
 
   @Override
   public ByteBuffer rewrite(ByteBuffer sample) {
-    return new Walk(sample).rewritten();
+    try {
+      return new Walk(sample).rewritten();
+    } catch (FragmentedMp4Exception failure) {
+      if (assumedSourceMatrix.isPresent() && failure.getReason() == Reason.MALFORMED_BOX) {
+        throw new FragmentedMp4Exception(Reason.OUTPUT_MISMATCH, failure.getMessage());
+      }
+
+      throw failure;
+    }
   }
 
   // One sample's walk: its units by position, each kept one copied straight into the output, so
@@ -128,6 +139,14 @@ final class NalUnitSampleRewrite implements SampleRewrite {
       }
 
       var type = syntax.typeOf(sample.get(start));
+      if (syntax == NalSyntax.AVC && type == 7 && assumedSourceMatrix.isPresent()) {
+        var unit = new byte[length];
+        sample.get(start, unit);
+        put(ByteBuffer.wrap(AvcSequenceParameterSet.withMatrix(unit, assumedSourceMatrix.get())));
+        changed = true;
+        return;
+      }
+
       randomAccessPoint |= syntax.isRandomAccessPoint(type);
       if ((stripsDolbyVision || convertsProfile7) && syntax.isDolbyVision(type)) {
         dropDolbyVision(start, length, type);
