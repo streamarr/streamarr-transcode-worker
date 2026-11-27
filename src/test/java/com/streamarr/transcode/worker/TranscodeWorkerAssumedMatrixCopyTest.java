@@ -98,10 +98,11 @@ class TranscodeWorkerAssumedMatrixCopyTest {
   }
 
   private static byte[] withSpsTrailingBytes(byte[] output) {
-    var record = new String(output, StandardCharsets.ISO_8859_1).indexOf("avcC");
-    assertThat(record).isPositive();
-    var length = Short.toUnsignedInt(ByteBuffer.wrap(output).getShort(record + 10));
-    var sps = Arrays.copyOfRange(output, record + 12, record + 12 + length + 1);
+    var configurationOffset = new String(output, StandardCharsets.ISO_8859_1).indexOf("avcC");
+    assertThat(configurationOffset).isPositive();
+    var length = Short.toUnsignedInt(ByteBuffer.wrap(output).getShort(configurationOffset + 10));
+    var sps =
+        Arrays.copyOfRange(output, configurationOffset + 12, configurationOffset + 12 + length + 1);
     sps[length] = (byte) 0xA5;
     var sample = ByteBuffer.allocate(4 + sps.length).putInt(sps.length).put(sps).array();
     return RecordingEdits.withBytesAfterTheFirstVideoSample(output, sample);

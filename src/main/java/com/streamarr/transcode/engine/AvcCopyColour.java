@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import lombok.RequiredArgsConstructor;
 
 final class AvcCopyColour {
 
@@ -15,9 +16,9 @@ final class AvcCopyColour {
   static byte[] rewriteSampleEntry(ByteBuffer body, AssumedSourceMatrix matrix) {
     var entry = new BoxView("avc1", body);
     var children = entry.after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES).children();
-    var record = configuration(children);
+    var decoderConfiguration = configuration(children);
     var rewritten =
-        record.sequenceParameterSets().stream()
+        decoderConfiguration.sequenceParameterSets.stream()
             .map(sps -> AvcSequenceParameterSet.withMatrix(sps, matrix))
             .toList();
     var colour = AvcSequenceParameterSet.colourDescriptionOf(rewritten.getFirst());
@@ -30,7 +31,7 @@ final class AvcCopyColour {
 
       var content =
           child.type().equals("avcC")
-              ? record.withParameterSets(rewritten)
+              ? decoderConfiguration.withParameterSets(rewritten)
               : child.fields().bytes(child.body().remaining());
       result.writeBytes(box(child.type(), content));
     }
@@ -46,7 +47,7 @@ final class AvcCopyColour {
 
     var children = entry.after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES).children();
     var colours =
-        configuration(children).sequenceParameterSets().stream()
+        configuration(children).sequenceParameterSets.stream()
             .map(AvcSequenceParameterSet::colourDescriptionOf)
             .toList();
     var expectedMatrix = matrix == AssumedSourceMatrix.BT709 ? 1 : 6;
@@ -110,8 +111,12 @@ final class AvcCopyColour {
         .array();
   }
 
-  private record DecoderConfiguration(
-      byte[] prefix, List<byte[]> sequenceParameterSets, byte[] tail) {
+  @RequiredArgsConstructor
+  private static final class DecoderConfiguration {
+    private final byte[] prefix;
+    private final List<byte[]> sequenceParameterSets;
+    private final byte[] tail;
+
     byte[] withParameterSets(List<byte[]> rewritten) {
       var bytes = new ByteArrayOutputStream();
       bytes.writeBytes(prefix);

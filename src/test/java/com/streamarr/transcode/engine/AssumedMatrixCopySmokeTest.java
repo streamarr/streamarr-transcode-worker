@@ -124,8 +124,8 @@ class AssumedMatrixCopySmokeTest {
         movie.samplesOf(movie.videoTrack()).stream()
             .flatMap(sample -> parameterSets(sample.data()).stream())
             .toList();
-    assertThat(parameterSets).isNotEmpty();
     assertThat(parameterSets)
+        .isNotEmpty()
         .allSatisfy(
             sps -> {
               var colour = AvcSequenceParameterSet.colourDescriptionOf(sps);

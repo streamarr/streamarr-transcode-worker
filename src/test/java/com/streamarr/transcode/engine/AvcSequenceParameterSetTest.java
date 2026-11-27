@@ -104,7 +104,7 @@ class AvcSequenceParameterSetTest {
     var unknown = box("free", new byte[] {11, 12});
     var source =
         entry(
-            record(first.bytes(), second.bytes()),
+            configurationBox(first.bytes(), second.bytes()),
             box("colr", new byte[] {1}),
             unknown,
             box("colr", new byte[] {2}));
@@ -118,7 +118,7 @@ class AvcSequenceParameterSetTest {
     var children = rewritten.after(78).children();
     assertThat(children).extracting(BoxView::type).containsExactly("avcC", "free", "colr");
     var expectedRecord =
-        record(
+        configurationBox(
             first.toBuilder().matrix(6).build().bytes(),
             second.toBuilder().matrix(6).build().bytes());
     assertThat(children.getFirst().body())
@@ -132,7 +132,7 @@ class AvcSequenceParameterSetTest {
   @DisplayName(
       "Should fail as an output mismatch when the AVC record declares a reserved NAL length")
   void shouldFailAsAnOutputMismatchWhenTheAvcRecordDeclaresAReservedNalLength() {
-    var avcC = record(Sps.builder().build().bytes());
+    var avcC = configurationBox(Sps.builder().build().bytes());
     avcC[12] = (byte) 0xFE;
     var source = entry(avcC);
 
@@ -154,7 +154,7 @@ class AvcSequenceParameterSetTest {
     var colour = HexFormat.of().parseHex("6e636c7800010001000600");
     colour[offset] ^= (byte) 0x80;
 
-    assertMismatch(entry(record(sps), box("colr", colour)));
+    assertMismatch(entry(configurationBox(sps), box("colr", colour)));
   }
 
   @Test
@@ -164,8 +164,8 @@ class AvcSequenceParameterSetTest {
         Sps.builder().vui(true).videoSignal(true).colourDescription(true).matrix(6).build().bytes();
     var colr = box("colr", HexFormat.of().parseHex("6e636c7800010001000600"));
 
-    assertMismatch(entry(record(sps)));
-    assertMismatch(entry(record(sps), colr, colr));
+    assertMismatch(entry(configurationBox(sps)));
+    assertMismatch(entry(configurationBox(sps), colr, colr));
   }
 
   @Test
@@ -174,7 +174,8 @@ class AvcSequenceParameterSetTest {
     var sps = Sps.builder().vui(true).videoSignal(true).colourDescription(true).matrix(6).build();
     var colr = box("colr", HexFormat.of().parseHex("6e636c7800010001000600"));
 
-    assertMismatch(entry(record(sps.bytes(), sps.toBuilder().matrix(1).build().bytes()), colr));
+    assertMismatch(
+        entry(configurationBox(sps.bytes(), sps.toBuilder().matrix(1).build().bytes()), colr));
   }
 
   private static void assertMismatch(BoxView entry) {
@@ -190,7 +191,7 @@ class AvcSequenceParameterSetTest {
     return new BoxView("avc1", ByteBuffer.wrap(concat(new byte[78], concat(children))));
   }
 
-  private static byte[] record(byte[]... parameterSets) {
+  private static byte[] configurationBox(byte[]... parameterSets) {
     var content = new ByteArrayOutputStream();
     content.writeBytes(HexFormat.of().parseHex("0142001eff"));
     content.write(0xE0 | parameterSets.length);
