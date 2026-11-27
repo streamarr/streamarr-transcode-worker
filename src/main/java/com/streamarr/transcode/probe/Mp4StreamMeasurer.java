@@ -10,7 +10,7 @@ import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
 import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import com.streamarr.transcode.probe.CopiedSampleSizes.SourceMovie;
-import com.streamarr.transcode.probe.MaximumFrameRate.MeasuredFrameRate;
+import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.Mp4SampleTables.Edit;
 import com.streamarr.transcode.probe.Mp4SampleTables.Run;
 import com.streamarr.transcode.probe.Mp4SampleTables.RunCursor;
@@ -67,7 +67,7 @@ final class Mp4StreamMeasurer {
    * {@code keyframeCount} is the number of keyframes that the keyframe reader listed for the chosen
    * track, which the measurement's intervals must match.
    */
-  static Optional<List<TrackMeasurement>> measure(
+  static Optional<List<StreamMeasurement>> measure(
       SourceMovie source, TrackStream chosen, List<TrackStream> streams, int keyframeCount)
       throws IOException {
     var movie = source.movie();
@@ -79,7 +79,7 @@ final class Mp4StreamMeasurer {
       }
 
       var measuring = new Measuring(source, movieTimescale, chosen.trackId(), chosenTrack.get());
-      var measured = new ArrayList<TrackMeasurement>();
+      var measured = new ArrayList<StreamMeasurement>();
       for (var stream : streams) {
         var measurement = measuring.measure(stream);
         if (measurement.isEmpty() && stream.isRequired()) {
@@ -108,7 +108,7 @@ final class Mp4StreamMeasurer {
       return !track.isVideo() || !track.presentsBeforeEditStart();
     }
 
-    Optional<TrackMeasurement> measure(TrackStream stream) throws IOException {
+    Optional<StreamMeasurement> measure(TrackStream stream) throws IOException {
       try {
         if (!CopiedSampleSizes.areKept(source, stream)) {
           return Optional.empty();
@@ -124,86 +124,6 @@ final class Mp4StreamMeasurer {
       } catch (ContainerIndexException | BufferUnderflowException | ArithmeticException _) {
         return Optional.empty();
       }
-    }
-  }
-
-  /**
-   * One stream's measurement. {@code measuredDuration} counts ticks of 1 / {@code timescale}
-   * seconds. {@code intervalBytes} and {@code intervalPacketCounts} each hold one unsigned 32-bit
-   * count for each keyframe interval: the stream's bytes and its samples in that interval.
-   */
-  static final class TrackMeasurement {
-    private final int streamIndex;
-    private final long measuredBytes;
-    private final long packetCount;
-    private final long timescale;
-    private final long measuredDuration;
-    private final int[] intervalBytes;
-    private final int[] intervalPacketCounts;
-    private final MeasuredFrameRate maximumFrameRate;
-
-    @Builder
-    private TrackMeasurement(
-        int streamIndex,
-        long measuredBytes,
-        long packetCount,
-        long timescale,
-        long measuredDuration,
-        int[] intervalBytes,
-        int[] intervalPacketCounts,
-        MeasuredFrameRate maximumFrameRate) {
-      this.streamIndex = streamIndex;
-      this.measuredBytes = measuredBytes;
-      this.packetCount = packetCount;
-      this.timescale = timescale;
-      this.measuredDuration = measuredDuration;
-      this.intervalBytes = intervalBytes;
-      this.intervalPacketCounts = intervalPacketCounts;
-      this.maximumFrameRate = maximumFrameRate;
-    }
-
-    int streamIndex() {
-      return streamIndex;
-    }
-
-    long measuredBytes() {
-      return measuredBytes;
-    }
-
-    long packetCount() {
-      return packetCount;
-    }
-
-    long timescale() {
-      return timescale;
-    }
-
-    long measuredDuration() {
-      return measuredDuration;
-    }
-
-    /** The unsigned 32-bit byte counts, in interval order. The array is a copy. */
-    int[] intervalBytes() {
-      return intervalBytes.clone();
-    }
-
-    /**
-     * The chosen video track's {@link MaximumFrameRate#measured} rate over the samples that a
-     * stream copy keeps; empty for every other track and when the times give none.
-     */
-    Optional<MeasuredFrameRate> maximumFrameRate() {
-      return Optional.ofNullable(maximumFrameRate);
-    }
-
-    /** The unsigned 32-bit sample counts, in interval order. The array is a copy. */
-    int[] intervalPacketCounts() {
-      return intervalPacketCounts.clone();
-    }
-
-    @Override
-    public String toString() {
-      return "TrackMeasurement[streamIndex=%d, measuredBytes=%d, intervals=%d]"
-          .formatted(streamIndex, measuredBytes, intervalBytes.length);
     }
   }
 
@@ -312,7 +232,7 @@ final class Mp4StreamMeasurer {
       return keyframes;
     }
 
-    Optional<TrackMeasurement> measure(int streamIndex, Track chosen, List<Keyframe> keyframes) {
+    Optional<StreamMeasurement> measure(int streamIndex, Track chosen, List<Keyframe> keyframes) {
       // A stream copy drops the samples before a track's first keyframe.
       if (!sync[first]) {
         return Optional.empty();
@@ -349,11 +269,11 @@ final class Mp4StreamMeasurer {
       }
 
       return Optional.of(
-          TrackMeasurement.builder()
+          StreamMeasurement.builder()
               .streamIndex(streamIndex)
               .measuredBytes(bytes)
               .packetCount(sizes.length - (long) first)
-              .timescale(timescale)
+              .timeBase(new TimeBase(1, timescale))
               .measuredDuration(Math.subtractExact(lastEnd, firstPresentation))
               .intervalBytes(counts)
               .intervalPacketCounts(packets)

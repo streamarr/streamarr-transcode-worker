@@ -6,8 +6,11 @@ import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptReport;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
+import com.streamarr.transcode.probe.ChunkPackets.SixBlockDuration;
+import com.streamarr.transcode.probe.CopiedPacketCheck.PacketCopy;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
+import com.streamarr.transcode.probe.ScannedPacketCounts.MeasuredStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -27,13 +30,17 @@ import tools.jackson.databind.JsonNode;
  * copying every packet of that stream through FFmpeg. FFmpeg prints one framecrc line per packet,
  * and the scan keeps only the keyframes, so its memory grows with the keyframe count rather than
  * the packet count. The scan copies each audio stream's packets beside the video's, and reports
- * where the chosen video stream and each audio stream ends (ADR 0037, early ends).
+ * where the chosen video stream and each audio stream ends (ADR 0037, early ends). When a copy
+ * keeps the packets of every one of those streams and FFmpeg keeps their times, the scan also
+ * measures them (ADR 0054).
  */
 @RequiredArgsConstructor
 final class KeyframePacketScan {
 
   /** framecrc prints FFmpeg's AV_NOPTS_VALUE for a packet time that the source does not give. */
   private static final String NO_TIME = Long.toString(Long.MIN_VALUE);
+
+  private static final String STREAMS = "streams";
 
   /** framecrc omits the flags of a packet whose only flag is AV_PKT_FLAG_KEY. */
   private static final int KEYFRAME_FLAG = 1;
@@ -47,7 +54,17 @@ final class KeyframePacketScan {
   // Packet timestamps and durations can both round early; coarse time bases need two whole ticks.
   private static final BigDecimal AUDIO_END_MARGIN_SECONDS = new BigDecimal("0.002");
 
+  /**
+   * FFmpeg logs one of these lines when its stream copy changes a packet's times before framecrc
+   * prints them, and then exits with code 0. The printed times are then not the source's. FFmpeg
+   * logs a rise of at most 2 ticks in an audio packet's decode time at its debug level, and every
+   * other change as a warning.
+   */
+  private static final List<String> CHANGED_PACKET_TIMES =
+      List.of("Non-monotonic DTS", "Invalid DTS");
+
   @NonNull private final PacketScanRunner ffmpeg;
+  @NonNull private final CopiedPacketCheck copies;
 
   @FunctionalInterface
   interface PacketScanRunner {
@@ -68,17 +85,20 @@ final class KeyframePacketScan {
 
   ProbeAttemptReport addKeyframes(ProbedSource probed)
       throws ExecutionException, InterruptedException {
-    var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path("streams"));
+    var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path(STREAMS));
     if (chosen.isEmpty()) {
       return failed(probed, ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
     }
 
     var stream = chosen.get().description();
     var timeBase = timeBase(stream);
-    var scanned = scannedStreams(probed, chosen.get().streamIndex(), timeBase);
-    var keyframes = new PacketKeyframes(timeRule(probed, stream), scanned.size());
+    var scanned = scannedStreams(probed, chosen.get(), timeBase);
+    var counts = new ScannedPacketCounts(measuredStreams(probed, scanned));
+    var keyframes = new PacketKeyframes(timeRule(probed, stream), scanned.size(), counts);
     var diagnostics = new DemuxingDiagnostics();
-    var exitCode = ffmpeg.run(arguments(probed, scanned), keyframes, diagnostics);
+    var changedTimes = new ChangedPacketTimes();
+    var exitCode =
+        ffmpeg.run(arguments(probed, scanned), keyframes, diagnostics.andThen(changedTimes));
     if (keyframes.isMissingTime()) {
       return unavailable(
           probed,
@@ -109,13 +129,25 @@ final class KeyframePacketScan {
         .timeBase(timeBase)
         .source(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN)
         .keyframes(keyframes.times())
+        .measured(measurement(counts, changedTimes))
         .streamEnds(streamEnds(scanned, keyframes))
         .build()
         .report();
   }
 
-  /** One stream that the scan copies: its index in the source and its time base. */
-  private record ScannedStream(int index, TimeBase timeBase) {}
+  // ADR 0054: a measurement counts the source's packets, so a packet time that FFmpeg changed
+  // leaves the file unmeasured.
+  private static List<StreamMeasurement> measurement(
+      ScannedPacketCounts counts, ChangedPacketTimes changedTimes) {
+    if (changedTimes.isChanged()) {
+      return List.of();
+    }
+
+    return counts.measurement().orElse(List.of());
+  }
+
+  /** One stream that the scan copies: its index in the source, its time base and description. */
+  private record ScannedStream(int index, TimeBase timeBase, JsonNode description) {}
 
   /**
    * The streams that the scan copies, in the order of FFmpeg's output streams: the chosen video
@@ -124,35 +156,91 @@ final class KeyframePacketScan {
    * also leaves out an audio stream without a readable time base, whose end it could not place.
    */
   private static List<ScannedStream> scannedStreams(
-      ProbedSource probed, int chosenVideoStream, TimeBase videoTimeBase) {
+      ProbedSource probed, ChosenVideoStream chosen, TimeBase videoTimeBase) {
     var scanned = new ArrayList<ScannedStream>();
-    scanned.add(new ScannedStream(chosenVideoStream, videoTimeBase));
-    for (var stream : probed.ffprobeOutput().path("streams")) {
+    scanned.add(new ScannedStream(chosen.streamIndex(), videoTimeBase, chosen.description()));
+    for (var stream : probed.ffprobeOutput().path(STREAMS)) {
       var audioTimeBase = ProbeTimeline.timeBase(stream, "time_base");
       if (isCopiedAudio(stream) && audioTimeBase.isPresent()) {
-        scanned.add(new ScannedStream(stream.path("index").asInt(), audioTimeBase.get()));
+        scanned.add(new ScannedStream(stream.path("index").asInt(), audioTimeBase.get(), stream));
       }
     }
 
     return scanned;
   }
 
+  /**
+   * The streams that the scan measures: every scanned stream, or none when the scan leaves an audio
+   * stream out or a copy would change a stream's packets (ADR 0054). A failed read of a first AAC
+   * packet leaves that copy unknown, so it leaves the stream unmeasured rather than fail the scan.
+   */
+  private List<MeasuredStream> measuredStreams(ProbedSource probed, List<ScannedStream> scanned)
+      throws ExecutionException, InterruptedException {
+    var audioStreams = 0;
+    for (var stream : probed.ffprobeOutput().path(STREAMS)) {
+      if (isAudio(stream)) {
+        audioStreams++;
+      }
+    }
+
+    if (audioStreams != scanned.size() - 1) {
+      return List.of();
+    }
+
+    var measured = new ArrayList<MeasuredStream>();
+    for (var stream : scanned) {
+      if (copyOf(probed, stream) != PacketCopy.KEEPS_PACKETS) {
+        return List.of();
+      }
+
+      measured.add(new MeasuredStream(stream.index(), stream.timeBase(), sixBlocks(stream)));
+    }
+
+    return measured;
+  }
+
+  private PacketCopy copyOf(ProbedSource probed, ScannedStream stream)
+      throws ExecutionException, InterruptedException {
+    try {
+      return copies.of(probed, stream.index(), stream.description());
+    } catch (PacketScanException _) {
+      return PacketCopy.UNREADABLE;
+    }
+  }
+
+  private static Optional<SixBlockDuration> sixBlocks(ScannedStream stream) {
+    if (CopiedPacketRule.of(FfprobeJson.text(stream.description(), "codec_name").orElse(""))
+        != CopiedPacketRule.SIX_BLOCK_EAC3) {
+      return Optional.empty();
+    }
+
+    return FfprobeJson.number(stream.description(), "sample_rate", Long::parseLong)
+        .map(rate -> new SixBlockDuration(rate, stream.timeBase()));
+  }
+
+  private static boolean isAudio(JsonNode stream) {
+    return FfprobeJson.text(stream, "codec_type").filter("audio"::equals).isPresent();
+  }
+
   private static boolean isCopiedAudio(JsonNode stream) {
-    return FfprobeJson.text(stream, "codec_type").filter("audio"::equals).isPresent()
+    return isAudio(stream)
         && stream.path("index").isIntegralNumber()
         && FfprobeJson.number(stream, "sample_rate", Long::parseLong)
             .filter(rate -> rate > 0)
             .isPresent();
   }
 
+  // -v debug prints every line that FFmpeg logs when it changes a packet's times.
   // -copyts keeps each packet's time from the source; the report subtracts the start time. FFmpeg
   // reads the source as far as ffprobe did, so that it knows the parameters of each stream that the
   // scan maps. With its smaller default limits, FFmpeg would not know the sample rate of audio that
   // starts late, and it refuses to write such a stream. FFmpeg, unlike ffprobe, refuses an option
   // that the source's demuxer lacks.
+  // -copyinkf keeps the packets before each stream's first keyframe. A stream copy drops them, but
+  // ADR 0054 counts them in the first keyframe interval, as a bitrate scan does.
   private static List<String> arguments(ProbedSource probed, List<ScannedStream> scanned) {
     var arguments =
-        new ArrayList<>(List.of("-nostdin", "-hide_banner", "-nostats", "-v", "error", "-copyts"));
+        new ArrayList<>(List.of("-nostdin", "-hide_banner", "-nostats", "-v", "debug", "-copyts"));
     arguments.addAll(FfprobeExecutor.STREAM_READ_LIMITS);
     if (ProbedSource.MPEG_TS_FORMAT.equals(probed.formatName())) {
       arguments.addAll(FfprobeExecutor.MPEG_TS_READ_LIMITS);
@@ -167,7 +255,7 @@ final class KeyframePacketScan {
       arguments.add("0:" + stream.index());
     }
 
-    arguments.addAll(List.of("-c", "copy", "-f", "framecrc", "-"));
+    arguments.addAll(List.of("-copyinkf", "-c", "copy", "-f", "framecrc", "-"));
     return arguments;
   }
 
@@ -274,18 +362,20 @@ final class KeyframePacketScan {
    * Collects the keyframes from FFmpeg's framecrc packet lines, such as {@code 0, -1024, 0, 512,
    * 3109, 0x5e1c1fb1}: the output stream, decode time, presentation time, duration, size and
    * checksum. Flags and side data may follow, such as {@code F=0x0}. Output stream 0 is the chosen
-   * video stream, and the scan keeps only the end of every other output stream.
+   * video stream, and the scan keeps only the end and the counts of every other output stream.
    */
   private static final class PacketKeyframes implements PacketLines {
 
     private final TimeRule rule;
+    private final ScannedPacketCounts counts;
     private final List<KeyframeTime> times = new ArrayList<>();
     private final List<StreamEnd> streamEnds = new ArrayList<>();
     private boolean missingTime;
     private boolean keyframeNotAfterPrevious;
 
-    PacketKeyframes(TimeRule rule, int outputStreamCount) {
+    PacketKeyframes(TimeRule rule, int outputStreamCount, ScannedPacketCounts counts) {
       this.rule = rule;
+      this.counts = counts;
       for (var output = 0; output < outputStreamCount; output++) {
         streamEnds.add(new StreamEnd());
       }
@@ -309,10 +399,15 @@ final class KeyframePacketScan {
       }
 
       streamEnds.get(packet.outputStream()).extendBy(packet);
-      if (packet.outputStream() != 0 || !packet.isKeyframe()) {
-        return true;
+      if (packet.outputStream() == 0 && packet.isKeyframe() && !tryKeepKeyframe(packet)) {
+        return false;
       }
 
+      counts.count(packet);
+      return true;
+    }
+
+    private boolean tryKeepKeyframe(Packet packet) {
       var time = keyframeTime(timesOf(packet));
       if (time.isEmpty()) {
         missingTime = true;
@@ -436,9 +531,10 @@ final class KeyframePacketScan {
 
   private record PacketTimes(OptionalLong presentation, OptionalLong decode) {}
 
+  /** One framecrc packet line: its output stream, times, duration, size in bytes and flags. */
   @Builder
-  private record Packet(
-      int outputStream, OptionalLong pts, OptionalLong dts, long duration, int flags) {
+  record Packet(
+      int outputStream, OptionalLong pts, OptionalLong dts, long duration, long size, int flags) {
 
     static Packet parse(String line) {
       var fields = Arrays.stream(line.split(",")).map(String::strip).toList();
@@ -458,6 +554,7 @@ final class KeyframePacketScan {
           .pts(time(fields.get(2)))
           .dts(time(fields.get(1)))
           .duration(Long.parseLong(fields.get(3)))
+          .size(Long.parseLong(fields.get(4)))
           .flags(flags)
           .build();
     }
@@ -489,6 +586,23 @@ final class KeyframePacketScan {
 
     boolean isDemuxingFailed() {
       return demuxingFailed;
+    }
+  }
+
+  /** Watches FFmpeg's diagnostics for a packet whose times its stream copy changed. */
+  private static final class ChangedPacketTimes implements Consumer<String> {
+
+    private volatile boolean changed;
+
+    @Override
+    public void accept(String line) {
+      if (CHANGED_PACKET_TIMES.stream().anyMatch(line::contains)) {
+        changed = true;
+      }
+    }
+
+    boolean isChanged() {
+      return changed;
     }
   }
 }

@@ -52,6 +52,7 @@ import build.buf.gen.streamarr.transcode.v1.ReportProbeAttemptResponse;
 import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
 import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
@@ -349,6 +350,20 @@ class WorkerMediaSmokeTest {
       "mp4-negative-offsets-empty-edit.mp4";
   private static final String LATE_AUDIO_SOURCE = "mpegts-late-audio.ts";
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
+  private static final String MPEG2_TS_SOURCE = "mpeg2-ac3-mp2.ts";
+  private static final String MPEG2_TS_INSIDE_GROUP_SOURCE = "mpeg2-ac3-mp2-inside-a-group.ts";
+  private static final String SPARSE_CUES_SOURCE = "h264-aac-ac3-sparse-cues.mkv";
+  private static final String MPEG4_AVI_SOURCE = "mpeg4-mp3.avi";
+  private static final String AUDIO_COMPOSITION_OFFSETS_SOURCE = "audio-presentation-offsets.mp4";
+  private static final String H264_AC3_SOURCE = "h264-ac3.mkv";
+  private static final String MOVED_AUDIO_BLOCK_SOURCE = "h264-ac3-moved-audio-block.mkv";
+  private static final String AUDIO_BLOCK_ONE_TICK_EARLY_SOURCE =
+      "h264-ac3-audio-block-one-tick-early.mkv";
+  private static final byte[] MATROSKA_SEGMENT_ID = {0x18, 0x53, (byte) 0x80, 0x67};
+  private static final byte[] MATROSKA_CLUSTER_ID = {0x1F, 0x43, (byte) 0xB6, 0x75};
+  private static final byte CLUSTER_TIMESTAMP_ID = (byte) 0xE7;
+  private static final byte SIMPLE_BLOCK_ID = (byte) 0xA3;
+  private static final byte TRACK_2 = (byte) 0x82;
 
   @TempDir static Path longSources;
 
@@ -1222,7 +1237,7 @@ class WorkerMediaSmokeTest {
     assertThat(decodedSampleCount(source, "a:0")).isEqualTo(192_512);
     var lastSampleEnd = Duration.ofNanos(192_512 * 1_000_000_000L / 44_100);
 
-    var result = packetScanThroughWorker(source);
+    var result = packetScanThroughWorker(source).getResult();
 
     assertThat(result.getMedia().getStreamEndsList())
         .filteredOn(end -> end.getStreamIndex() == 1)
@@ -1266,7 +1281,7 @@ class WorkerMediaSmokeTest {
         .startsWith("3072,0\n4096,1024\n");
     var expectedEnds = listedStreamEnds(source, OptionalInt.empty());
 
-    var result = packetScanThroughWorker(source);
+    var result = packetScanThroughWorker(source).getResult();
 
     assertThat(result.getMedia().getStreamEndsList())
         .filteredOn(end -> end.getStreamIndex() == 1)
@@ -1314,12 +1329,121 @@ class WorkerMediaSmokeTest {
                 source))
         .isEqualToIgnoringWhitespace("1");
 
-    var result = packetScanThroughWorker(source);
+    var result = packetScanThroughWorker(source).getResult();
 
     assertThat(result.getMedia().getKeyframes().getPositions().getKeyframeCount()).isPositive();
     assertThat(result.getMedia().getStreamEndsList())
         .extracting(end -> end.getStreamIndex())
         .containsExactly(0);
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure audio in its source presentation intervals when the audio presents after it decodes")
+  void shouldMeasureAudioInItsSourcePresentationIntervalsWhenTheAudioPresentsAfterItDecodes()
+      throws Exception {
+    var source = measuredSource(AUDIO_COMPOSITION_OFFSETS_SOURCE);
+    var offsets =
+        ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=pts,dts"), source)
+            .lines()
+            .map(line -> line.split(","))
+            .map(times -> Long.parseLong(times[0]) - Long.parseLong(times[1]));
+    assertThat(offsets).isNotEmpty().containsOnly(3072L);
+
+    var report = packetScanThroughWorker(source);
+
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getSource())
+        .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN);
+    assertThat(reportedMeasurements(report))
+        .hasSize(3)
+        .isEqualTo(
+            listedMeasurements(source, report.getResult().getMedia().getChosenVideoStreamIndex()));
+  }
+
+  // ADR 0054: a keyframe packet scan measures the chosen video stream and every audio stream in the
+  // read that finds the keyframes. The oracle is ffprobe's list of every packet of the whole file,
+  // counted by the ADR's rules, which the scan's FFmpeg command does not print.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        MPEG2_TS_SOURCE,
+        MPEG2_TS_INSIDE_GROUP_SOURCE,
+        SPARSE_CUES_SOURCE,
+        MPEG4_AVI_SOURCE,
+        "mkv-pipe.mkv",
+        "mp4-fragmented.mp4",
+        "mp4-truncated.mp4",
+        "mkv-truncated-cues-front.mkv"
+      })
+  @DisplayName(
+      "Should measure each video and audio stream as ffprobe lists the whole file's packets when a"
+          + " keyframe packet scan reads a source that a copy keeps")
+  void shouldMeasureEachStreamAsFfprobeListsWholeFileWhenKeyframePacketScanReadsSourceThatCopyKeeps(
+      String fixture) throws Exception {
+    var source = measuredSource(fixture);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
+    assertThat(keyframeTimes(report)).isNotEmpty().isEqualTo(packetKeyframes(source, positions));
+    assertThat(report.getResult().getMedia().getStreamMeasurements().getSource())
+        .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_KEYFRAME_PACKET_SCAN);
+    assertThat(reportedMeasurements(report))
+        .isEqualTo(listedMeasurements(source, positions.getStreamIndex()));
+  }
+
+  // ADR 0054, unchanged packets: H.264 in Annex B form, as MPEG-TS and AVI carry it, and AAC in
+  // ADTS frames change in a copy, so the scan reports the keyframes and no measurement.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"mpegts.ts", "avi.avi"})
+  @DisplayName(
+      "Should report the keyframes without a measurement when a keyframe packet scan reads a source"
+          + " whose copy changes its packets")
+  void shouldReportKeyframesWithoutMeasurementWhenKeyframePacketScanReadsSourceWhoseCopyChangesIt(
+      String fixture) throws Exception {
+    var source = keyframeSource(fixture);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
+    assertThat(keyframeTimes(report)).isNotEmpty().isEqualTo(packetKeyframes(source, positions));
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
+  }
+
+  // ADR 0054: a measurement counts the source's packets. FFmpeg's stream copy raises the decode
+  // time of an audio packet that decodes before the packet that the file holds before it, and
+  // prints the raised time. In the source with one block 1 tick early, the raise moves that
+  // block's packet into the next keyframe interval. FFmpeg logs a raise of at most 2 ticks only at
+  // its debug level.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {MOVED_AUDIO_BLOCK_SOURCE, AUDIO_BLOCK_ONE_TICK_EARLY_SOURCE})
+  @DisplayName(
+      "Should report the keyframes without a measurement when FFmpeg changes the times of the"
+          + " packets that a keyframe packet scan copies")
+  void shouldReportKeyframesWithoutMeasurementWhenFfmpegChangesTimesOfPacketsThatScanCopies(
+      String fixture) throws Exception {
+    var source = measuredSource(fixture);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    var positions = report.getResult().getMedia().getKeyframes().getPositions();
+    assertThat(keyframeTimes(report)).isNotEmpty().isEqualTo(packetKeyframes(source, positions));
+    assertThat(report.getResult().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.getStreamMeasurementIntervalsList()).isEmpty();
+  }
+
+  // The sparse Cues are what make the probe ask for a keyframe packet scan of this source.
+  @Test
+  @DisplayName(
+      "Should require a packet scan when a Matroska file from an unknown writer lists only some"
+          + " keyframes in its Cues")
+  void shouldRequirePacketScanWhenMatroskaFileFromUnknownWriterListsOnlySomeKeyframesInItsCues()
+      throws Exception {
+    var result = keyframeProbe(measuredSource(SPARSE_CUES_SOURCE));
+
+    assertThat(result.getMedia().getKeyframes().getPacketScanRequired())
+        .isEqualTo(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
   }
 
   @Test
@@ -10268,7 +10392,7 @@ class WorkerMediaSmokeTest {
     return probeExecutor().probe(source, keyframeRequest()).getResult();
   }
 
-  private ProbeAttemptResult packetScanThroughWorker(Path source) throws Exception {
+  private ProbeAttemptReport packetScanThroughWorker(Path source) throws Exception {
     var runtime = new ScriptedWorkerRuntime();
     var request = packetScanRequest().toBuilder();
     request.getSourceBuilder().setRelativeKey(source.getFileName().toString());
@@ -10277,9 +10401,9 @@ class WorkerMediaSmokeTest {
       start(runtime.connection(), request.build());
       runtime.probes().drain();
 
-      var results = runtime.connection().results();
-      assertThat(results).hasSize(1);
-      return results.getFirst();
+      var reports = runtime.connection().reports();
+      assertThat(reports).hasSize(1);
+      return reports.getFirst();
     }
   }
 
@@ -10551,6 +10675,478 @@ class WorkerMediaSmokeTest {
     }
 
     return keyframes;
+  }
+
+  // A source that a measurement test builds in the test's directory, or a keyframe fixture. Each
+  // built source holds 4 s of 64x36 testsrc2 video at 24 fps with keyframes at 0, 0.7, 2.1 and
+  // 3.3 s, between which FFmpeg adds one every 30 frames, and a 440 Hz tone at 48 kHz and a 660 Hz
+  // tone at 44.1 kHz.
+  private Path measuredSource(String name) throws Exception {
+    var output = root.resolve(name);
+    switch (name) {
+      case MPEG2_TS_SOURCE ->
+          runFfmpeg(
+              measuredSourceArguments(
+                  List.of("-c:v", "mpeg2video", "-bf", "2", "-c:a:0", "ac3", "-c:a:1", "mp2")),
+              output);
+      case MPEG2_TS_INSIDE_GROUP_SOURCE ->
+          Files.write(
+              output,
+              startingInsideAGroupOfPictures(Files.readAllBytes(measuredSource(MPEG2_TS_SOURCE))));
+      case SPARSE_CUES_SOURCE -> {
+        var whole = root.resolve("every-cue.mkv");
+        runFfmpeg(
+            measuredSourceArguments(
+                List.of(
+                    "-c:v",
+                    "libx264",
+                    "-bf",
+                    "2",
+                    "-c:a:0",
+                    "aac",
+                    "-c:a:1",
+                    "ac3",
+                    "-write_crc32",
+                    "0")),
+            whole);
+        Files.write(output, withSparseCues(Files.readAllBytes(whole)));
+      }
+      case AUDIO_COMPOSITION_OFFSETS_SOURCE ->
+          runFfmpeg(
+              measuredSourceArguments(
+                  List.of(
+                      "-c:v",
+                      "libx264",
+                      "-bf",
+                      "2",
+                      "-c:a",
+                      "aac",
+                      "-bsf:a",
+                      "setts=pts=PTS+3072",
+                      "-movflags",
+                      "frag_keyframe+empty_moov+default_base_moof")),
+              output);
+      case MPEG4_AVI_SOURCE ->
+          runFfmpeg(
+              measuredSourceArguments(
+                  List.of("-map", "-1", "-c:v", "mpeg4", "-bf", "0", "-c:a", "libmp3lame")),
+              output);
+      // -write_crc32 0 leaves out the CRC-32 elements that a moved block start would break.
+      case H264_AC3_SOURCE ->
+          runFfmpeg(
+              measuredSourceArguments(
+                  List.of("-c:v", "libx264", "-bf", "2", "-c:a", "ac3", "-write_crc32", "0")),
+              output);
+      case MOVED_AUDIO_BLOCK_SOURCE ->
+          Files.write(
+              output,
+              withAudioBlockMovedLater(Files.readAllBytes(measuredSource(H264_AC3_SOURCE))));
+      case AUDIO_BLOCK_ONE_TICK_EARLY_SOURCE ->
+          Files.write(output, withAudioBlockOneTickEarly(measuredSource(H264_AC3_SOURCE)));
+      default -> {
+        return keyframeSource(name);
+      }
+    }
+
+    return output;
+  }
+
+  private static List<String> measuredSourceArguments(List<String> codecs) {
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=4",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=4",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=660:sample_rate=44100:duration=4",
+                "-map",
+                "0",
+                "-map",
+                "1",
+                "-map",
+                "2",
+                "-g",
+                "30",
+                "-force_key_frames",
+                "0,0.7,2.1,3.3"));
+    arguments.addAll(codecs);
+    return arguments;
+  }
+
+  // The transport stream with its first three packets, which hold FFmpeg's SDT, PAT and PMT, and
+  // its last two thirds, as a recording that starts inside a group of pictures: the video's first
+  // packet is no keyframe.
+  private static byte[] startingInsideAGroupOfPictures(byte[] transportStream) {
+    var packets = transportStream.length / 188;
+    var cut = packets / 3 * 188;
+    var changed = new ByteArrayOutputStream();
+    changed.write(transportStream, 0, 3 * 188);
+    changed.write(transportStream, cut, transportStream.length - cut);
+    return changed.toByteArray();
+  }
+
+  // The Matroska bytes with every other CuePoint turned into a Void element of the same size, and
+  // with a MuxingApp and a WritingApp that no longer name libavformat, whose Cues list every video
+  // keyframe. FFmpeg writes the Cues after the Clusters, and -write_crc32 0 leaves out the CRC-32
+  // elements that the change would break.
+  private static byte[] withSparseCues(byte[] matroska) {
+    var changed = matroska.clone();
+    var cues = lastIndexOf(changed, new byte[] {0x1C, 0x53, (byte) 0xBB, 0x6B});
+    assertThat(cues).as("the Cues element").isPositive();
+    var size = EbmlSize.at(changed, cues + 4);
+    var position = cues + 4 + size.length();
+    var end = position + Math.toIntExact(size.value());
+    var points = 0;
+    while (position < end) {
+      assertThat(changed[position]).as("a CuePoint at %d", position).isEqualTo((byte) 0xBB);
+      var body = EbmlSize.at(changed, position + 1);
+      if (points++ % 2 == 1) {
+        changed[position] = (byte) 0xEC;
+      }
+
+      position += 1 + body.length() + Math.toIntExact(body.value());
+    }
+
+    assertThat(position).as("the end of the Cues").isEqualTo(end);
+    assertThat(points).as("the CuePoints").isGreaterThan(2);
+    renameLibavformat(changed, new byte[] {0x4D, (byte) 0x80});
+    renameLibavformat(changed, new byte[] {0x57, 0x41});
+    return changed;
+  }
+
+  // The first element with the ID whose string starts with "Lavf" then starts with "Muxr".
+  private static void renameLibavformat(byte[] matroska, byte[] id) {
+    var name = "Lavf".getBytes(StandardCharsets.US_ASCII);
+    for (var at = lastIndexOf(matroska, name); at >= 3; at = lastIndexOf(matroska, name, at - 1)) {
+      if (matroska[at - 3] == id[0] && matroska[at - 2] == id[1]) {
+        System.arraycopy("Muxr".getBytes(StandardCharsets.US_ASCII), 0, matroska, at, name.length);
+        return;
+      }
+    }
+
+    throw new AssertionError("No libavformat name under element " + HexFormat.of().formatHex(id));
+  }
+
+  // The Matroska bytes with the first block of track 2, the first audio track, that starts at or
+  // after 1 s moved to 2.5 s, as a muxer that misplaces one audio frame writes it.
+  private static byte[] withAudioBlockMovedLater(byte[] matroska) {
+    var changed = matroska.clone();
+    var blocks = ByteBuffer.wrap(changed);
+    audioBlocks(changed).stream()
+        .filter(block -> block.start(blocks) >= 1_000)
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("No block of track 2 starts at or after 1 s"))
+        .moveTo(blocks, 2_500);
+    return changed;
+  }
+
+  // The Matroska bytes with two blocks of track 2 retimed around the keyframe that ffprobe lists
+  // second: the last block that presents before the keyframe presents at the keyframe, and the
+  // block after it presents 1 ms before the keyframe, as a muxer that rounds audio times unevenly
+  // writes them. Each block moves by the milliseconds between its listed time and its new time,
+  // so the codec delay that the demuxer subtracts from every AC-3 time does not matter.
+  private static byte[] withAudioBlockOneTickEarly(Path matroska) throws Exception {
+    var keyframe =
+        ffprobe(List.of("-select_streams", "0", "-show_entries", "packet=pts,flags"), matroska)
+            .lines()
+            .map(line -> line.split(","))
+            .filter(fields -> fields[1].startsWith("K"))
+            .map(fields -> Long.parseLong(fields[0]))
+            .skip(1)
+            .findFirst()
+            .orElseThrow();
+    var listed =
+        ffprobe(List.of("-select_streams", "1", "-show_entries", "packet=pts"), matroska)
+            .lines()
+            .map(line -> Long.parseLong(line.split(",")[0]))
+            .toList();
+    var lastBefore = Math.toIntExact(listed.stream().filter(time -> time < keyframe).count()) - 1;
+    var changed = Files.readAllBytes(matroska);
+    var blocks = ByteBuffer.wrap(changed);
+    var audio = audioBlocks(changed);
+    assertThat(audio).as("the blocks of track 2").hasSameSizeAs(listed);
+    var atKeyframe = audio.get(lastBefore);
+    var oneTickEarly = audio.get(lastBefore + 1);
+    var atKeyframeStart = atKeyframe.start(blocks) + keyframe - listed.get(lastBefore);
+    var oneTickEarlyStart = oneTickEarly.start(blocks) + keyframe - 1 - listed.get(lastBefore + 1);
+    atKeyframe.moveTo(blocks, atKeyframeStart);
+    oneTickEarly.moveTo(blocks, oneTickEarlyStart);
+    return changed;
+  }
+
+  /**
+   * One SimpleBlock of track 2: the position of its start in the file's bytes, and its Cluster's
+   * Timestamp. A SimpleBlock holds its track number, then its start in milliseconds after its
+   * Cluster's Timestamp as a signed 16-bit value.
+   */
+  private record AudioBlock(int startPosition, long clusterTime) {
+
+    long start(ByteBuffer matroska) {
+      return clusterTime + matroska.getShort(startPosition);
+    }
+
+    void moveTo(ByteBuffer matroska, long start) {
+      var afterCluster = Math.toIntExact(start - clusterTime);
+      assertThat(afterCluster)
+          .as("the moved block's start after its Cluster's Timestamp")
+          .isBetween((int) Short.MIN_VALUE, (int) Short.MAX_VALUE);
+      matroska.putShort(startPosition, (short) afterCluster);
+    }
+  }
+
+  // The SimpleBlocks of track 2 in the order that the file holds them.
+  private static List<AudioBlock> audioBlocks(byte[] matroska) {
+    var segment = 0;
+    while (!hasElementId(matroska, segment, MATROSKA_SEGMENT_ID)) {
+      segment = elementEnd(matroska, segment);
+    }
+
+    var blocks = new ArrayList<AudioBlock>();
+    for (var child = elementBody(matroska, segment);
+        child < matroska.length;
+        child = elementEnd(matroska, child)) {
+      if (hasElementId(matroska, child, MATROSKA_CLUSTER_ID)) {
+        blocks.addAll(audioBlocksOfCluster(matroska, child));
+      }
+    }
+
+    return blocks;
+  }
+
+  private static List<AudioBlock> audioBlocksOfCluster(byte[] matroska, int cluster) {
+    var blocks = new ArrayList<AudioBlock>();
+    var clusterTime = 0L;
+    var end = elementEnd(matroska, cluster);
+    for (var child = elementBody(matroska, cluster);
+        child < end;
+        child = elementEnd(matroska, child)) {
+      var body = elementBody(matroska, child);
+      if (matroska[child] == CLUSTER_TIMESTAMP_ID) {
+        var timestamp = Arrays.copyOfRange(matroska, body, elementEnd(matroska, child));
+        clusterTime = new BigInteger(1, timestamp).longValueExact();
+      }
+
+      if (matroska[child] == SIMPLE_BLOCK_ID && matroska[body] == TRACK_2) {
+        blocks.add(new AudioBlock(body + 1, clusterTime));
+      }
+    }
+
+    return blocks;
+  }
+
+  private static boolean hasElementId(byte[] bytes, int element, byte[] id) {
+    return Arrays.equals(bytes, element, element + id.length, id, 0, id.length);
+  }
+
+  // An EBML element ID takes as many bytes as an element size with the same first byte.
+  private static int elementBody(byte[] bytes, int element) {
+    var idLength = EbmlSize.at(bytes, element).length();
+    return element + idLength + EbmlSize.at(bytes, element + idLength).length();
+  }
+
+  private static int elementEnd(byte[] bytes, int element) {
+    var idLength = EbmlSize.at(bytes, element).length();
+    var size = EbmlSize.at(bytes, element + idLength);
+    return element + idLength + size.length() + Math.toIntExact(size.value());
+  }
+
+  private static int lastIndexOf(byte[] bytes, byte[] pattern) {
+    return lastIndexOf(bytes, pattern, bytes.length - pattern.length);
+  }
+
+  private static int lastIndexOf(byte[] bytes, byte[] pattern, int from) {
+    for (var at = Math.min(from, bytes.length - pattern.length); at >= 0; at--) {
+      if (Arrays.equals(bytes, at, at + pattern.length, pattern, 0, pattern.length)) {
+        return at;
+      }
+    }
+
+    return -1;
+  }
+
+  // An EBML element size: its value and the bytes that hold it.
+  private record EbmlSize(long value, int length) {
+
+    static EbmlSize at(byte[] bytes, int position) {
+      var first = bytes[position] & 0xFF;
+      var length = Integer.numberOfLeadingZeros(first) - 23;
+      long value = first & (0xFF >> length);
+      for (var i = 1; i < length; i++) {
+        value = value << 8 | bytes[position + i] & 0xFF;
+      }
+
+      return new EbmlSize(value, length);
+    }
+  }
+
+  /**
+   * One stream's measurement: its byte and packet counts, its time base, the ticks from its first
+   * presentation time to the end of its last packet, and its bytes and packets in each keyframe
+   * interval.
+   */
+  @Builder
+  private record StreamCounts(
+      int streamIndex,
+      long bytes,
+      long packets,
+      String timeBase,
+      long duration,
+      List<Long> intervalBytes,
+      List<Long> intervalPackets) {}
+
+  private static List<StreamCounts> reportedMeasurements(ProbeAttemptReport report) {
+    var counts = new ArrayList<StreamCounts>();
+    for (var stream : report.getResult().getMedia().getStreamMeasurements().getStreamsList()) {
+      var parts =
+          report.getStreamMeasurementIntervalsList().stream()
+              .filter(part -> part.getStreamIndex() == stream.getStreamIndex())
+              .toList();
+      counts.add(
+          StreamCounts.builder()
+              .streamIndex(stream.getStreamIndex())
+              .bytes(stream.getMeasuredBytes())
+              .packets(stream.getPacketCount())
+              .timeBase(stream.getTimeBaseNumerator() + "/" + stream.getTimeBaseDenominator())
+              .duration(stream.getMeasuredDuration())
+              .intervalBytes(
+                  parts.stream()
+                      .flatMap(part -> part.getKeyframeIntervalBytesList().stream())
+                      .map(Integer::toUnsignedLong)
+                      .toList())
+              .intervalPackets(
+                  parts.stream()
+                      .flatMap(part -> part.getKeyframeIntervalPacketCountsList().stream())
+                      .map(Integer::toUnsignedLong)
+                      .toList())
+              .build());
+    }
+
+    return counts;
+  }
+
+  // ADR 0054 over ffprobe's list of every packet: a packet of the chosen video stream falls in the
+  // keyframe interval of its decode order, which is its place in the list, and an audio packet in
+  // the interval that holds its presentation time. A packet before the first keyframe falls in the
+  // first interval. A packet without a presentation time counts at its decode time.
+  private static List<StreamCounts> listedMeasurements(Path source, int chosenStream)
+      throws Exception {
+    // MPEG-TS lists each stream under its program, after a blank program line, and again by itself.
+    var timeBases = new LinkedHashMap<Integer, String>();
+    var streamList = ffprobe(List.of("-show_entries", "stream=index,codec_type,time_base"), source);
+    var streamLines = streamList.lines().filter(line -> !line.isBlank());
+    for (var stream : streamLines.map(line -> line.split(",")).toList()) {
+      var index = Integer.parseInt(stream[0]);
+      if (index == chosenStream || "audio".equals(stream[1])) {
+        timeBases.putIfAbsent(index, stream[2]);
+      }
+    }
+
+    var packets =
+        ffprobe(List.of("-show_entries", "packet=stream_index,pts,dts,duration,size,flags"), source)
+            .lines()
+            .map(ListedPacket::parse)
+            .toList();
+    var keyframes =
+        packets.stream()
+            .filter(packet -> packet.streamIndex() == chosenStream && packet.isKeyframe())
+            .map(packet -> seconds(packet.time(), timeBases.get(chosenStream)))
+            .toList();
+    var measured = new ArrayList<StreamCounts>();
+    for (var entry : timeBases.entrySet()) {
+      var index = entry.getKey();
+      measured.add(
+          ListedStream.builder()
+              .index(index)
+              .timeBase(entry.getValue())
+              .packets(packets.stream().filter(packet -> packet.streamIndex() == index).toList())
+              .build()
+              .counts(keyframes, index == chosenStream));
+    }
+
+    return measured;
+  }
+
+  @Builder
+  private record ListedStream(int index, String timeBase, List<ListedPacket> packets) {
+
+    StreamCounts counts(List<BigFraction> keyframes, boolean chosenVideo) {
+      var intervalBytes = new long[keyframes.size()];
+      var intervalPackets = new long[keyframes.size()];
+      var keyframesSeen = 0;
+      for (var packet : packets) {
+        int interval;
+        if (chosenVideo) {
+          keyframesSeen += packet.isKeyframe() ? 1 : 0;
+          interval = Math.max(0, keyframesSeen - 1);
+        } else {
+          interval = intervalHolding(seconds(packet.time(), timeBase), keyframes);
+        }
+
+        intervalBytes[interval] += packet.size();
+        intervalPackets[interval]++;
+      }
+
+      var first = packets.stream().mapToLong(ListedPacket::time).min().orElseThrow();
+      var end =
+          packets.stream()
+              .mapToLong(packet -> packet.time() + Math.max(0, packet.duration()))
+              .max()
+              .orElseThrow();
+      return StreamCounts.builder()
+          .streamIndex(index)
+          .bytes(Arrays.stream(intervalBytes).sum())
+          .packets(packets.size())
+          .timeBase(timeBase)
+          .duration(end - first)
+          .intervalBytes(Arrays.stream(intervalBytes).boxed().toList())
+          .intervalPackets(Arrays.stream(intervalPackets).boxed().toList())
+          .build();
+    }
+  }
+
+  // One line of ffprobe's packet list: the stream, presentation time, decode time, duration, size
+  // and flags. The time is the presentation time, or the decode time when the packet has none.
+  @Builder
+  private record ListedPacket(
+      int streamIndex, long time, long duration, long size, boolean isKeyframe) {
+
+    static ListedPacket parse(String line) {
+      var fields = line.split(",", -1);
+      return ListedPacket.builder()
+          .streamIndex(Integer.parseInt(fields[0]))
+          .time(Long.parseLong(fields["N/A".equals(fields[1]) ? 2 : 1]))
+          .duration("N/A".equals(fields[3]) ? 0 : Long.parseLong(fields[3]))
+          .size(Long.parseLong(fields[4]))
+          .isKeyframe(fields[5].startsWith("K"))
+          .build();
+    }
+  }
+
+  // The last keyframe interval whose keyframe presents at or before the time, in exact seconds;
+  // the first interval for a time before every keyframe.
+  private static int intervalHolding(BigFraction time, List<BigFraction> keyframes) {
+    var interval = 0;
+    for (var i = 0; i < keyframes.size(); i++) {
+      if (keyframes.get(i).compareTo(time) <= 0) {
+        interval = i;
+      }
+    }
+
+    return interval;
+  }
+
+  private static BigFraction seconds(long ticks, String timeBase) {
+    var parts = timeBase.split("/");
+    return new BigFraction(
+        BigInteger.valueOf(ticks).multiply(new BigInteger(parts[0])), new BigInteger(parts[1]));
   }
 
   // The end that the scan reports for each source stream, by stream index.
