@@ -10811,10 +10811,6 @@ class WorkerMediaSmokeTest {
           .times(execution.getSegmentStartTicks(number));
     }
 
-    if (execution.getSegmentStartSlotsCount() > 0) {
-      return new BigFraction(period, 1).times(execution.getSegmentStartSlots(number));
-    }
-
     return new BigFraction((long) period * number, 1);
   }
 

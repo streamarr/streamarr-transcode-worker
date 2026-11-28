@@ -48,8 +48,8 @@ final class WorkerVariantJobMapper {
    *     are not empty and do not hold one start for each media segment, from 0 and strictly
    *     increasing, or when its exact starts come without a positive time base or a time base
    *     without exact starts, or when its advertised end does not lie after the last listed
-   *     segment's start, or when it encodes video from a later segment without
-   *     a keyframe search time, or carries a keyframe search time on any other attempt
+   *     segment's start, or when it encodes video from a later segment without a keyframe search
+   *     time, or carries a keyframe search time on any other attempt
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
