@@ -234,26 +234,31 @@ final class KeyframeScan {
   // A reader that fails ends FFmpeg, which would otherwise wait for the reader to take its error
   // output.
   private void readCopiesUpTo(Duration readEnd, Process process) {
-    var stopped = false;
-    var framecrc = new Framecrc(Optional.empty());
     try (var copies = linesOf(process.getErrorStream())) {
-      for (var line = copies.readLine(); line != null; line = copies.readLine()) {
-        var passesTheReadEnd =
-            framecrc
-                .packetOf(line)
-                .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
-                .filter(packet -> packet.decodeTime().compareTo(readEnd) >= 0)
-                .isPresent();
-        if (passesTheReadEnd && !stopped) {
-          stopped = true;
-          quit(process);
-        }
-      }
+      readCopies(copies, readEnd, process);
     } catch (IOException _) {
       // The forcible end of FFmpeg closed its error output.
     } catch (RuntimeException e) {
       process.destroyForcibly();
       throw e;
+    }
+  }
+
+  private void readCopies(BufferedReader copies, Duration readEnd, Process process)
+      throws IOException {
+    var stopped = false;
+    var framecrc = new Framecrc(Optional.empty());
+    for (var line = copies.readLine(); line != null; line = copies.readLine()) {
+      var passesTheReadEnd =
+          framecrc
+              .packetOf(line)
+              .filter(packet -> COPIED_VIDEO.equals(packet.stream()))
+              .filter(packet -> packet.decodeTime().compareTo(readEnd) >= 0)
+              .isPresent();
+      if (passesTheReadEnd && !stopped) {
+        stopped = true;
+        quit(process);
+      }
     }
   }
 

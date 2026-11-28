@@ -13,12 +13,15 @@ import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /** The search for the keyframe that an encode from a later segment reads from, by real FFmpeg. */
 @Tag("SmokeTest")
@@ -31,21 +34,56 @@ class KeyframeSearchSmokeTest {
   // MPEG-TS seek lands on decode times, so the attempt reads from the keyframe's decode time; an
   // MP4 seek lands on presentation times, so it reads from the keyframe's presentation time, where
   // a seek to its decode time would land on the keyframe before it.
-  @ParameterizedTest(name = "{0} from {3} s")
-  @CsvSource({"mpegts, ts, 9.5, 18", "mp4, mp4, 10, 18", "mpegts, ts, 7.5, 10", "mp4, mp4, 8, 10"})
+  @ParameterizedTest
+  @MethodSource("keyframeSearchCases")
   @DisplayName(
       "Should read from where a seek lands on the last keyframe that presents half a second before"
           + " the first segment when an encode searches for it")
   void shouldReadFromWhereASeekLandsOnTheLastKeyframeWhenAnEncodeSearchesForIt(
-      String format, String extension, BigDecimal expectedSeconds, int firstSegmentStartSeconds)
-      throws Exception {
-    var source = delayedPicturesWithKeyframesUpToTenSeconds(format, extension);
-    var request = searching(source, OptionalInt.empty(), firstSegmentStartSeconds);
+      KeyframeSearchCase testCase) throws Exception {
+    var source =
+        delayedPicturesWithKeyframesUpToTenSeconds(testCase.format(), testCase.extension());
+    var request = searching(source, OptionalInt.empty(), testCase.firstSegmentStartSeconds());
 
     var readPosition = engine().readPosition(request, _ -> {}).orElseThrow();
 
-    assertThat(readPosition).isEqualTo(secondsOf(expectedSeconds));
+    assertThat(readPosition).isEqualTo(testCase.expectedReadPosition());
   }
+
+  private static Stream<KeyframeSearchCase> keyframeSearchCases() {
+    return Stream.of(
+        KeyframeSearchCase.builder()
+            .format("mpegts")
+            .extension("ts")
+            .expectedReadPosition(Duration.ofMillis(9_500))
+            .firstSegmentStartSeconds(18)
+            .build(),
+        KeyframeSearchCase.builder()
+            .format("mp4")
+            .extension("mp4")
+            .expectedReadPosition(Duration.ofSeconds(10))
+            .firstSegmentStartSeconds(18)
+            .build(),
+        KeyframeSearchCase.builder()
+            .format("mpegts")
+            .extension("ts")
+            .expectedReadPosition(Duration.ofMillis(7_500))
+            .firstSegmentStartSeconds(10)
+            .build(),
+        KeyframeSearchCase.builder()
+            .format("mp4")
+            .extension("mp4")
+            .expectedReadPosition(Duration.ofSeconds(8))
+            .firstSegmentStartSeconds(10)
+            .build());
+  }
+
+  @Builder
+  private record KeyframeSearchCase(
+      String format,
+      String extension,
+      Duration expectedReadPosition,
+      int firstSegmentStartSeconds) {}
 
   // The video's pictures end at 20 s, before the segment at 24 s, and its last keyframe presents at
   // 10 s, so a held encode reads from the keyframe at 8 s, which gives a deinterlacer the history
