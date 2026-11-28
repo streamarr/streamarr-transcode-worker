@@ -8008,15 +8008,16 @@ class WorkerMediaSmokeTest {
   // from inside the GOP from 0 s, so the first picture that the attempt decodes is the keyframe
   // at 20 s. The job's search time lies past that keyframe, so the worker's check of the read
   // passes, and only the refusal of the first segment stands between the attempt and a segment
-  // that lacks its first 2 s.
-  @Test
+  // that lacks its first 2 s, or skips segment 2 entirely.
+  @ParameterizedTest
+  @ValueSource(ints = {3, 2})
   @DisplayName(
       "Should fail with a first segment that opened late and upload no media segment when an"
           + " encode's seek lands after the keyframe that fills its first segment's start")
-  void shouldFailWithAFirstSegmentThatOpenedLateWhenAnEncodesSeekLandsAfterTheFillingKeyframe()
-      throws Exception {
+  void shouldFailWithAFirstSegmentThatOpenedLateWhenAnEncodesSeekLandsAfterTheFillingKeyframe(
+      int startSequenceNumber) throws Exception {
     var source = sparseKeyframeSource("ts", false);
-    var job = sparseKeyframeJob(source, 3);
+    var job = sparseKeyframeJob(source, startSequenceNumber);
     setSeekPosition(job.getExecutionBuilder(), new BigDecimal("17.5"));
     job.getExecutionBuilder()
         .getReadFromLastKeyframePresentingAtOrBeforeBuilder()
@@ -8028,7 +8029,9 @@ class WorkerMediaSmokeTest {
 
     assertThat(failed.failure().getFailure())
         .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_FIRST_SEGMENT_OPENED_LATE);
-    assertThat(failed.uploads().names()).as("no media segment").doesNotContain(segmentName(3));
+    assertThat(failed.uploads().names())
+        .as("no media segment")
+        .noneMatch(name -> name.endsWith(".m4s"));
   }
 
   // At 1 fps a frame presents on every segment start; at 24000/1001 fps the first frame of

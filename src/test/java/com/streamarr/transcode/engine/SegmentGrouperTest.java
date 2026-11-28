@@ -286,16 +286,31 @@ class SegmentGrouperTest {
 
   // Segment 3 starts at 18 s; its first frame at 24 fps presents there too. The keyframe at 20 s is
   // the first that the attempt decoded after a seek that landed past the one that fills 18 s.
-  @Test
+  @ParameterizedTest
+  @ValueSource(longs = {20_000, 24_000, 30_000})
   @DisplayName(
       "Should fail with a first segment that opened late when the keyframe that opens the first"
           + " segment presents after the latest opening")
-  void shouldFailWithAFirstSegmentThatOpenedLateWhenItsKeyframePresentsAfterTheLatestOpening() {
+  void shouldFailWithAFirstSegmentThatOpenedLateWhenItsKeyframePresentsAfterTheLatestOpening(
+      long openingTime) {
     var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 3, SEGMENT_CAP);
     grouper.refuseAFirstSegmentOpenedAfter(new MediaTime(18, new TimeBase(1, 1)));
-    var late = keyframeAt(20_000);
+    var late = keyframeAt(openingTime);
 
     assertFailure(() -> grouper.accept(late), Reason.FIRST_SEGMENT_OPENED_LATE);
+  }
+
+  @Test
+  @DisplayName("Should report a skipped segment when the first segment opened on time")
+  void shouldReportASkippedSegmentWhenTheFirstSegmentOpenedOnTime() {
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 3, SEGMENT_CAP);
+    grouper.refuseAFirstSegmentOpenedAfter(new MediaTime(18, new TimeBase(1, 1)));
+    var opening = keyframeAt(18_000);
+    grouper.accept(opening);
+
+    var result = grouper.accept(keyframeAt(30_000));
+
+    assertThat(result).isEqualTo(new SegmentNumberSkipped(List.of(segment(3, opening)), 4, 5));
   }
 
   @Test

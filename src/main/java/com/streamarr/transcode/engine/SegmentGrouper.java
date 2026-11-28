@@ -177,7 +177,7 @@ final class SegmentGrouper {
       return OptionalLong.empty();
     }
 
-    if (sequenceNumber == startSequenceNumber) {
+    if (sequenceNumber >= startSequenceNumber && nextDeliverableNumber() == startSequenceNumber) {
       requireOpenedInTime(keyframe.orElseThrow());
     }
 
