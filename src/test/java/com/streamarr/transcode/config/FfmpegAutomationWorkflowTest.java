@@ -1142,6 +1142,7 @@ class FfmpegAutomationWorkflowTest {
             "DownmixLimiterSmokeTest",
             "HdrEncodeSmokeTest",
             "AssumedMatrixCopySmokeTest",
+            "KeyframeSearchSmokeTest",
             "-Dsurefire.excludedGroups=");
     var image = map(jobs.get("image"));
     var targets = listOfMaps(map(map(image.get("strategy")).get("matrix")).get("include"));

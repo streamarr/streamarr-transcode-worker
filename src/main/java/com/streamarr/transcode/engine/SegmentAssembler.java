@@ -60,6 +60,9 @@ final class SegmentAssembler {
    * @param requiresSoundTrack whether the initialization segment must declare a sound track
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence, at or
    *     after which the assembler drops every audio sample; empty for any other attempt
+   * @param readsFromAKeyframeSeek whether the attempt reads the source from a positive seek
+   *     position, so that an encode from a later segment that opens that segment after the first
+   *     frame at or after its start fails rather than deliver a segment that misses pictures
    */
   @Builder
   private SegmentAssembler(
@@ -69,8 +72,15 @@ final class SegmentAssembler {
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
       boolean requiresSoundTrack,
-      @NonNull Optional<Duration> paddedAudioEnd) {
+      @NonNull Optional<Duration> paddedAudioEnd,
+      boolean readsFromAKeyframeSeek) {
     this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
+    if (readsFromAKeyframeSeek && startSequenceNumber > 0) {
+      var start = intervals.startTimeOf(startSequenceNumber);
+      encodedFrameRate.ifPresent(
+          rate -> grouper.refuseAFirstSegmentOpenedAfter(rate.firstFrameAtOrAfter(start)));
+    }
+
     this.audio = new AudioSampleQueue(intervals, startSequenceNumber, paddedAudioEnd);
     this.video = new VideoProgress(intervals);
     this.maximumSegmentBytes = maximumSegmentBytes;

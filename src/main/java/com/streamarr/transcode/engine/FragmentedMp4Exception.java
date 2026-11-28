@@ -69,7 +69,13 @@ final class FragmentedMp4Exception extends RuntimeException {
      * packet is a keyframe where the sample is no sync sample, or the reverse, or its duration does
      * not convert exactly into a duration of the video track.
      */
-    UNUSABLE_VIDEO_TIMING
+    UNUSABLE_VIDEO_TIMING,
+    /**
+     * An encode that reads the source from a seek opened its first media segment on a keyframe
+     * after the first frame at or after that segment's start, so it lacks the pictures before that
+     * keyframe (ADR 0037, seek).
+     */
+    FIRST_SEGMENT_OPENED_LATE
   }
 
   private final Reason reason;

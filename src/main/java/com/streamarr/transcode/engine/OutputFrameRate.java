@@ -52,6 +52,12 @@ public record OutputFrameRate(long numerator, long denominator) {
         .longValueExact();
   }
 
+  /** The first frame on this rate's grid from zero that presents at or after the start. */
+  MediaTime firstFrameAtOrAfter(MediaTime start) {
+    var frame = new TimeBase(denominator, numerator);
+    return new MediaTime(start.ceilIn(frame), frame);
+  }
+
   private static BigInteger ceilDivide(BigInteger dividend, BigInteger divisor) {
     var quotient = dividend.divideAndRemainder(divisor);
     if (quotient[1].signum() > 0) {

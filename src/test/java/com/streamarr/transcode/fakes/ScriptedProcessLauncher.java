@@ -8,6 +8,7 @@ import com.streamarr.transcode.engine.PausedProcess;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -20,6 +21,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * observe what happened to one attempt's FFmpeg.
  */
 public final class ScriptedProcessLauncher implements ProcessLauncher {
+
+  // The output of a read check or keyframe scan, which the media FFmpeg never writes.
+  private static final List<String> FRAMECRC_TO_STANDARD_OUTPUT =
+      List.of("-f", "framecrc", "pipe:1");
 
   private final CommandScript script;
   private final Map<UUID, List<Launch>> launches = new ConcurrentHashMap<>();
@@ -40,6 +45,18 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
   /** FFmpeg that writes nothing until it is asked to quit, and then exits cleanly. */
   public static ScriptedProcessLauncher running() {
     return new ScriptedProcessLauncher(_ -> runningProcessBuilder().build());
+  }
+
+  /**
+   * FFmpeg that writes nothing until it is asked to quit, and then exits cleanly, but for a read
+   * check, which reads a keyframe at its seek position and shows its picture.
+   */
+  public static ScriptedProcessLauncher runningFromAKeyframeAtEachSeek() {
+    return forCommands(
+        (command, _) ->
+            ScriptedKeyframeSource.isReadCheck(command)
+                ? ScriptedKeyframeSource.keyframeAtTheSeekOf(command)
+                : runningProcessBuilder().build());
   }
 
   /** FFmpeg that writes the recording to its standard output and exits cleanly. */
@@ -95,6 +112,19 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
     var attemptLaunches = recordedLaunches(jobAttemptId);
     assertThat(attemptLaunches).as("FFmpegs launched for job attempt %s", jobAttemptId).hasSize(1);
     return attemptLaunches.getFirst().command();
+  }
+
+  /**
+   * The command of the one FFmpeg that produced the job attempt's media, besides the read checks
+   * and keyframe scans before it, which write a framecrc to standard output.
+   */
+  public List<String> mediaCommand(UUID jobAttemptId) {
+    var media =
+        commands(jobAttemptId).stream()
+            .filter(command -> Collections.indexOfSubList(command, FRAMECRC_TO_STANDARD_OUTPUT) < 0)
+            .toList();
+    assertThat(media).as("media FFmpegs launched for job attempt %s", jobAttemptId).hasSize(1);
+    return media.getFirst();
   }
 
   /** The commands of every FFmpeg launched for the job attempt, in launch order. */

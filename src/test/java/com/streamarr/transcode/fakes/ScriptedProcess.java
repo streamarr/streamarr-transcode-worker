@@ -34,7 +34,9 @@ import lombok.NonNull;
  * closed", at once or once a read that waits for more output ends, and the close of standard input
  * waits for a write in progress. Its {@link #toHandle() handle} only signals the process. Standard
  * error stays open until the process exits, and standard input holds at most the capacity the test
- * gives it, as a pipe to a process that reads nothing does.
+ * gives it, as a pipe to a process that reads nothing does. The output can wait until the error
+ * output has been read whole, as FFmpeg writes the packets that it copies to its error output
+ * before the picture that they decode to on its output.
  */
 public final class ScriptedProcess extends Process {
 
@@ -74,6 +76,7 @@ public final class ScriptedProcess extends Process {
   private final boolean keepsRunningWhenPaused;
   private final boolean lingersAfterKill;
   private final boolean readsMediaFromStdin;
+  private final boolean outputAwaitsErrorOutput;
   private final OptionalInt stdinCapacity;
   private final byte[] stderr;
   private final ByteArrayOutputStream stdin = new ByteArrayOutputStream();
@@ -115,6 +118,7 @@ public final class ScriptedProcess extends Process {
       boolean keepsRunningWhenPaused,
       boolean lingersAfterKill,
       boolean readsMediaFromStdin,
+      boolean outputAwaitsErrorOutput,
       Integer stdinCapacity,
       String stderr) {
     this.output = output.clone();
@@ -128,6 +132,7 @@ public final class ScriptedProcess extends Process {
     this.keepsRunningWhenPaused = keepsRunningWhenPaused;
     this.lingersAfterKill = lingersAfterKill;
     this.readsMediaFromStdin = readsMediaFromStdin;
+    this.outputAwaitsErrorOutput = outputAwaitsErrorOutput;
     this.stdinCapacity = optionalOffset(stdinCapacity);
     this.stderr = Objects.requireNonNullElse(stderr, "").getBytes(StandardCharsets.UTF_8);
     this.endOffset = this.output.length;
@@ -466,6 +471,7 @@ public final class ScriptedProcess extends Process {
   private synchronized int read(byte[] buffer, int offset, int length) throws IOException {
     awaitResumeBySignal();
     awaitResumeAtPause();
+    awaitErrorOutputRead();
     if (streamsClosed) {
       throw streamClosed();
     }
@@ -516,6 +522,15 @@ public final class ScriptedProcess extends Process {
     }
   }
 
+  private void awaitErrorOutputRead() throws InterruptedIOException {
+    while (outputAwaitsErrorOutput
+        && errorPosition < stderr.length
+        && !errorOutputClosed
+        && !exit.isDone()) {
+      awaitChange("interrupted while the error output is unread");
+    }
+  }
+
   private boolean isPausedAt(int offset) {
     return !resumed && offset < endOffset && pauseOffset.equals(OptionalInt.of(offset));
   }
@@ -558,6 +573,7 @@ public final class ScriptedProcess extends Process {
     var readable = Math.min(length, stderr.length - errorPosition);
     System.arraycopy(stderr, errorPosition, buffer, offset, readable);
     errorPosition += readable;
+    notifyAll();
     return readable;
   }
 

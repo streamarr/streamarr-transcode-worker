@@ -24,6 +24,7 @@ public record TranscodeRequest(
     int mediaSegmentCount,
     @NonNull Optional<ExactSegmentStarts> exactSegmentStarts,
     @NonNull Optional<Duration> seekPosition,
+    @NonNull Optional<Duration> readFromLastKeyframePresentingAtOrBefore,
     @NonNull Optional<SourceAudio> sourceAudio,
     @NonNull Optional<Duration> advertisedEnd) {
 
@@ -56,6 +57,7 @@ public record TranscodeRequest(
     return new TranscodeRequestBuilder()
         .exactSegmentStarts(Optional.empty())
         .seekPosition(Optional.empty())
+        .readFromLastKeyframePresentingAtOrBefore(Optional.empty())
         .outputFrameRate(Optional.empty())
         .sourceAudio(Optional.empty())
         .advertisedEnd(Optional.empty());
