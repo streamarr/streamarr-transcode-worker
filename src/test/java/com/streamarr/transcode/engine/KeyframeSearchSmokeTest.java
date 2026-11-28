@@ -545,6 +545,7 @@ class KeyframeSearchSmokeTest {
    * A source's packets, each stream's time base and the container's start time, which the
    * timeline's zero subtracts, as the probe's keyframe positions do.
    */
+  @Builder
   private record ProbedSource(
       BigDecimal start,
       Map<Integer, String> streamTypes,
@@ -572,7 +573,12 @@ class KeyframeSearchSmokeTest {
         }
       }
 
-      return new ProbedSource(start, streamTypes, timeBases, packets);
+      return ProbedSource.builder()
+          .start(start)
+          .streamTypes(streamTypes)
+          .timeBases(timeBases)
+          .packets(packets)
+          .build();
     }
 
     private static Map<String, String> fieldsOf(String line) {

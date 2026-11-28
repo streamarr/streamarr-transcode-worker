@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -714,8 +715,8 @@ class KeyframeReadPositionTest {
       "Should let the first picture check read on past the packet that ends the video when the"
           + " pictures after it can present by the search time")
   void shouldLetTheCheckReadOnPastThePacketThatEndsTheVideoWhenThePicturesAfterItCanBeInTime(
-      String readCase, String copies, Duration videoEnd, Duration firstPicture) throws Exception {
-    var picture = firstPicture.toMillis();
+      String readCase, ReadPastVideoEndCase testCase) throws Exception {
+    var picture = testCase.firstPicture().toMillis();
     var check =
         ScriptedProcess.builder()
             .output(
@@ -723,7 +724,7 @@ class KeyframeReadPositionTest {
                     .formatted(picture, picture)
                     .getBytes(StandardCharsets.US_ASCII))
             .pauseAfter(0)
-            .stderr(copies)
+            .stderr(testCase.copies())
             .build();
     var bytesOfEveryCopy = 4 * 1000 + 3 * 300;
     LongConsumer readingToTheEndOfTheFile =
@@ -736,7 +737,8 @@ class KeyframeReadPositionTest {
     var readPosition =
         engine(checkingTheStoredPositionWith(check, everyTwoSecondsUpTo(22, 24)))
             .readPosition(
-                endingVideoAt(videoEnd, storing(STORED_POSITION, searching(seconds("23.5"), 24))),
+                endingVideoAt(
+                    testCase.videoEnd(), storing(STORED_POSITION, searching(seconds("23.5"), 24))),
                 readingToTheEndOfTheFile);
 
     assertThat(check.stdinText()).as("no q before the pictures in time").isEmpty();
@@ -754,7 +756,9 @@ class KeyframeReadPositionTest {
         Arguments.of(
             "MP4 stores each packet's decode time: the keyframe decodes at 22.5 s and presents at"
                 + " 23.75 s, and its leading pictures present from 23 s",
-            """
+            ReadPastVideoEndCase.builder()
+                .copies(
+                    """
             #tb 0: 1/1000
             #tb 1: 1/1000
             0, 22500, 23750, 250, 1000, 0x0a1b2c3d
@@ -764,14 +768,17 @@ class KeyframeReadPositionTest {
             0, 23250, 23500, 250, 1000, 0x0a1b2c3d, F=0x0
             1, 60000, 60000, 250, 300, 0x0a1b2c3d
             1, 600000, 600000, 250, 300, 0x0a1b2c3d
-            """,
-            Duration.ofSeconds(24),
-            Duration.ofSeconds(23)),
+            """)
+                .videoEnd(Duration.ofSeconds(24))
+                .firstPicture(Duration.ofSeconds(23))
+                .build()),
         Arguments.of(
             "Matroska stores no decode time: FFmpeg's copy decodes the keyframe at the search time,"
                 + " 23.5 s, half a second before it presents, and its leading pictures present from"
                 + " 23.25 s",
-            """
+            ReadPastVideoEndCase.builder()
+                .copies(
+                    """
             #tb 0: 1/1000
             #tb 1: 1/1000
             0, 23500, 24000, 250, 1000, 0x0a1b2c3d
@@ -781,14 +788,17 @@ class KeyframeReadPositionTest {
             0, 23501, 23750, 250, 1000, 0x0a1b2c3d, F=0x0
             1, 60000, 60000, 250, 300, 0x0a1b2c3d
             1, 600000, 600000, 250, 300, 0x0a1b2c3d
-            """,
-            Duration.ofMillis(24_250),
-            Duration.ofMillis(23_250)),
+            """)
+                .videoEnd(Duration.ofMillis(24_250))
+                .firstPicture(Duration.ofMillis(23_250))
+                .build()),
         Arguments.of(
             "an MP4 edit list marks the read's only keyframe, at 23.417 s, to decode but not to"
                 + " present: the packet that ends the video presents from 23.542 s, and the two"
                 + " pictures after it from 23.458 s",
-            """
+            ReadPastVideoEndCase.builder()
+                .copies(
+                    """
             #tb 0: 1/1000
             #tb 1: 1/1000
             0, 23375, 23417, 42, 1000, 0x0a1b2c3d, F=0x5
@@ -798,10 +808,14 @@ class KeyframeReadPositionTest {
             0, 23500, 23500, 42, 1000, 0x0a1b2c3d, F=0x0
             1, 60000, 60000, 250, 300, 0x0a1b2c3d
             1, 600000, 600000, 250, 300, 0x0a1b2c3d
-            """,
-            Duration.ofMillis(23_584),
-            Duration.ofMillis(23_458)));
+            """)
+                .videoEnd(Duration.ofMillis(23_584))
+                .firstPicture(Duration.ofMillis(23_458))
+                .build()));
   }
+
+  @Builder
+  private record ReadPastVideoEndCase(String copies, Duration videoEnd, Duration firstPicture) {}
 
   // The packet that ends the video presents last, so no keyframe follows it in decode order. A
   // read that holds no keyframe shows no picture at all, and one with a keyframe that presents by
