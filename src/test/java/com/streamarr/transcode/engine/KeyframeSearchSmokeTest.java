@@ -536,9 +536,13 @@ class KeyframeSearchSmokeTest {
             .redirectOutput(listing.toFile())
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start();
-    assertThat(process.waitFor(1, TimeUnit.MINUTES)).as("ffprobe exits").isTrue();
-    assertThat(process.exitValue()).as("ffprobe's exit code").isZero();
-    return ProbedSource.of(Files.readAllLines(listing));
+    try {
+      assertThat(process.waitFor(1, TimeUnit.MINUTES)).as("ffprobe exits").isTrue();
+      assertThat(process.exitValue()).as("ffprobe's exit code").isZero();
+      return ProbedSource.of(Files.readAllLines(listing));
+    } finally {
+      process.destroyForcibly();
+    }
   }
 
   /**
